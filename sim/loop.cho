@@ -1,0 +1,99 @@
+edition 5;
+
+module loop;
+
+// `loop` -- the AFM's Z feedback loop and a model of the tip and the surface (issue #2, S1 of docs/design.md). All
+// integer arithmetic, in picometres, so the same loop can be written in Verilog and compared with this one byte for
+// byte. NOTHING HERE IS A MEASUREMENT OF A REAL INSTRUMENT: the tip-sample law is the simplest one that has the
+// right shape (the amplitude falls to zero as the tip reaches the surface), and the numbers are chosen so the
+// arithmetic is easy to follow, not taken from a cantilever.
+//
+// The model: the tip sits at height `z` above a reference; the surface under it is at `h`; the gap is `z - h`. In
+// tapping mode the oscillation amplitude is the free amplitude `free` while the gap is at least `free`, and falls
+// to zero as the gap closes: amplitude = clamp(gap, 0, free). The loop holds the amplitude at `setpoint` by moving
+// `z`: it lowers z when the amplitude is above the setpoint (the tip is too far), raises it when below.
+
+pub fn free() -> [] int {
+    return 10000;
+}
+
+pub fn setpoint() -> [] int {
+    return 8000;
+}
+
+// The amplitude the sensor would report at gap `g`, in pm.
+pub fn amplitude(g: int) -> [] int {
+    if g < 0 {
+        return 0;
+    }
+    if g > free() {
+        return free();
+    }
+    return g;
+}
+
+// One control step: the next z from the present z and the amplitude read. A proportional step of 1/shift-power-of-two
+// of the error; integer division truncates toward zero, written out here because the Verilog must do the same.
+pub fn next_z(z: int, a: int, gain_shift: int) -> [] int {
+    let e = a - setpoint();
+    var div = 1;
+    var i = 0;
+    while i < gain_shift {
+        div = div * 2;
+        i = i + 1;
+    }
+    return z - e / div;
+}
+
+// A triangle-wave surface: height in pm at step `t`, amplitude `peak`, `period` steps. Integer, no floats.
+pub fn surface(t: int, peak: int, period: int) -> [] int {
+    let p = t % period;
+    let half = period / 2;
+    if p < half {
+        return 0 - peak + 2 * peak * p / half;
+    }
+    return peak - 2 * peak * (p - half) / half;
+}
+
+// Run `steps` control steps from z = `start` over the triangle surface; the largest |z - h - setpoint| seen from step
+// `settle` on (the tracking error, in pm).
+pub fn worst_error(start: int, steps: int, settle: int, peak: int, period: int, gain_shift: int) -> [] int {
+    var z = start;
+    var worst = 0;
+    var t = 0;
+    while t < steps {
+        let h = surface(t, peak, period);
+        let a = amplitude(z - h);
+        z = next_z(z, a, gain_shift);
+        if t >= settle {
+            var err = z - h - setpoint();
+            if err < 0 {
+                err = 0 - err;
+            }
+            if err > worst {
+                worst = err;
+            }
+        }
+        t = t + 1;
+    }
+    return worst;
+}
+
+// Steps until the amplitude first comes within `band` pm of the setpoint, from z = `start` over a flat surface, or -1.
+pub fn capture_steps(start: int, band: int, gain_shift: int, limit: int) -> [] int {
+    var z = start;
+    var t = 0;
+    while t < limit {
+        let a = amplitude(z);
+        var e = a - setpoint();
+        if e < 0 {
+            e = 0 - e;
+        }
+        if e <= band {
+            return t;
+        }
+        z = next_z(z, a, gain_shift);
+        t = t + 1;
+    }
+    return 0 - 1;
+}

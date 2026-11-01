@@ -1,0 +1,52 @@
+import std.test;
+import loop;
+
+// The Z loop against its model (S1, issue #2): it finds the surface from far away, then follows a moving one.
+
+fn test_the_amplitude_law_has_the_right_shape() -> [] int {
+    test.assert_eq(loop.amplitude(0 - 500), 0);
+    test.assert_eq(loop.amplitude(0), 0);
+    test.assert_eq(loop.amplitude(4000), 4000);
+    test.assert_eq(loop.amplitude(10000), 10000);
+    test.assert_eq(loop.amplitude(50000), 10000);
+    return 0;
+}
+
+fn test_the_loop_moves_the_tip_toward_the_setpoint() -> [] int {
+    // too far (amplitude above the setpoint): z goes down; too close: z goes up
+    test.assert(loop.next_z(20000, 10000, 2) < 20000);
+    test.assert(loop.next_z(3000, 3000, 2) > 3000);
+    // at the setpoint it holds
+    test.assert_eq(loop.next_z(8000, 8000, 2), 8000);
+    return 0;
+}
+
+fn test_it_captures_the_surface_from_far_away() -> [] int {
+    let steps = loop.capture_steps(40000, 200, 2, 1000);
+    test.assert(steps >= 0);
+    test.assert(steps < 200);
+    return 0;
+}
+
+fn test_a_stronger_gain_captures_faster() -> [] int {
+    let slow = loop.capture_steps(40000, 200, 3, 2000);
+    let fast = loop.capture_steps(40000, 200, 1, 2000);
+    test.assert(fast >= 0 && slow >= 0);
+    test.assert(fast < slow);
+    return 0;
+}
+
+fn test_it_follows_a_moving_surface_within_the_lag_the_gain_allows() -> [] int {
+    // slope 100 pm per step (peak 5000, period 200); a 1/4 gain lags about slope * 4 = 400 pm
+    let worst = loop.worst_error(40000, 2000, 400, 5000, 200, 2);
+    test.assert(worst > 0);
+    test.assert(worst < 500);
+    return 0;
+}
+
+fn test_a_slower_loop_lags_more() -> [] int {
+    let quick = loop.worst_error(40000, 4000, 1000, 5000, 200, 2);
+    let slow = loop.worst_error(40000, 4000, 1000, 5000, 200, 4);
+    test.assert(slow > quick);
+    return 0;
+}
