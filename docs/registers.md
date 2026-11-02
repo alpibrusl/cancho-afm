@@ -20,7 +20,7 @@ register file (`gen/regs_tb.cho`), and a test of the twin (`tests/contract_test.
 
 * **CTRL:** bit 0 RUN (the loop), 1 DRIVE_EN, 2 SCAN (the raster, needs RUN), 3 MANUAL (the DACs follow MAN_Z/X/Y/D), 4 ADC_RUN (sampling and the detector), 5 MOTOR_EN (the STEP/DIR/EN pins; EN is active low and inactive at power-on).
 * **STATUS:** bit 0 FAULT (the deadman latched), 1 LOOP_BUSY, 2 OVERFLOW (the detector's sums left +-8,388,607; sticky, steps are skipped while it is set), 3 SCAN_DONE, 4 ADC_BUSY.
-* **Units:** Z, ZMIN, ZMAX, ZINIT, ZRETRACT and ZOUT are picometres (the Z DAC code is Z / 16); X, Y, X0, Y0, DX, DY and the DRIVE and MAN registers are DAC codes; TIMEOUT and MOTOR_RATE are FPGA clocks (27 MHz); gains are Q8.
+* **Units:** Z, ZMIN, ZMAX, ZINIT, ZRETRACT and ZOUT are picometres (the Z DAC code is Z / 16); X, Y, X0, Y0, DX, DY and the DRIVE and MAN registers are DAC codes; TIMEOUT and MOTOR_RATE are FPGA clocks (27 MHz); gains are Q16 (65536 = 1.0).
 * **TUNING** is 2^32 x f / fs (536870912 = 8 samples per period); **SHIFT** shifts the detector figure right before the loop; **SETPOINT** is a signed 32-bit word.
 * **Fail closed:** after power-on every limit and the motor's MOTOR_MAX are 0 and CTRL is 0, so nothing moves or runs until the host sets them.
 * **KICK** (any write) restarts the deadman; **MOTOR_CMD** takes a signed number of microsteps, positive toward the sample, refused if longer than MOTOR_MAX, ignored if the driver is disabled, held by a fault, busy, or the number is 0.

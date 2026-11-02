@@ -20,8 +20,8 @@ fn main(world: World) -> [] int {
     var code = 0;
     borrow mut heap as &!h in {
         var o = buffer.empty(h, 8192);
-        let kp = 128;
-        let ki = 16;
+        let kp = 32768;
+        let ki = 4096;
         let kd = 0;
         let ilim = 65535;
         let zmin = 0;

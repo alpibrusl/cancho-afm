@@ -108,9 +108,9 @@ pub fn doc_at(k: int) -> [] &static [byte] {
     if k == 6 { return "SPI clocks per half SCK period"; }
     if k == 7 { return "right shift of the detector figure before the loop"; }
     if k == 8 { return "the loop's target for the shifted figure (signed)"; }
-    if k == 9 { return "proportional gain, Q8"; }
-    if k == 10 { return "integral gain, Q8"; }
-    if k == 11 { return "derivative gain, Q8"; }
+    if k == 9 { return "proportional gain, Q16"; }
+    if k == 10 { return "integral gain, Q16"; }
+    if k == 11 { return "derivative gain, Q16"; }
     if k == 12 { return "integral limit"; }
     if k == 13 { return "hardware limit on Z, low (pm)"; }
     if k == 14 { return "hardware limit on Z, high (pm)"; }

@@ -46,10 +46,10 @@ grating of 100 pm and 6 pixels' period, it ran end to end with no refused write:
    32 bits (a step of 0.00006 Hz); the model, the generated Verilog, the tests and the register map were changed together.
 2. **The raster needed a pixel divider.** It advanced one pixel per loop step, but the loop needs about 20 steps to follow a feature, so a scanned
    grating came out smeared. `PIXDIV` (register 27) is the number of loop steps per pixel; the Verilog system test now scans with it.
-3. **The image is only as good as the loop.** At 30 steps per pixel the grating's height came out at about 40% of its true value; at 60 to 120
-   steps about 50 to 60%. The loop is proportional-only (an integral term made it unstable, `docs/tune-approach.md`) and the Z DAC steps in 16 pm, so a
-   100 pm grating is only about 6 steps high. A real grating of tens of nanometres is far above that floor, and the loop and DAC set the image's
-   vertical resolution, not the detector.
+3. **The image is only as good as the loop.** With Q8 gains the loop could only be proportional (an integral term made it unstable, `docs/tune-approach.md`), and the grating's height came out at
+   about 40% of its true value at 30 steps per pixel and 50 to 60% at 60 to 120. **With Q16 gains (2026-11-02) the host can give the loop a real slow integral term, and the same scan gives about
+   89 pm of a 100 pm grating at 60 steps per pixel and about 108 pm at 120 (a slight overshoot), with the period at 5.9 to 6.0 pixels.** The Z DAC still steps in 16 pm, so a 100 pm grating is only about
+   6 steps high; a real grating of tens of nanometres is far above that floor, and the loop and DAC set the image's vertical resolution, not the detector.
 4. **No on-board image memory is needed for a fork,** whose response takes tens of milliseconds, but the program reads a pixel by polling over the
    serial port and relies on its timing being aligned with the raster's ticks, which only the twin guarantees; on a real board a pixel-synchronous
    read or a small capture memory is needed.

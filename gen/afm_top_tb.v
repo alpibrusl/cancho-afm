@@ -108,7 +108,7 @@ module afm_top_tb;
     rdi(40, d); if (d < 1000) begin fails = fails + 1; $display("FAIL only %0d samples", d); end
     // ---- phase 3: the loop closes
     w(1, 0); repeat (500) @(posedge clk);
-    w(7, 4); w(8, (free_r * 8 / 10) >> 4); w(9, 9); w(10, 0); w(11, 0); w(12, 65535);
+    w(7, 4); w(8, (free_r * 8 / 10) >> 4); w(9, 2304); w(10, 0); w(11, 0); w(12, 65535);
     w(13, 0); w(14, 60000); w(15, 3000); w(16, 60000); w(17, 32'd40000000);
     w(19, 32'd20000); w(20, 32'd32768);
     drive_min = 65535; drive_max = 0; drive_cross = 0; conv_at_start = nconv;

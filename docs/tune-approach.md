@@ -15,7 +15,7 @@
 * `choose(t, k, window_s, frac)`: the drive frequency, the setpoint (a fraction of the free reading), Q8 gains for the PID. The loop
   gain is aimed at alpha / 2, where alpha = window / tau is the fraction of a step the plant answers per detector window.
 
-### Two things the simulation found, both fixed in the rule
+### Two things the simulation found, both fixed in the rule (and the second one fixed properly, 2026-11-02, by Q16 gains)
 
 1. **Q8 gains are too coarse for a slow plant.** With 16 counts per pm the smallest loop gain is 16/256 = 0.06; a tuning fork needs
    about 0.01. The host therefore shifts the detector figure right (`shift`, the smallest that gives kp of at least 8) before the loop.
@@ -23,7 +23,10 @@
    samples, the loop swung between the Z limits (gap from -1000 to +8700 pm in the model). The integral time must be well over
    the loop's own time, so ki = round(kp * alpha / 8), which is **0** (proportional only) at these gains. A P-only loop has no steady
    offset against a fixed surface and follows a moving one with a lag of slope / G: about 16 pm for the test's surface. A slow integral
-   at any kp needs a finer gain format (16-bit gains over 65536) in `gen/pid_ir.cho`; not done.
+   at any kp needs a finer gain format (16-bit gains over 65536) in `gen/pid_ir.cho`.
+   **Done 2026-11-02:** the gains are Q16 now (`sim/pid.cho`, `gen/pid_ir.cho`, `sim/tune.cho`; the Verilog regenerated and checked). With them `choose` gives a real, slow integral: for the twin's
+   Q = 500 fork it picks kp 2,556 and ki 16 (an integral time of about 160 samples, 8 / alpha), and the end-to-end test (sweep, tune, approach, hold) passes with it. On the twin's scanned grating the
+   Z image went from about half of the grating's height to about 89% at 60 loop steps per pixel (see `simulator.md`).
 
 ## Approach (`sim/approach.cho`)
 

@@ -144,14 +144,14 @@ footer { border-top: 1px solid var(--line); padding: 2rem 0 3rem; color: var(--m
   <ul>
     <li>The square-wave amplitude detector gives the same figure at every signal phase when the drive and the detector share one oscillator, and noise of about 17% of the signal moves it under 2%.</li>
     <li><strong>A weakness:</strong> a third harmonic at 20% of the signal raises the figure about 7%. Fix: a band-pass before the ADC, or sine references.</li>
-    <li><strong>Two lessons from tuning:</strong> the loop's 8-bit gain fraction is too coarse for a slow tuning fork, so the host shifts the detector figure down first; and an integral term made the loop swing between its stops until it was made slower than the plant, which at these gains means no integral at all (proportional only). A finer gain format would allow one.</li>
+    <li><strong>Two lessons from tuning:</strong> the loop's first 8-bit gain fraction was too coarse for a slow tuning fork, so the host shifts the detector figure down first; and an integral term made the loop swing between its stops until it was made slower than the plant. With 16-bit gains the integral can be that slow, and the loop now has one.</li>
     <li>The Z drive needs a 16-bit DAC. The 2025 paper's 12-bit DAC gave 0.24 nm steps and read a 0.34 nm atomic step as 0.48 nm.</li>
   </ul>
   <h3>What the simulator showed before any hardware existed</h3>
   <ul>
     <li>The reference's 16-bit phase could not resolve a fork's 6.5 Hz-wide resonance (a 4 Hz step): it is 32 bits now.</li>
     <li>A scan advanced a pixel per loop step, which smears features the loop needs about 20 steps to follow: a pixel divider was added.</li>
-    <li>At 30 loop steps per pixel a 100 pm grating came out at about 40% of its height, at 60 to 120 steps about 50 to 60%: the proportional-only loop and the 16 pm DAC step set the image's vertical resolution.</li>
+    <li>With the first, coarser gain format the loop could only be proportional, and a 100 pm grating came out at 40 to 60% of its height; with 16-bit gains it can have a slow integral term, and the same scan gives about 89% at 60 loop steps per pixel (and a slight overshoot at 120). The 16 pm DAC step still sets the floor.</li>
     <li>The board has no coarse-motor interface yet, and a pixel-synchronous read or a small capture memory will be needed on a real board.</li>
   </ul>
   <p>These are predictions of this software; details and how far to trust them: <code>docs/simulator.md</code>.</p>

@@ -80,15 +80,17 @@ fn test_the_gain_rule_follows_the_plant_speed() -> [] int {
     test.assert(g1.alpha < 0.025);
     test.assert_eq(g1.shift, 6);
     test.assert_eq(g1.setpoint, 400);
-    test.assert(g1.kp >= 8);
+    test.assert(g1.kp >= 2048);
     test.assert(close(g1.gloop, g1.alpha / 2.0, g1.alpha / 2.0 * 0.12) == 1);
     let cant = tune.T { ok: 1, why: 0, f0: 300000.0, q: 400.0, peak: 32000.0 };
     let g2 = tune.choose(cant, 16.0, 0.00003, 0.8);
     test.assert(g2.shift < g1.shift);
     test.assert(g2.gloop > g1.gloop);
     test.assert(close(g2.gloop, g2.alpha / 2.0, g2.alpha / 2.0 * 0.12) == 1);
-    // the integral is slower than the proportional action by at least 8 samples' worth, which at these gains rounds to none
-    test.assert_eq(g1.ki, 0);
+    // Q16 gains leave room for a real, slow integral term: Ti = kp / ki is about 8 / alpha samples (here about 390 for the fork), and ki is not 0
+    test.assert(g1.ki >= 1);
+    test.assert(close(float_of(g1.kp) / float_of(g1.ki), 8.0 / g1.alpha, 8.0 / g1.alpha * 0.15) == 1);
+    test.assert(g2.ki >= 1);
     test.assert(g2.ki * 8 <= g2.kp);
     return 0;
 }

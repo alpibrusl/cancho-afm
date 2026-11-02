@@ -76,7 +76,7 @@ fn test_the_loop_settles_where_the_verilog_run_does() -> [] int {
         board.advance(rf, st, fl, 2000);
         let (free_fig, rr) = board.read(rf, st, 32);
         board.write(rf, st, 1, 0);
-        board.write(rf, st, 7, 4); board.write(rf, st, 8, (free_fig * 8 / 10) / 16); board.write(rf, st, 9, 9);
+        board.write(rf, st, 7, 4); board.write(rf, st, 8, (free_fig * 8 / 10) / 16); board.write(rf, st, 9, 2304);
         board.write(rf, st, 12, 65535); board.write(rf, st, 13, 0); board.write(rf, st, 14, 60000);
         board.write(rf, st, 15, 3000); board.write(rf, st, 16, 60000); board.write(rf, st, 17, 40000000);
         board.write(rf, st, 1, 19);        // run + drive + adc_run
@@ -98,7 +98,7 @@ fn test_the_limit_the_deadman_and_the_reset() -> [] int {
         let st = alloc_slice[r](32, 0);
         let fl = alloc_slice[r](16, 0.0);
         setup(rf, st, fl);
-        board.write(rf, st, 7, 4); board.write(rf, st, 8, 2190); board.write(rf, st, 9, 9);
+        board.write(rf, st, 7, 4); board.write(rf, st, 8, 2190); board.write(rf, st, 9, 2304);
         board.write(rf, st, 12, 65535); board.write(rf, st, 13, 0); board.write(rf, st, 14, 60000);
         board.write(rf, st, 15, 3000); board.write(rf, st, 16, 60000); board.write(rf, st, 17, 300000);
         board.write(rf, st, 1, 17);        // run + adc_run
@@ -139,7 +139,7 @@ fn test_the_scan_ends_where_the_verilog_scan_does() -> [] int {
         let st = alloc_slice[r](32, 0);
         let fl = alloc_slice[r](16, 0.0);
         setup(rf, st, fl);
-        board.write(rf, st, 7, 4); board.write(rf, st, 8, 2190); board.write(rf, st, 9, 9);
+        board.write(rf, st, 7, 4); board.write(rf, st, 8, 2190); board.write(rf, st, 9, 2304);
         board.write(rf, st, 12, 65535); board.write(rf, st, 14, 60000); board.write(rf, st, 15, 3000); board.write(rf, st, 16, 60000);
         board.write(rf, st, 21, 4); board.write(rf, st, 22, 2); board.write(rf, st, 23, 1000); board.write(rf, st, 24, 2000);
         board.write(rf, st, 25, 100); board.write(rf, st, 26, 250); board.write(rf, st, 27, 3);

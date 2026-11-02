@@ -59,7 +59,7 @@ pub fn analyse[&a, &b](f: &a [float], r: &b [float], n: int) -> [] T {
 }
 
 // what the loop is told: the drive frequency; a right-shift `shift` applied to the detector figure before the loop (so the gains have
-// room: see choose); the setpoint in shifted counts; Q8 gains for sim/pid.cho and gen/pid_ir.cho; the loop gain that results
+// room: see choose); the setpoint in shifted counts; Q16 gains for sim/pid.cho and gen/pid_ir.cho; the loop gain that results
 pub struct G { drive_hz: float, shift: int, setpoint: int, kp: int, ki: int, alpha: float, gloop: float }
 
 fn rounded(x: float) -> [] int {
@@ -68,18 +68,14 @@ fn rounded(x: float) -> [] int {
 
 // The rule. The cantilever answers a change of height with a lag of tau = Q / (pi f0); the loop gets one new reading per detector
 // window (`window_s` seconds), so alpha = window_s / tau of the way there each time. With the plant gain k counts per pm (after the
-// shift: k / 2^shift) and a proportional step of kp/256 of the error, the loop gain per sample is G = kp * k_eff / 256. G is aimed at
+// shift: k / 2^shift) and a proportional step of kp/65536 of the error, the loop gain per sample is G = kp * k_eff / 65536. G is aimed at
 // alpha / 2 (never more than 0.5), which keeps the loop stable against that lag.
 //
-// Q8 gains are coarse: with 16 counts per pm the smallest G is 16/256 = 0.06, six times too much for a tuning fork. So the host
-// shifts the figure right by the smallest `shift` that gives kp at least 8 (about 12% resolution), then kp = round(256 G / k_eff).
-//
-// Integral gain: the integral time Ti = kp / ki samples must be well over the loop's own time (about 1 / alpha samples) or the integral
-// term destabilises it (found by simulation: ki = kp / 8, an integral time of 8 samples against a plant lag of 40, made the loop swing
-// between its stops). So ki = round(kp * alpha / 8), a Ti of 8 / alpha samples, which is 0 (a proportional-only loop) whenever Q8
-// gains are too coarse for it: ki = 1 is already Ti = kp. A P-only loop follows a moving surface with a lag of slope / G and has no
-// steady offset against a fixed one, which is enough for slow scans; a finer gain format (16-bit gains over 65536) would give a slow
-// integral at any kp, and is a possible change to gen/pid_ir.cho, not made. `frac` is the setpoint as a fraction of the free amplitude.
+// Gains are Q16 (they were Q8, whose smallest step, G = k/256 = 0.06 at 16 counts per pm, was six times too much for a tuning fork, and
+// whose ki could not be slow enough). The host still shifts the figure right, by the smallest `shift` that gives kp at least 2048 (a 0.05%
+// step), because a slow integral needs room: ki = round(kp * alpha / 8) is the integral time Ti = 8 / alpha samples that stability needs
+// (found by simulation: an integral time of 8 samples against a plant lag of 40 made the loop swing between its stops), and it must be at
+// least 1. `frac` is the setpoint as a fraction of the free amplitude (for example 0.8).
 pub fn choose(t: T, k: float, window_s: float, frac: float) -> [] G {
     let tau = t.q / (3.141592653589793 * t.f0);
     var alpha = window_s / tau;
@@ -88,19 +84,20 @@ pub fn choose(t: T, k: float, window_s: float, frac: float) -> [] G {
     if target > 0.5 { target = 0.5; }
     var shift = 0;
     var keff = k;
-    while 256.0 * target / keff < 8.0 && shift < 20 {
+    while 65536.0 * target / keff < 2048.0 && shift < 20 {
         shift = shift + 1;
         keff = keff / 2.0;
     }
-    var kp = rounded(256.0 * target / keff);
+    var kp = rounded(65536.0 * target / keff);
     if kp < 1 { kp = 1; }
-    if kp > 4095 { kp = 4095; }
-    let ki = rounded(float_of(kp) * alpha / 8.0);
+    if kp > 65535 { kp = 65535; }
+    var ki = rounded(float_of(kp) * alpha / 8.0);
+    if ki > 65535 { ki = 65535; }
     var div = 1.0;
     var i = 0;
     while i < shift {
         div = div * 2.0;
         i = i + 1;
     }
-    return G { drive_hz: t.f0, shift: shift, setpoint: truncate(frac * t.peak / div), kp: kp, ki: ki, alpha: alpha, gloop: float_of(kp) * keff / 256.0 };
+    return G { drive_hz: t.f0, shift: shift, setpoint: truncate(frac * t.peak / div), kp: kp, ki: ki, alpha: alpha, gloop: float_of(kp) * keff / 65536.0 };
 }

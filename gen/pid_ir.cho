@@ -28,7 +28,7 @@ pub fn build[&a, &b](t: &!a [int], outs: &!b [int]) -> [] int {
     let dk = ir.node(t, 4, kd, d, 0);
     let s1 = ir.node(t, 2, pk, ik, 0);
     let s2 = ir.node(t, 2, s1, dk, 0);
-    let u = ir.node(t, 5, s2, 256, 0);
+    let u = ir.node(t, 5, s2, 65536, 0);
     let zu = ir.node(t, 3, z, u, 0);
     let nz = ir.node(t, 6, zu, zmin, zmax);
     outs[0] = ni;
@@ -38,16 +38,16 @@ pub fn build[&a, &b](t: &!a [int], outs: &!b [int]) -> [] int {
 }
 
 // The contract of the hardware step, as ranges. Inputs, in order: integ, prev, z, err, kp, ki, kd, ilim, zmin, zmax.
-// err and prev are signed 16-bit (the ADC word, in pm); gains are 12-bit unsigned Q8 (up to 16.0); the integral and its
+// err and prev are signed 16-bit (the ADC word, in pm); gains are 16-bit unsigned Q16 (up to just under 1.0); the integral and its
 // limit are 17-bit; z and its limits are 20-bit unsigned (up to 1,048,575 pm, a little over 1 um of Z). [choice]
 pub fn input_ranges[&a, &b](lo: &!a [int], hi: &!b [int]) -> [] int {
     lo[0] = 0 - 65535; hi[0] = 65535;
     lo[1] = 0 - 32768; hi[1] = 32767;
     lo[2] = 0; hi[2] = 1048575;
     lo[3] = 0 - 32768; hi[3] = 32767;
-    lo[4] = 0; hi[4] = 4095;
-    lo[5] = 0; hi[5] = 4095;
-    lo[6] = 0; hi[6] = 4095;
+    lo[4] = 0; hi[4] = 65535;
+    lo[5] = 0; hi[5] = 65535;
+    lo[6] = 0; hi[6] = 65535;
     lo[7] = 0; hi[7] = 65535;
     lo[8] = 0; hi[8] = 1048575;
     lo[9] = 0; hi[9] = 1048575;

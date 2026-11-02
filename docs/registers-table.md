@@ -11,9 +11,9 @@
 | 6 | 0x40000018 | HALF | RW | 2 | 32 bits | SPI clocks per half SCK period |
 | 7 | 0x4000001c | SHIFT | RW | 0 | 32 bits | right shift of the detector figure before the loop |
 | 8 | 0x40000020 | SETPOINT | RW | 0 | 32 bits | the loop's target for the shifted figure (signed) |
-| 9 | 0x40000024 | KP | RW | 0 | 32 bits | proportional gain, Q8 |
-| 10 | 0x40000028 | KI | RW | 0 | 32 bits | integral gain, Q8 |
-| 11 | 0x4000002c | KD | RW | 0 | 32 bits | derivative gain, Q8 |
+| 9 | 0x40000024 | KP | RW | 0 | 32 bits | proportional gain, Q16 |
+| 10 | 0x40000028 | KI | RW | 0 | 32 bits | integral gain, Q16 |
+| 11 | 0x4000002c | KD | RW | 0 | 32 bits | derivative gain, Q16 |
 | 12 | 0x40000030 | ILIM | RW | 0 | 32 bits | integral limit |
 | 13 | 0x40000034 | ZMIN | RW | 0 | 32 bits | hardware limit on Z, low (pm) |
 | 14 | 0x40000038 | ZMAX | RW | 0 | 32 bits | hardware limit on Z, high (pm) |
