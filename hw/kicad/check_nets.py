@@ -103,6 +103,6 @@ check(between('C15', 'TOUT', 'B') and between('R18', 'B', 'VMID') and between('R
 check(pin_net.get(('U5', '3')) == 'B' and pin_net.get(('U5', '2')) == 'N2' and pin_net.get(('U5', '1')) == 'SOUT', "fork front end: U5 unit 1 is the gain stage")
 check(pin_net.get(('U5', '5')) == 'VMIDD' and pin_net.get(('U5', '6')) == 'VMID' and pin_net.get(('U5', '7')) == 'VMID', "fork front end: U5 unit 2 buffers the 1.65 V middle")
 check(between('R22', '+3V3', 'VMIDD') and between('R23', 'VMIDD', 'GND') and parts['R22'] == parts['R23'], "fork front end: VMID is half of 3.3 V")
-check(between('R21', 'SOUT', 'ADC') and between('D3', '+3V3', 'ADC') and between('D4', 'ADC', 'GND'), "fork front end: 1 kohm and the two clamp diodes protect the ADC input")
+check(between('R21', 'SOUT', 'ADC') and pin_net.get(('D3', '1')) == 'GND' and pin_net.get(('D3', '2')) == '+3V3' and pin_net.get(('D3', '3')) == 'ADC', "fork front end: 1 kohm and the BAT54S clamp (ADC to 3V3 and GND) protect the ADC input")
 print("%d failure(s)" % fails)
 sys.exit(1 if fails else 0)

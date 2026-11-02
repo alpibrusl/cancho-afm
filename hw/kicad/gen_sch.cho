@@ -85,6 +85,15 @@ fn lib_symbols[&h](heap: &!h Heap, b: buffer.Buffer) -> [heap] buffer.Buffer {
     o = pin(heap, o, "passive", 0, 0 - 381, 90, 127, "A", "1");
     o = text(heap, o, "      )\n");
     o = text(heap, o, "    )\n");
+    // BAT54S: two series Schottky diodes in a SOT-23; pad 1 anode of the first, pad 2 cathode of the second, pad 3 the common point
+    o = sym_head(heap, o, "BAT54S", "D");
+    o = text(heap, o, "      (symbol \"BAT54S_1_1\"\n");
+    o = rect(heap, o, 0 - 102, 254, 102, 0 - 254);
+    o = pin(heap, o, "passive", 0, 381, 270, 127, "A1", "1");
+    o = pin(heap, o, "passive", 0, 0 - 381, 90, 127, "K2", "2");
+    o = pin(heap, o, "passive", 508, 0, 180, 254, "C", "3");
+    o = text(heap, o, "      )\n");
+    o = text(heap, o, "    )\n");
     // the rheostat: pin 1 top, pin 3 bottom, wiper 2 on the right (tied to 3 on the sheet)
     o = sym_head(heap, o, "Trim", "RV");
     o = text(heap, o, "      (symbol \"Trim_1_1\"\n");
@@ -297,8 +306,10 @@ fn main(world: World) -> [] int {
             o = resistor(h, o, id, "R20", "100k", 20574, 20066, "N2", "SOUT");
             o = cap(h, o, id, "C16", "10p", "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm", 22098, 20066, "N2", "SOUT");
             o = resistor(h, o, id, "R21", "1k", 23622, 20066, "SOUT", "ADC");
-            o = two(h, o, id, "Diode", "D3", "BAT54S", "Package_TO_SOT_SMD:SOT-23", 24892, 20066, "+3V3", "ADC");
-            o = two(h, o, id, "Diode", "D4", "BAT54S", "Package_TO_SOT_SMD:SOT-23", 26416, 20066, "ADC", "GND");
+            o = place(h, o, id, "BAT54S", "D3", "BAT54S", "Package_TO_SOT_SMD:SOT-23", 24892, 20066, 3);
+            o = label(h, o, id, "GND", 24892, 19685, 90);
+            o = label(h, o, id, "+3V3", 24892, 20447, 270);
+            o = label(h, o, id, "ADC", 25400, 20066, 0);
             o = conn2(h, o, id, "J9", "ADC A0 (Pmod AD1)", 28448, 20066, "ADC", "GND");
             o = conn2(h, o, id, "J11", "3.3 V (from the FPGA board)", 28448, 22606, "+3V3", "GND");
             o = resistor(h, o, id, "R22", "10k", 23622, 22606, "+3V3", "VMIDD");
@@ -308,11 +319,11 @@ fn main(world: World) -> [] int {
             o = cap(h, o, id, "C17", "100n", "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm", 12446, 23876, "+12V", "GND");
             o = cap(h, o, id, "C18", "10u", "Capacitor_THT:C_Rect_L7.2mm_W3.0mm_P5.00mm_FKS2_FKP2_MKS2_MKP2", 13970, 23876, "+12V", "GND");
             o = cap(h, o, id, "C19", "100n", "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm", 15494, 23876, "GND", "-12V");
-            o = cap(h, o, id, "C110", "10u", "Capacitor_THT:C_Rect_L7.2mm_W3.0mm_P5.00mm_FKS2_FKP2_MKS2_MKP2", 17018, 23876, "GND", "-12V");
-            o = cap(h, o, id, "C111", "100n", "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm", 20066, 23876, "+12V", "GND");
-            o = cap(h, o, id, "C112", "10u", "Capacitor_THT:C_Rect_L7.2mm_W3.0mm_P5.00mm_FKS2_FKP2_MKS2_MKP2", 21590, 23876, "+12V", "GND");
-            o = cap(h, o, id, "C113", "100n", "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm", 23114, 23876, "GND", "-12V");
-            o = cap(h, o, id, "C114", "10u", "Capacitor_THT:C_Rect_L7.2mm_W3.0mm_P5.00mm_FKS2_FKP2_MKS2_MKP2", 24384, 23876, "GND", "-12V");
+            o = cap(h, o, id, "C20", "10u", "Capacitor_THT:C_Rect_L7.2mm_W3.0mm_P5.00mm_FKS2_FKP2_MKS2_MKP2", 17018, 23876, "GND", "-12V");
+            o = cap(h, o, id, "C21", "100n", "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm", 20066, 23876, "+12V", "GND");
+            o = cap(h, o, id, "C22", "10u", "Capacitor_THT:C_Rect_L7.2mm_W3.0mm_P5.00mm_FKS2_FKP2_MKS2_MKP2", 21590, 23876, "+12V", "GND");
+            o = cap(h, o, id, "C23", "100n", "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm", 23114, 23876, "GND", "-12V");
+            o = cap(h, o, id, "C24", "10u", "Capacitor_THT:C_Rect_L7.2mm_W3.0mm_P5.00mm_FKS2_FKP2_MKS2_MKP2", 24384, 23876, "GND", "-12V");
             o = text(h, o, "  (sheet_instances (path \"/\" (page \"1\")))\n  (embedded_fonts no)\n)\n");
         }
         borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
