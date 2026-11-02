@@ -1,0 +1,32 @@
+edition 5;
+
+module plant;
+
+// `plant` -- the thing the controller talks to, as the simplest model with the right shape. NOT A MEASUREMENT OF ANY CANTILEVER OR FORK.
+//   * a driven resonator: amplitude (pm) at drive frequency f is a0 / sqrt(1 + (2 Q (f - f0) / f0)^2), a Lorentzian near resonance;
+//   * a tip near a surface: the amplitude is multiplied by gap/free for gaps under the free amplitude (the law of sim/loop.cho);
+//   * a first-order lag of the amplitude behind its target, per detector window: alpha = window time / tau, tau = Q / (pi f0);
+//   * the detector's figure: R = k * amplitude (k = figure counts per pm, a calibration constant).
+
+pub fn response(f: float, f0: float, q: float, a0: float) -> [] float {
+    let x = 2.0 * q * (f - f0) / f0;
+    return a0 / sqrt(1.0 + x * x);
+}
+
+pub fn contact(gap: float, free: float) -> [] float {
+    if gap >= free {
+        return 1.0;
+    }
+    if gap <= 0.0 {
+        return 0.0;
+    }
+    return gap / free;
+}
+
+pub fn lag(prev: float, target: float, alpha: float) -> [] float {
+    return prev + alpha * (target - prev);
+}
+
+pub fn tau(f0: float, q: float) -> [] float {
+    return q / (3.141592653589793 * f0);
+}

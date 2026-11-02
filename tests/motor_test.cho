@@ -1,0 +1,62 @@
+import std.test;
+import motor;
+
+// run a command to its end: returns (rising edges counted on STEP, final state)
+fn run_cmd(s0: motor.Mo, steps: int, rate: int) -> [] (int, motor.Mo) {
+    var s = motor.step(s0, 1, 0, 1, steps, rate);
+    var edges = 0;
+    var prev = 0;
+    var guard = 0;
+    while s.busy == 1 && guard < 100000 {
+        s = motor.step(s, 1, 0, 0, 0, rate);
+        if s.step == 1 && prev == 0 { edges = edges + 1; }
+        prev = s.step;
+        guard = guard + 1;
+    }
+    return (edges, s);
+}
+
+fn test_a_command_gives_that_many_steps_in_the_right_direction() -> [] int {
+    let (e1, s1) = run_cmd(motor.reset(), 5, 12);
+    test.assert_eq(e1, 5);
+    test.assert_eq(s1.pos, 5);
+    test.assert_eq(s1.dir, 1);
+    let (e2, s2) = run_cmd(s1, 0 - 3, 8);
+    test.assert_eq(e2, 3);
+    test.assert_eq(s2.pos, 2);
+    test.assert_eq(s2.dir, 0);
+    test.assert_eq(s2.step, 0);
+    // a period below 4 clocks is taken as 4
+    let (e3, s3) = run_cmd(s2, 2, 1);
+    test.assert_eq(e3, 2);
+    test.assert_eq(s3.pos, 4);
+    return 0;
+}
+
+fn test_disabled_held_or_zero_does_nothing_and_abort_keeps_the_position() -> [] int {
+    // disabled: the command is ignored
+    let a = motor.step(motor.reset(), 0, 0, 1, 4, 12);
+    test.assert_eq(a.busy, 0);
+    // held (a fault): ignored
+    let b = motor.step(motor.reset(), 1, 1, 1, 4, 12);
+    test.assert_eq(b.busy, 0);
+    // zero steps: ignored
+    let c = motor.step(motor.reset(), 1, 0, 1, 0, 12);
+    test.assert_eq(c.busy, 0);
+    // a command while busy is ignored
+    var s = motor.step(motor.reset(), 1, 0, 1, 3, 12);
+    s = motor.step(s, 1, 0, 1, 99, 12);
+    test.assert_eq(s.remaining, 3);
+    // abort mid-move: STEP low at once, no further steps, the position stays where it got to
+    var k = 0;
+    while k < 30 { s = motor.step(s, 1, 0, 0, 0, 12); k = k + 1; }
+    let before = s.pos;
+    s = motor.step(s, 1, 1, 0, 0, 12);
+    test.assert_eq(s.busy, 0);
+    test.assert_eq(s.step, 0);
+    test.assert_eq(s.pos, before);
+    var j = 0;
+    while j < 40 { s = motor.step(s, 1, 0, 0, 0, 12); j = j + 1; }
+    test.assert_eq(s.pos, before);
+    return 0;
+}

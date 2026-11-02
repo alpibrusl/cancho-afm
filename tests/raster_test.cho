@@ -1,0 +1,104 @@
+import std.test;
+import ir;
+import raster_ir;
+import raster;
+
+// A whole 4 x 3 frame: every pixel visited once on the trace, ticks per line, the slow axis, the end.
+fn test_a_frame_visits_every_pixel_once_and_stops() -> [] int {
+    var s = raster.start(1000, 2000);
+    var ticks = 0;
+    var pixels = 0;
+    var last_x = 0;
+    while s.done == 0 && ticks < 1000 {
+        if raster.tracing(s, 4) == 1 {
+            test.assert_eq(s.x, 1000 + s.t * 100);
+            test.assert_eq(s.y, 2000 + s.line * 250);
+            pixels = pixels + 1;
+        }
+        last_x = s.x;
+        s = raster.step(s, 4, 3, 1000, 100, 250);
+        ticks = ticks + 1;
+    }
+    test.assert_eq(pixels, 12);
+    test.assert_eq(ticks, 3 * (2 * 4 - 2));
+    test.assert_eq(s.x, 1000);
+    test.assert_eq(s.y, 2000 + 2 * 250);
+    // done is final: ticks change nothing
+    let again = raster.step(s, 4, 3, 1000, 100, 250);
+    test.assert_eq(again.t, s.t);
+    test.assert_eq(again.done, 1);
+    return 0;
+}
+
+// The graph and the hand-written step give the same state after every tick, for several sizes, all the way to done.
+fn test_the_graph_equals_the_hand_written_raster() -> [] int {
+    region r {
+        let tp = alloc_slice[r](1 + 4 * 96, 0);
+        let outs = alloc_slice[r](5, 0);
+        raster_ir.build(tp, outs);
+        let vals = alloc_slice[r](96, 0);
+        let inp = alloc_slice[r](10, 0);
+        var cfg = 0;
+        while cfg < 12 {
+            let npix = 2 + cfg % 5;
+            let nlines = 1 + cfg % 4;
+            let x0 = 100 * cfg;
+            let dx = 7 + cfg;
+            let dy = 3 * cfg + 1;
+            var s = raster.start(x0, 50);
+            var ticks = 0;
+            while s.done == 0 && ticks < 500 {
+                inp[0] = s.t; inp[1] = s.line; inp[2] = s.x; inp[3] = s.y; inp[4] = s.done;
+                inp[5] = npix; inp[6] = nlines; inp[7] = x0; inp[8] = dx; inp[9] = dy;
+                ir.eval(tp, inp, vals);
+                s = raster.step(s, npix, nlines, x0, dx, dy);
+                test.assert_eq(vals[outs[0]], s.t);
+                test.assert_eq(vals[outs[1]], s.line);
+                test.assert_eq(vals[outs[2]], s.x);
+                test.assert_eq(vals[outs[3]], s.y);
+                test.assert_eq(vals[outs[4]], s.done);
+                ticks = ticks + 1;
+            }
+            test.assert_eq(s.done, 1);
+            test.assert_eq(ticks, nlines * (2 * npix - 2));
+            cfg = cfg + 1;
+        }
+    }
+    return 0;
+}
+
+// Every node stays inside its computed range over all corners and 3,000 spread cases (the graph is a function of its inputs
+// alone, so inputs that no run reaches are covered too).
+fn test_raster_values_stay_inside_their_computed_ranges() -> [] int {
+    region r {
+        let tp = alloc_slice[r](1 + 4 * 96, 0);
+        let outs = alloc_slice[r](5, 0);
+        raster_ir.build(tp, outs);
+        let n = ir.count(tp);
+        let inlo = alloc_slice[r](10, 0);
+        let inhi = alloc_slice[r](10, 0);
+        raster_ir.input_ranges(inlo, inhi);
+        let lo = alloc_slice[r](96, 0);
+        let hi = alloc_slice[r](96, 0);
+        ir.ranges(tp, inlo, inhi, lo, hi);
+        let vals = alloc_slice[r](96, 0);
+        let inp = alloc_slice[r](10, 0);
+        var k = 0;
+        while k < 4024 {
+            ir.sample(k, 10, inlo, inhi, inp);
+            ir.eval(tp, inp, vals);
+            var i = 0;
+            while i < n {
+                test.assert(vals[i] >= lo[i]);
+                test.assert(vals[i] <= hi[i]);
+                i = i + 1;
+            }
+            k = k + 1;
+        }
+        // no registers: the raster step is one combinational tick
+        let stg = alloc_slice[r](96, 0);
+        ir.stages(tp, stg);
+        test.assert_eq(ir.latency(stg, outs, 5), 0);
+    }
+    return 0;
+}

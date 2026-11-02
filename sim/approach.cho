@@ -1,0 +1,64 @@
+edition 5;
+
+module approach;
+
+// `approach` -- bring the tip to the surface without crashing it. A state machine with no I/O: each detector reading goes in, the next
+// command comes out (where Z is to go, whether the coarse motor has stepped, whether contact was found or the run faulted). The caller
+// (the host program, or the test's plant) does the moving and the waiting. NOT TESTED ON ANY REAL INSTRUMENT.
+//
+//   Z is the tip's height: larger is farther from the surface (the convention of sim/loop.cho). Z starts fully retracted (zmax), is
+//   lowered in steps of dz, with a dwell after each so the amplitude (which lags) can follow; at the bottom of its range with no
+//   contact it is retracted, the coarse motor steps the tip closer by `coarse` pm, and it starts again. Contact is the reading falling
+//   below `contact_pct` of the free reading.
+//
+// The two rules that keep the tip off the surface, checked before anything moves (check): the coarse step must be smaller than the
+// Z range less the free amplitude (or one motor step can carry the surface past the whole range), and the apparent lag distance
+// dz / (dwell * alpha) must be under half the free amplitude (or the reading falls behind the tip).
+
+pub struct P { free_r: int, free_pm: int, contact_pct: int, dz: int, dwell: int, zmin: int, zmax: int, coarse: int, max_motor: int }
+
+// phase: 0 settling after a retract, 1 extending, 2 contact found, 3 fault.  fault: 0 none, 1 no surface within max_motor steps,
+// 2 the reading fell below half the free reading (retract at once), 3 the free reading is gone at full retract (signal lost, or the
+// tip already touching).
+pub struct A { phase: int, z: int, motor: int, dwell: int, fault: int }
+
+// 0 = the parameters are safe; otherwise the first rule broken: 1 coarse step too big, 2 dz too big, 3 dwell < 1, 4 lag distance too big.
+pub fn check(p: P, alpha: float) -> [] int {
+    if p.coarse + p.free_pm > p.zmax - p.zmin { return 1; }
+    if p.dz * 10 > p.free_pm { return 2; }
+    if p.dwell < 1 { return 3; }
+    if float_of(p.dz) / (float_of(p.dwell) * alpha) > float_of(p.free_pm) / 2.0 { return 4; }
+    return 0;
+}
+
+pub fn start(p: P) -> [] A {
+    return A { phase: 0, z: p.zmax, motor: 0, dwell: p.dwell, fault: 0 };
+}
+
+pub fn next(s: A, r: int, p: P) -> [] A {
+    if s.phase >= 2 {
+        return s;
+    }
+    if r * 100 < p.free_r * 50 {
+        // whatever the phase, a reading under half the free one means the tip is much too close or the signal is gone: retract now
+        var code = 2;
+        if s.phase == 0 && s.z == p.zmax { code = 3; }
+        return A { phase: 3, z: p.zmax, motor: s.motor, dwell: 0, fault: code };
+    }
+    if s.dwell > 0 {
+        return A { phase: s.phase, z: s.z, motor: s.motor, dwell: s.dwell - 1, fault: 0 };
+    }
+    if r * 100 < p.free_r * p.contact_pct {
+        return A { phase: 2, z: s.z, motor: s.motor, dwell: 0, fault: 0 };
+    }
+    if s.phase == 0 {
+        return A { phase: 1, z: s.z, motor: s.motor, dwell: 0, fault: 0 };
+    }
+    if s.z - p.dz >= p.zmin {
+        return A { phase: 1, z: s.z - p.dz, motor: s.motor, dwell: p.dwell, fault: 0 };
+    }
+    if s.motor >= p.max_motor {
+        return A { phase: 3, z: p.zmax, motor: s.motor, dwell: 0, fault: 1 };
+    }
+    return A { phase: 0, z: p.zmax, motor: s.motor + 1, dwell: p.dwell * 4, fault: 0 };
+}

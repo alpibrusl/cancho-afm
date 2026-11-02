@@ -1,0 +1,164 @@
+import std.test;
+import plant;
+import tune;
+import pid;
+import loop;
+import approach;
+
+// ---- the test plant: tip height above the surface, an amplitude that lags its target, the detector figure ----
+// gap = s0 - motor * coarse - (zmax - z) - h.   amplitude target = a0 * contact(gap, free); the figure is k * amplitude.
+struct Sim { amp: float, crashed: int }
+
+fn gap(s0: int, motor: int, coarse: int, zmax: int, z: int, h: int) -> [] int {
+    return s0 - motor * coarse - (zmax - z) - h;
+}
+
+fn tick(s: Sim, g: int, free_pm: int, a0: float, alpha: float) -> [] Sim {
+    let target = a0 * plant.contact(float_of(g), float_of(free_pm));
+    var crashed = s.crashed;
+    if g <= 0 { crashed = 1; }
+    return Sim { amp: plant.lag(s.amp, target, alpha), crashed: crashed };
+}
+
+fn figure(s: Sim, k: float) -> [] int {
+    return truncate(k * s.amp + 0.5);
+}
+
+fn params() -> [] approach.P {
+    return approach.P { free_r: 32000, free_pm: 2000, contact_pct: 90, dz: 100, dwell: 150, zmin: 0, zmax: 10000, coarse: 6000, max_motor: 20 };
+}
+
+fn test_unsafe_parameters_are_refused() -> [] int {
+    let alpha = 0.0206;
+    test.assert_eq(approach.check(params(), alpha), 0);
+    // a coarse step as big as the whole Z range could carry the surface past it
+    test.assert_eq(approach.check(approach.P { free_r: 32000, free_pm: 2000, contact_pct: 90, dz: 100, dwell: 150, zmin: 0, zmax: 10000, coarse: 9000, max_motor: 20 }, alpha), 1);
+    test.assert_eq(approach.check(approach.P { free_r: 32000, free_pm: 2000, contact_pct: 90, dz: 300, dwell: 150, zmin: 0, zmax: 10000, coarse: 6000, max_motor: 20 }, alpha), 2);
+    test.assert_eq(approach.check(approach.P { free_r: 32000, free_pm: 2000, contact_pct: 90, dz: 100, dwell: 0, zmin: 0, zmax: 10000, coarse: 6000, max_motor: 20 }, alpha), 3);
+    // moving 100 pm per sample against a plant that takes 48 samples to answer: the reading would fall behind the tip
+    test.assert_eq(approach.check(approach.P { free_r: 32000, free_pm: 2000, contact_pct: 90, dz: 100, dwell: 1, zmin: 0, zmax: 10000, coarse: 6000, max_motor: 20 }, alpha), 4);
+    return 0;
+}
+
+// Run the approach from a surface `s0` away; return the final state, with the number of samples and whether the tip ever touched.
+fn run_approach(s0: int, max_motor: int) -> [] (approach.A, int, int, int) {
+    var p = params();
+    p = approach.P { free_r: p.free_r, free_pm: p.free_pm, contact_pct: p.contact_pct, dz: p.dz, dwell: p.dwell, zmin: p.zmin, zmax: p.zmax, coarse: p.coarse, max_motor: max_motor };
+    var s = approach.start(p);
+    var pl = Sim { amp: 2000.0, crashed: 0 };
+    var n = 0;
+    var g = 0;
+    while s.phase < 2 && n < 400000 {
+        g = gap(s0, s.motor, p.coarse, p.zmax, s.z, 0);
+        pl = tick(pl, g, p.free_pm, 2000.0, 0.0206);
+        s = approach.next(s, figure(pl, 16.0), p);
+        n = n + 1;
+    }
+    return (s, n, pl.crashed, gap(s0, s.motor, p.coarse, p.zmax, s.z, 0));
+}
+
+fn test_it_finds_the_surface_without_touching_it() -> [] int {
+    let (s, n, crashed, g) = run_approach(40000, 20);
+    test.assert_eq(s.phase, 2);
+    test.assert_eq(crashed, 0);
+    // it stopped inside the contact zone: past the 0.9 point, well clear of zero
+    test.assert(g < 1800);
+    test.assert(g > 1000);
+    // it needed the coarse motor: 40,000 pm away, 6,000 per step, 10,000 of Z range
+    test.assert(s.motor >= 3);
+    test.assert(s.motor <= 6);
+    return 0;
+}
+
+fn test_it_gives_up_and_retracts_when_there_is_no_surface() -> [] int {
+    let (s, n, crashed, g) = run_approach(900000, 5);
+    test.assert_eq(s.phase, 3);
+    test.assert_eq(s.fault, 1);
+    test.assert_eq(s.z, 10000);
+    test.assert_eq(crashed, 0);
+    return 0;
+}
+
+fn test_it_retracts_at_once_on_a_collapse_or_a_lost_signal() -> [] int {
+    let p = params();
+    // extending, and the reading falls to a third of the free one in a single reading
+    let s = approach.A { phase: 1, z: 7000, motor: 2, dwell: 0, fault: 0 };
+    let t = approach.next(s, 10000, p);
+    test.assert_eq(t.phase, 3);
+    test.assert_eq(t.fault, 2);
+    test.assert_eq(t.z, 10000);
+    // fully retracted and the reading is already gone: signal lost or already touching
+    let u = approach.next(approach.start(p), 0, p);
+    test.assert_eq(u.fault, 3);
+    test.assert_eq(u.z, 10000);
+    // a fault is final
+    test.assert_eq(approach.next(t, 32000, p).phase, 3);
+    return 0;
+}
+
+// ---- the whole chain on the model: sweep, tune, choose, approach, then hold the surface with the generated hardware's PID ----
+fn sweep_into[&a, &b](f: &!a [float], r: &!b [float], n: int, f_start: float, step: float, f0: float, q: float, a0: float, k: float) -> [] int {
+    var i = 0;
+    while i < n {
+        let fi = f_start + float_of(i) * step;
+        f[i] = fi;
+        r[i] = float_of(truncate(k * plant.response(fi, f0, q, a0) + 0.5));
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn test_tune_approach_and_track() -> [] int {
+    region r {
+        // 1. a fork the program knows nothing about: f0 32,781.4 Hz, Q 4,200, 2,000 pm free amplitude; 16 counts per pm
+        let f = alloc_slice[r](121, 0.0);
+        let d = alloc_slice[r](121, 0.0);
+        sweep_into(f, d, 121, 32720.0, 1.0, 32781.4, 4200.0, 2000.0, 16.0);
+        let t = tune.analyse(f, d, 121);
+        test.assert_eq(t.ok, 1);
+        // 2. what to run with: a 1 ms detector window
+        let g = tune.choose(t, 16.0, 0.001, 0.8);
+        test.assert(g.kp >= 8);
+        // 3. the approach, with the lag the tune measured (alpha), the figure shifted as the loop will see it
+        var p = params();
+        test.assert_eq(approach.check(p, g.alpha), 0);
+        var s = approach.start(p);
+        var pl = Sim { amp: 2000.0, crashed: 0 };
+        let s0 = 33000;
+        var n = 0;
+        while s.phase < 2 && n < 400000 {
+            pl = tick(pl, gap(s0, s.motor, p.coarse, p.zmax, s.z, 0), p.free_pm, 2000.0, g.alpha);
+            s = approach.next(s, figure(pl, 16.0), p);
+            n = n + 1;
+        }
+        test.assert_eq(s.phase, 2);
+        test.assert_eq(pl.crashed, 0);
+        // 4. hand over to the PID of sim/pid.cho (the hardware's) and follow a surface that moves +-300 pm every 6,000 samples
+        var st = pid.start(s.z);
+        var worst = 0;
+        var t2 = 0;
+        var touched = 0;
+        while t2 < 18000 {
+            let h = loop.surface(t2, 300, 6000) + 300;
+            let gp = gap(s0, s.motor, p.coarse, p.zmax, st.z, h);
+            pl = tick(pl, gp, p.free_pm, 2000.0, g.alpha);
+            var fig = figure(pl, 16.0);
+            var div = 1;
+            var i = 0;
+            while i < g.shift { div = div * 2; i = i + 1; }
+            let err = fig / div - g.setpoint;
+            st = pid.step(st, err, g.kp, g.ki, 0, 65535, p.zmin, p.zmax);
+            if gp <= 0 { touched = 1; }
+            if t2 >= 6000 {
+                var e = gp - 1600;
+                if e < 0 { e = 0 - e; }
+                if e > worst { worst = e; }
+            }
+            t2 = t2 + 1;
+        }
+        test.assert_eq(touched, 0);
+        // after one full period of settling the gap stays within 15% of its 1,600 pm target (the setpoint is 0.8 of free)
+        test.assert(worst < 240);
+    }
+    return 0;
+}

@@ -1,0 +1,111 @@
+edition 5;
+
+module spi;
+
+// `spi` -- cycle-accurate models of the two SPI masters, one clock per call, written from the Digilent reference manuals of the Pmod AD1
+// and Pmod DA3 (docs/converter-candidates.md). Each state is what the generated registers hold after a clock edge; the generated
+// SystemVerilog (gen/sv.cho) must equal it on every clock. NOT TESTED AGAINST ANY REAL CHIP: the chip behaviour assumed is stated below.
+//
+// `half` is the number of FPGA clocks in half an SCK period (1 or more; a smaller value is taken as 1). It is read when a frame
+// starts and held for that frame, so changing it mid-frame cannot strand a counter past its match (found by the lockstep test: with the
+// value read every clock, a frame in flight ran on for 512 clocks until its counter wrapped). At 27 MHz, half = 2 gives a
+// 6.75 MHz SCK, a frame of about 70 clocks and 0.38 M conversions per second. Whether the chips accept that clock is in their datasheets.
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Pmod AD1 (AD7476A, two channels, 12 bits). Manual: CS low starts a conversion; 16 SCK clocks; each data line gives 4 leading zeros
+// then the 12 bits MSB first; the first leading zero is out on the falling edge of CS, the rest on falling edges of SCK.
+// Master: SCK idles high. CS falls; SCK is high for `half` clocks then low for `half`, 16 times; each bit is read on the last clock of
+// SCK's high phase (just before the falling edge that brings the next bit). CS then rises and stays high `half` clocks. Then `done`
+// pulses for one clock with the two 12-bit samples, and `busy` falls.
+
+pub struct Ad { busy: int, cs: int, sck: int, pos: int, bit: int, sh0: int, sh1: int, done: int, s0: int, s1: int, hl: int }
+
+pub fn ad_reset() -> [] Ad {
+    return Ad { busy: 0, cs: 1, sck: 1, pos: 0, bit: 0, sh0: 0, sh1: 0, done: 0, s0: 0, s1: 0, hl: 1 };
+}
+
+fn at_least_one(h: int) -> [] int {
+    if h < 1 {
+        return 1;
+    }
+    return h;
+}
+
+pub fn ad_step(s: Ad, start: int, d0: int, d1: int, half: int) -> [] Ad {
+    if s.busy == 0 {
+        if start == 1 {
+            return Ad { busy: 1, cs: 0, sck: 1, pos: 0, bit: 0, sh0: 0, sh1: 0, done: 0, s0: s.s0, s1: s.s1, hl: at_least_one(half) };
+        }
+        return Ad { busy: 0, cs: 1, sck: 1, pos: 0, bit: 0, sh0: s.sh0, sh1: s.sh1, done: 0, s0: s.s0, s1: s.s1, hl: s.hl };
+    }
+    let h = s.hl;
+    if s.cs == 0 {
+        var sh0 = s.sh0;
+        var sh1 = s.sh1;
+        if s.pos == h - 1 {
+            sh0 = (sh0 * 2 + d0) % 65536;
+            sh1 = (sh1 * 2 + d1) % 65536;
+        }
+        if s.pos == 2 * h - 1 {
+            if s.bit == 15 {
+                return Ad { busy: 1, cs: 1, sck: 1, pos: 0, bit: s.bit, sh0: sh0, sh1: sh1, done: 0, s0: s.s0, s1: s.s1, hl: h };
+            }
+            return Ad { busy: 1, cs: 0, sck: 1, pos: 0, bit: s.bit + 1, sh0: sh0, sh1: sh1, done: 0, s0: s.s0, s1: s.s1, hl: h };
+        }
+        var sck = 0;
+        if s.pos + 1 < h {
+            sck = 1;
+        }
+        return Ad { busy: 1, cs: 0, sck: sck, pos: s.pos + 1, bit: s.bit, sh0: sh0, sh1: sh1, done: 0, s0: s.s0, s1: s.s1, hl: h };
+    }
+    if s.pos == h - 1 {
+        return Ad { busy: 0, cs: 1, sck: 1, pos: 0, bit: 0, sh0: s.sh0, sh1: s.sh1, done: 1, s0: s.sh0 % 4096, s1: s.sh1 % 4096, hl: h };
+    }
+    return Ad { busy: 1, cs: 1, sck: 1, pos: s.pos + 1, bit: s.bit, sh0: s.sh0, sh1: s.sh1, done: 0, s0: s.s0, s1: s.s1, hl: h };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Pmod DA3 (AD5541A, 16 bits). Manual: ~CS low, then 16 SCLK pulses with the data MSB first in SPI mode 0 (SCLK idles low, the chip
+// reads DIN on the rising edge); when CS rises the data moves to the DAC if ~LDAC is low. Here ~LDAC is held low, so the output
+// updates when CS rises.
+// Master: SCLK idles low, CS high. CS falls with the MSB on DIN; each bit is SCLK low for `half` clocks then high for `half`; after
+// the 16th bit SCLK stays low and CS stays low `half` more clocks, then CS rises and stays high `half` clocks; then `done` pulses.
+
+pub struct Da { busy: int, stage: int, cs: int, sclk: int, din: int, pos: int, bit: int, sh: int, done: int, hl: int }
+
+pub fn da_reset() -> [] Da {
+    return Da { busy: 0, stage: 0, cs: 1, sclk: 0, din: 0, pos: 0, bit: 0, sh: 0, done: 0, hl: 1 };
+}
+
+pub fn da_step(s: Da, write: int, data: int, half: int) -> [] Da {
+    if s.busy == 0 {
+        if write == 1 {
+            return Da { busy: 1, stage: 0, cs: 0, sclk: 0, din: data / 32768 % 2, pos: 0, bit: 0, sh: data * 2 % 65536, done: 0, hl: at_least_one(half) };
+        }
+        return Da { busy: 0, stage: 0, cs: 1, sclk: 0, din: s.din, pos: 0, bit: 0, sh: s.sh, done: 0, hl: s.hl };
+    }
+    let h = s.hl;
+    if s.stage == 0 {
+        if s.pos == 2 * h - 1 {
+            if s.bit == 15 {
+                return Da { busy: 1, stage: 1, cs: 0, sclk: 0, din: s.din, pos: 0, bit: s.bit, sh: s.sh, done: 0, hl: h };
+            }
+            return Da { busy: 1, stage: 0, cs: 0, sclk: 0, din: s.sh / 32768 % 2, pos: 0, bit: s.bit + 1, sh: s.sh * 2 % 65536, done: 0, hl: h };
+        }
+        var sclk = 0;
+        if s.pos + 1 >= h {
+            sclk = 1;
+        }
+        return Da { busy: 1, stage: 0, cs: 0, sclk: sclk, din: s.din, pos: s.pos + 1, bit: s.bit, sh: s.sh, done: 0, hl: h };
+    }
+    if s.stage == 1 {
+        if s.pos == h - 1 {
+            return Da { busy: 1, stage: 2, cs: 1, sclk: 0, din: s.din, pos: 0, bit: s.bit, sh: s.sh, done: 0, hl: h };
+        }
+        return Da { busy: 1, stage: 1, cs: 0, sclk: 0, din: s.din, pos: s.pos + 1, bit: s.bit, sh: s.sh, done: 0, hl: h };
+    }
+    if s.pos == h - 1 {
+        return Da { busy: 0, stage: 0, cs: 1, sclk: 0, din: s.din, pos: 0, bit: 0, sh: s.sh, done: 1, hl: h };
+    }
+    return Da { busy: 1, stage: 2, cs: 1, sclk: 0, din: s.din, pos: s.pos + 1, bit: s.bit, sh: s.sh, done: 0, hl: h };
+}

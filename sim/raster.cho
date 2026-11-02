@@ -1,0 +1,39 @@
+edition 5;
+
+module raster;
+
+// `raster` -- the XY scan, written out by hand as the reference for gen/raster_ir.cho. State: tick `t` within the line, `line`, the
+// two positions and `done`. A line is 2*npix-2 ticks: x runs x0 .. x0+(npix-1)*dx and back to just above x0, then the next
+// line starts at x0 with y moved by dy. After nlines lines it stops (done = 1) and ignores ticks. Needs npix >= 2.
+
+pub struct R { t: int, line: int, x: int, y: int, done: int }
+
+pub fn start(x0: int, y0: int) -> [] R {
+    return R { t: 0, line: 0, x: x0, y: y0, done: 0 };
+}
+
+pub fn step(s: R, npix: int, nlines: int, x0: int, dx: int, dy: int) -> [] R {
+    if s.done == 1 {
+        return s;
+    }
+    let period = 2 * npix - 2;
+    if s.t + 1 < period {
+        var x = s.x - dx;
+        if s.t + 1 < npix {
+            x = s.x + dx;
+        }
+        return R { t: s.t + 1, line: s.line, x: x, y: s.y, done: 0 };
+    }
+    if s.line + 1 < nlines {
+        return R { t: 0, line: s.line + 1, x: x0, y: s.y + dy, done: 0 };
+    }
+    return R { t: 0, line: s.line, x: x0, y: s.y, done: 1 };
+}
+
+// Is the point at the present tick a recorded pixel (the trace, not the retrace)?
+pub fn tracing(s: R, npix: int) -> [] int {
+    if s.done == 0 && s.t < npix {
+        return 1;
+    }
+    return 0;
+}

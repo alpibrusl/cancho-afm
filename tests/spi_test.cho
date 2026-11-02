@@ -1,0 +1,137 @@
+import std.test;
+import spi;
+
+// Behavioural chips, written from the manuals, in cancho; the masters are run against them for many frames.
+// AD1: loads {4 zeros, 12 bits} into a shift register for each data line when CS falls; the line shows its top bit; each falling edge
+// of SCK while CS is low shifts it. Returns the line bits as (d0, d1) for a given chip state.
+struct AdChip { sr0: int, sr1: int, cs: int, sck: int, falls: int }
+
+fn chip_ad(c: AdChip, cs: int, sck: int, v0: int, v1: int) -> [] AdChip {
+    var sr0 = c.sr0;
+    var sr1 = c.sr1;
+    var falls = c.falls;
+    if c.cs == 1 && cs == 0 {
+        sr0 = v0;
+        sr1 = v1;
+        falls = 0;
+    }
+    if cs == 0 && c.sck == 1 && sck == 0 {
+        sr0 = sr0 * 2 % 65536;
+        sr1 = sr1 * 2 % 65536;
+        falls = falls + 1;
+    }
+    return AdChip { sr0: sr0, sr1: sr1, cs: cs, sck: sck, falls: falls };
+}
+
+fn test_the_adc_master_reads_what_the_chip_sends() -> [] int {
+    var m = spi.ad_reset();
+    var c = AdChip { sr0: 0, sr1: 0, cs: 1, sck: 1, falls: 0 };
+    var conv = 0;
+    var t = 0;
+    var want0 = 0;
+    var want1 = 0;
+    var half = 1;
+    while conv < 60 {
+        // a new pair of 12-bit values for each conversion, from a deterministic spread
+        let v0 = (conv * 7919 + 13) % 4096;
+        let v1 = (conv * 104729 + 977) % 4096;
+        half = 1 + conv % 5;
+        // one clock: the chip sees the pins as they are, the master sees the chip's data lines (top bit of each register)
+        let start = 0;
+        var go = 0;
+        if m.busy == 0 && t % 7 == 3 { go = 1; }
+        let d0 = c.sr0 / 32768 % 2;
+        let d1 = c.sr1 / 32768 % 2;
+        let was_cs = m.cs;
+        m = spi.ad_step(m, go, d0, d1, half);
+        if go == 1 { want0 = v0; want1 = v1; }
+        c = chip_ad(c, m.cs, m.sck, want0, want1);
+        if m.done == 1 {
+            test.assert_eq(m.s0, want0);
+            test.assert_eq(m.s1, want1);
+            test.assert_eq(c.falls, 16);
+            conv = conv + 1;
+            want0 = (conv * 7919 + 13) % 4096;
+            want1 = (conv * 104729 + 977) % 4096;
+        }
+        t = t + 1;
+        test.assert(t < 100000);
+    }
+    return 0;
+}
+
+// DA3: shifts DIN in on each rising edge of SCLK while CS is low, counts them; when CS rises with exactly 16 counted, the register is the output.
+struct DaChip { sr: int, n: int, cs: int, sclk: int, out: int, bad: int }
+
+fn chip_da(c: DaChip, cs: int, sclk: int, din: int) -> [] DaChip {
+    var sr = c.sr;
+    var n = c.n;
+    var out = c.out;
+    var bad = c.bad;
+    if c.cs == 1 && cs == 0 {
+        n = 0;
+    }
+    if cs == 0 && c.sclk == 0 && sclk == 1 {
+        sr = (sr * 2 + din) % 65536;
+        n = n + 1;
+    }
+    if c.cs == 0 && cs == 1 {
+        if n == 16 {
+            out = sr;
+        } else {
+            bad = bad + 1;
+        }
+    }
+    return DaChip { sr: sr, n: n, cs: cs, sclk: sclk, out: out, bad: bad };
+}
+
+fn test_the_dac_master_writes_what_it_is_given() -> [] int {
+    var m = spi.da_reset();
+    var c = DaChip { sr: 0, n: 0, cs: 1, sclk: 0, out: 0, bad: 0 };
+    var written = 0;
+    var t = 0;
+    var data = 0;
+    while written < 60 {
+        let word = (written * 40503 + 31) % 65536;
+        var w = 0;
+        if m.busy == 0 && t % 5 == 1 { w = 1; data = word; }
+        m = spi.da_step(m, w, word, 1 + written % 4);
+        c = chip_da(c, m.cs, m.sclk, m.din);
+        if m.done == 1 {
+            test.assert_eq(c.out, data);
+            written = written + 1;
+        }
+        t = t + 1;
+        test.assert(t < 100000);
+    }
+    test.assert_eq(c.bad, 0);
+    return 0;
+}
+
+// the extremes, and a write offered while busy is ignored
+fn test_extremes_and_a_write_while_busy() -> [] int {
+    var m = spi.da_reset();
+    var c = DaChip { sr: 0, n: 0, cs: 1, sclk: 0, out: 0, bad: 0 };
+    var t = 0;
+    var k = 0;
+    var first = 65535;
+    while k < 2 {
+        var w = 0;
+        var word = 0;
+        if m.busy == 0 && k == 0 && t == 2 { w = 1; word = 65535; }
+        if m.busy == 0 && k == 1 && t > 100 && t < 104 { w = 1; word = 0; }
+        // while busy, keep offering a different word: it must be ignored
+        if m.busy == 1 { w = 1; word = 12345; }
+        m = spi.da_step(m, w, word, 2);
+        c = chip_da(c, m.cs, m.sclk, m.din);
+        if m.done == 1 {
+            if k == 0 { test.assert_eq(c.out, 65535); }
+            if k == 1 { test.assert_eq(c.out, 0); }
+            k = k + 1;
+        }
+        t = t + 1;
+        test.assert(t < 10000);
+    }
+    test.assert_eq(c.bad, 0);
+    return 0;
+}
