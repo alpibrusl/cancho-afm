@@ -55,3 +55,9 @@ cancho build host/serve.cho host/live_json.cho host/proto.cho host/regs.cho <can
 **Measured, on the Pi against the real board:** `/live.json` 200 with `"source":"board"`; `/` 200 `text/html`, `/live.js` 200 `text/javascript` (30,454 bytes); an unknown path 404; a POST 405; the page
 opened through an SSH tunnel read it and showed `Source: board`, reading 71 and rising. The readings were all zeros (the board idle, nothing wired). `cancho authority` lists `net_in("")` (unbounded: the port is an
 argument, as in the compiler's own `examples/api`), `tty_open("/dev")`, `fs_read("/home/alfonso/afm-build/ui")`, `conn_*`, `poll`, `clock`; no foreign code, no writes. **Not measured:** load, long runs, a reading during a scan.
+
+### Before the console can write: put cancho-gateway in front
+
+`serve.cho` reads only and has no authentication. When the console gains write access (starting a scan, moving the motor, changing limits) or is reachable beyond a trusted network, run
+[cancho-gateway](https://github.com/alpibrusl/cancho-gateway) in front of it on the Pi (TLS 1.3, an API key, rate limits, an access log), with the write routes admitted only on the authenticated path. Keep the identifier
+check and the register limits in `serve.cho`, so a gateway mistake cannot bypass them. Decided 2026-11-02; not built, and the gateway has not been run for this (its own README calls it a working slice, its TLS server not independently reviewed).
