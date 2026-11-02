@@ -65,7 +65,7 @@ assume.
 |---|---|---|
 | S0 | this repository, the policy, the references | the owner has confirmed the policy |
 | S1 | a **software-in-the-loop** model: a cancho model of cantilever and surface, the PID loop, the raster; the same loop in Verilog | the FPGA loop's output equals the model's, byte for byte, in simulation |
-| S2 | approach and tune logic against the model | the model's cantilever is found, approached and scanned with no operator input |
+| S2 | approach and tune logic against the model | the model's cantilever is found, approached and scanned with no operator input *(2026-11-01: found, approached and held without touching, in `docs/tune-approach.md`; the raster is not yet chained to it, and nothing is on hardware)* |
 | S3 | controller electronics chosen and a first board running (ADC, DAC, limit) | a signal generated and read back, loop closed on a test circuit |
 | S4 | mechanics: stage, scanner, motor, sensor | built and measured: noise floor, drift, resonance |
 | S5 | first image of a calibration grating | the grating's period measured and compared to its stated value |
