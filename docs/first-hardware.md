@@ -40,3 +40,5 @@ After the register table (`host/regs.cho`) replaced the bare numbers in the host
 ## Next on the bench
 
 Order the Pmods (`buy-now.md`), wire the AD1 and one DA3 per `gen/afm_top.cst`, and run the tutorial's Part 5 check (a ramp on the DA3 read back by the AD1) with the host program.
+
+After the PID gains moved to Q16 and the sinusoidal fast axis was added (registers 48 and 49, CTRL bit 6), the bitstream was rebuilt on the Pi (timing met at 65.9 MHz estimated, against 27 MHz) and loaded into the FPGA's SRAM. `host/bringup.cho` was run again: **17 of 17, exit code 0**. The new registers and the sine scan have only been exercised in simulation, not on the board.
