@@ -33,9 +33,25 @@ cancho build host/live_tty.cho host/live_json.cho host/proto.cho host/regs.cho -
 cd ui && while :; do ../live_tty | while IFS= read -r l; do printf '%s\n' "$l" > live.json.tmp && mv live.json.tmp live.json; sleep 0.25; done; done
 ```
 
-and serve `ui/` with any static server (`python3 -m http.server 8765`, which is not cancho: a cancho-web server is the next step). `live_tty` prints 8 lines and exits because the output is flushed at exit, so
+and serve `ui/` with any static server (`python3 -m http.server 8765`), or with the cancho server below. `live_tty` prints 8 lines and exits because the output is flushed at exit, so
 the shell loop restarts it; its counter `t` restarts at 0 each time, so the page may miss a point when two readings in a row carry the same `t`.
 
 **Measured:** the twin path was run end to end and the page drew it (`Source: twin`, charts growing). The board path was run on the real Pi against the board loaded with this repository's bitstream: it
 identified `afm_top`, wrote nothing, and printed `"source":"board"` lines through the loop into `live.json` (all zeros, the board being idle with nothing wired). **Not measured:** the page reading
 `live.json` served from the Pi, and any live reading with a fork and a scan running.
+
+### The server in cancho (`host/serve.cho`)
+
+One program on the Pi replaces the loop and the static server: it checks the board's identifier, then every turn (at most 250 ms) READS the seven live registers and answers `GET /live.json` (the latest reading,
+`source: "board"`, `Cache-Control: no-store`), and `GET /`, `/live.html`, `/live.js` (read from `/home/alfonso/afm-build/ui`, a literal in the source because `narrow` takes one; a file over 48 KiB is cut).
+Anything else is 404, anything but GET is 405. It uses the `http.server` package of the compiler repository (`packages/http-server/server.cho`, passed on the command line as a module), with a second poller for the serial
+port so the server's own is not disturbed; it is not cancho-web (which adds routes, schemas and OpenAPI, none of which one JSON document needs).
+
+```sh
+cancho build host/serve.cho host/live_json.cho host/proto.cho host/regs.cho <cancho>/packages/http-server/server.cho --std -o serve     # on the Pi (edition 8)
+./serve 8765        # then open http://<pi>:8765/ ; there is no authentication: do not expose it beyond a trusted network
+```
+
+**Measured, on the Pi against the real board:** `/live.json` 200 with `"source":"board"`; `/` 200 `text/html`, `/live.js` 200 `text/javascript` (30,454 bytes); an unknown path 404; a POST 405; the page
+opened through an SSH tunnel read it and showed `Source: board`, reading 71 and rising. The readings were all zeros (the board idle, nothing wired). `cancho authority` lists `net_in("")` (unbounded: the port is an
+argument, as in the compiler's own `examples/api`), `tty_open("/dev")`, `fs_read("/home/alfonso/afm-build/ui")`, `conn_*`, `poll`, `clock`; no foreign code, no writes. **Not measured:** load, long runs, a reading during a scan.
