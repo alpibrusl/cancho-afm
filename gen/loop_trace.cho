@@ -1,0 +1,54 @@
+edition 7;
+
+import std.buffer;
+import pid;
+import loop;
+
+// The closed loop in cancho, independent of the graph: sim/pid.cho's PID step against sim/loop.cho's tip-and-surface model over a
+// triangle surface. Prints a header line (kp ki kd ilim zmin zmax zinit zretract) and then, for each step, the surface height
+// and the Z the loop reaches. The testbench closes the same loop around z_loop and compares Z at every step.
+fn num[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer {
+    if n < 0 {
+        return buffer.push_nat(heap, buffer.append(heap, b, " -"), 0 - n);
+    }
+    return buffer.push_nat(heap, buffer.append(heap, b, " "), n);
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(args); release(net); release(clock); release(signals); release(exec);
+    var code = 0;
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 8192);
+        let kp = 128;
+        let ki = 16;
+        let kd = 0;
+        let ilim = 65535;
+        let zmin = 0;
+        let zmax = 60000;
+        let zinit = 40000;
+        let zret = 60000;
+        o = num(h, o, kp); o = num(h, o, ki); o = num(h, o, kd); o = num(h, o, ilim);
+        o = num(h, o, zmin); o = num(h, o, zmax); o = num(h, o, zinit); o = num(h, o, zret);
+        o = buffer.append(h, o, "\n");
+        var s = pid.start(zinit);
+        var t = 0;
+        while t < 1500 {
+            let hh = loop.surface(t, 500, 200);
+            let a = loop.amplitude(s.z - hh);
+            s = pid.step(s, a - loop.setpoint(), kp, ki, kd, ilim, zmin, zmax);
+            o = num(h, o, hh);
+            o = num(h, o, s.z);
+            o = buffer.append(h, o, "\n");
+            t = t + 1;
+        }
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(heap);
+    release(io);
+    if code < 0 {
+        return 1;
+    }
+    return 0;
+}

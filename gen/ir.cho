@@ -1,0 +1,244 @@
+edition 5;
+
+module ir;
+
+// `ir` -- a straight-line integer dataflow graph: the one description of the loop from which both the cancho
+// model's answer (`eval`) and the SystemVerilog (gen/sv.cho) are produced. A graph is a tape of ints: t[0] is the node
+// count, node i is t[1+4i .. 1+4i+3] = (op, a, b, c). Operands are node indices. No loops, no state, no heap: what
+// hardware can do in one clock. NOT A MEASUREMENT OF ANY INSTRUMENT.
+//
+//   op 0 INPUT  a = input number          op 4 MUL   a * b
+//   op 1 CONST  a = the value             op 5 DIV   a / 256, truncating toward zero (as Verilog's `/`)
+//   op 2 ADD    a + b                     op 6 CLAMP a limited to [b, c]
+//   op 3 SUB    a - b                     op 7 LT    1 if a < b else 0
+//                                         op 8 MUX   b if a != 0 else c
+//   op 9 REG   a, one clock later (an explicit pipeline register)
+
+pub fn count[&a](t: &a [int]) -> [] int { return t[0]; }
+pub fn op[&a](t: &a [int], i: int) -> [] int { return t[1 + 4 * i]; }
+pub fn arg_a[&a](t: &a [int], i: int) -> [] int { return t[2 + 4 * i]; }
+pub fn arg_b[&a](t: &a [int], i: int) -> [] int { return t[3 + 4 * i]; }
+pub fn arg_c[&a](t: &a [int], i: int) -> [] int { return t[4 + 4 * i]; }
+
+pub fn node[&a](t: &!a [int], o: int, a: int, b: int, c: int) -> [] int {
+    let i = t[0];
+    t[1 + 4 * i] = o;
+    t[2 + 4 * i] = a;
+    t[3 + 4 * i] = b;
+    t[4 + 4 * i] = c;
+    t[0] = i + 1;
+    return i;
+}
+
+fn clamp(v: int, lo: int, hi: int) -> [] int {
+    if v < lo { return lo; }
+    if v > hi { return hi; }
+    return v;
+}
+
+// Value of node `i` given `inputs`, from the values `vals` of the nodes before it (filled by `eval`).
+pub fn eval[&a, &b, &c](t: &a [int], inputs: &b [int], vals: &!c [int]) -> [] int {
+    var i = 0;
+    while i < t[0] {
+        let o = t[1 + 4 * i];
+        let a = t[2 + 4 * i];
+        let b = t[3 + 4 * i];
+        let c = t[4 + 4 * i];
+        var v = 0;
+        if o == 0 { v = inputs[a]; }
+        if o == 1 { v = a; }
+        if o == 2 { v = vals[a] + vals[b]; }
+        if o == 3 { v = vals[a] - vals[b]; }
+        if o == 4 { v = vals[a] * vals[b]; }
+        if o == 5 { v = vals[a] / b; }
+        if o == 9 { v = vals[a]; }
+        if o == 6 { v = clamp(vals[a], vals[b], vals[c]); }
+        if o == 7 { if vals[a] < vals[b] { v = 1; } }
+        if o == 8 { if vals[a] != 0 { v = vals[b]; } else { v = vals[c]; } }
+        vals[i] = v;
+        i = i + 1;
+    }
+    return 0;
+}
+
+// ---- ranges, widths, pipeline stages ---------------------------------------------------------------------------
+// Everything below is integer bookkeeping over the same tape; the hardware's widths and registers come from it.
+
+fn lesser(a: int, b: int) -> [] int {
+    if a < b { return a; }
+    return b;
+}
+
+fn greater(a: int, b: int) -> [] int {
+    if a > b { return a; }
+    return b;
+}
+
+// Which operands an op reads: how many of (a, b, c).
+pub fn arity(o: int) -> [] int {
+    if o == 2 || o == 3 || o == 4 || o == 7 { return 2; }
+    if o == 5 || o == 9 { return 1; }
+    if o == 6 || o == 8 { return 3; }
+    return 0;
+}
+
+pub fn operand[&a](t: &a [int], i: int, k: int) -> [] int {
+    return t[2 + 4 * i + k];
+}
+
+// Ops followed by a register in the pipeline: the multiplier and the clamp (a compare and a select).
+pub fn registered(o: int) -> [] int {
+    if o == 4 || o == 6 || o == 9 { return 1; }
+    return 0;
+}
+
+// The range [lo[i], hi[i]] each node can take when input j lies in [inlo[j], inhi[j]]. Sound for every input in range,
+// including a clamp whose bounds are in the wrong order (its result is then one of the bounds or the value).
+pub fn ranges[&a, &b, &c, &d, &e](t: &a [int], inlo: &b [int], inhi: &c [int], lo: &!d [int], hi: &!e [int]) -> [] int {
+    var i = 0;
+    while i < t[0] {
+        let o = t[1 + 4 * i];
+        let a = t[2 + 4 * i];
+        let b = t[3 + 4 * i];
+        let c = t[4 + 4 * i];
+        var l = 0;
+        var h = 0;
+        if o == 0 { l = inlo[a]; h = inhi[a]; }
+        if o == 1 { l = a; h = a; }
+        if o == 2 { l = lo[a] + lo[b]; h = hi[a] + hi[b]; }
+        if o == 3 { l = lo[a] - hi[b]; h = hi[a] - lo[b]; }
+        if o == 4 {
+            let p = lo[a] * lo[b];
+            let q = lo[a] * hi[b];
+            let r = hi[a] * lo[b];
+            let s = hi[a] * hi[b];
+            l = lesser(lesser(p, q), lesser(r, s));
+            h = greater(greater(p, q), greater(r, s));
+        }
+        if o == 5 { l = lo[a] / b; h = hi[a] / b; }
+        if o == 9 { l = lo[a]; h = hi[a]; }
+        if o == 6 || o == 8 { l = lesser(lo[b], lo[c]); h = greater(hi[b], hi[c]); }
+        if o == 7 { l = 0; h = 1; }
+        lo[i] = l;
+        hi[i] = h;
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Fewest bits of a two's-complement signed number that holds every value in [lo, hi].
+pub fn width(lo: int, hi: int) -> [] int {
+    var w = 1;
+    var p = 1;
+    while lo < 0 - p || hi > p - 1 {
+        w = w + 1;
+        p = p * 2;
+    }
+    return w;
+}
+
+// The clock cycle at which node i's value is available (inputs and constants: 0).
+pub fn stages[&a, &d](t: &a [int], stg: &!d [int]) -> [] int {
+    var i = 0;
+    while i < t[0] {
+        let o = t[1 + 4 * i];
+        var tin = 0;
+        var k = 0;
+        while k < arity(o) {
+            let x = t[2 + 4 * i + k];
+            if t[1 + 4 * x] != 1 {
+                tin = greater(tin, stg[x]);
+            }
+            k = k + 1;
+        }
+        stg[i] = tin + registered(o);
+        i = i + 1;
+    }
+    return 0;
+}
+
+// The cycle at which node i reads its operands: the latest of their stages.
+pub fn tin[&a, &d](t: &a [int], stg: &d [int], i: int) -> [] int {
+    var r = 0;
+    var k = 0;
+    while k < arity(t[1 + 4 * i]) {
+        let x = t[2 + 4 * i + k];
+        if t[1 + 4 * x] != 1 {
+            r = greater(r, stg[x]);
+        }
+        k = k + 1;
+    }
+    return r;
+}
+
+// Pipeline latency: the latest stage among the `n` output nodes in `outs`.
+pub fn latency[&a, &d](stg: &a [int], outs: &d [int], n: int) -> [] int {
+    var r = 0;
+    var k = 0;
+    while k < n {
+        r = greater(r, stg[outs[k]]);
+        k = k + 1;
+    }
+    return r;
+}
+
+// need[x]: how many cycles of delay registers node x's value must have, for its consumers and for the outputs.
+pub fn delays[&a, &d, &e, &f](t: &a [int], stg: &d [int], outs: &e [int], n: int, need: &!f [int]) -> [] int {
+    let lat = latency(stg, outs, n);
+    var i = 0;
+    while i < t[0] {
+        need[i] = 0;
+        i = i + 1;
+    }
+    i = 0;
+    while i < t[0] {
+        let ti = tin(t, stg, i);
+        var k = 0;
+        while k < arity(t[1 + 4 * i]) {
+            let x = t[2 + 4 * i + k];
+            if t[1 + 4 * x] != 1 {
+                need[x] = greater(need[x], ti - stg[x]);
+            }
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    var j = 0;
+    while j < n {
+        need[outs[j]] = greater(need[outs[j]], lat - stg[outs[j]]);
+        j = j + 1;
+    }
+    return 0;
+}
+
+fn mix(x: int) -> [] int {
+    let a = (x * 2654435761 + 12345) % 4294967296;
+    return (a * 1103515245 + 12345) % 2147483648;
+}
+
+// Test case k for a graph with `nin` inputs (at most 10): the first 2^nin cases take every combination of each input at its
+// minimum or maximum (bit j of k picks input j's end); the rest are spread evenly over each input's whole range.
+pub fn sample[&a, &b, &c](k: int, nin: int, lo: &a [int], hi: &b [int], inp: &!c [int]) -> [] int {
+    var corners = 1;
+    var j = 0;
+    while j < nin {
+        corners = corners * 2;
+        j = j + 1;
+    }
+    j = 0;
+    var bit = 1;
+    while j < nin {
+        if k < corners {
+            if (k / bit) % 2 == 1 {
+                inp[j] = hi[j];
+            } else {
+                inp[j] = lo[j];
+            }
+        } else {
+            inp[j] = lo[j] + mix(k * 16 + j) % (hi[j] - lo[j] + 1);
+        }
+        j = j + 1;
+        bit = bit * 2;
+    }
+    return 0;
+}

@@ -1,0 +1,63 @@
+edition 5;
+
+module pid_ir;
+
+import ir;
+
+// The PID step of sim/pid.cho written as a graph. Inputs, in order: 0 integ, 1 prev, 2 z, 3 err, 4 kp, 5 ki, 6 kd,
+// 7 ilim, 8 zmin, 9 zmax. Outputs, the last three nodes returned in `outs` order: new integ, new prev, new z.
+// `build` returns the index of the last node; the output node indices are written to `outs[0..3]`.
+pub fn build[&a, &b](t: &!a [int], outs: &!b [int]) -> [] int {
+    let integ = ir.node(t, 0, 0, 0, 0);
+    let prev = ir.node(t, 0, 1, 0, 0);
+    let z = ir.node(t, 0, 2, 0, 0);
+    let err = ir.node(t, 0, 3, 0, 0);
+    let kp = ir.node(t, 0, 4, 0, 0);
+    let ki = ir.node(t, 0, 5, 0, 0);
+    let kd = ir.node(t, 0, 6, 0, 0);
+    let ilim = ir.node(t, 0, 7, 0, 0);
+    let zmin = ir.node(t, 0, 8, 0, 0);
+    let zmax = ir.node(t, 0, 9, 0, 0);
+    let zero = ir.node(t, 1, 0, 0, 0);
+    let nilim = ir.node(t, 3, zero, ilim, 0);
+    let isum = ir.node(t, 2, integ, err, 0);
+    let ni = ir.node(t, 6, isum, nilim, ilim);
+    let d = ir.node(t, 3, err, prev, 0);
+    let pk = ir.node(t, 4, kp, err, 0);
+    let ik = ir.node(t, 4, ki, ni, 0);
+    let dk = ir.node(t, 4, kd, d, 0);
+    let s1 = ir.node(t, 2, pk, ik, 0);
+    let s2 = ir.node(t, 2, s1, dk, 0);
+    let u = ir.node(t, 5, s2, 256, 0);
+    let zu = ir.node(t, 3, z, u, 0);
+    let nz = ir.node(t, 6, zu, zmin, zmax);
+    outs[0] = ni;
+    outs[1] = err;
+    outs[2] = nz;
+    return nz;
+}
+
+// The contract of the hardware step, as ranges. Inputs, in order: integ, prev, z, err, kp, ki, kd, ilim, zmin, zmax.
+// err and prev are signed 16-bit (the ADC word, in pm); gains are 12-bit unsigned Q8 (up to 16.0); the integral and its
+// limit are 17-bit; z and its limits are 20-bit unsigned (up to 1,048,575 pm, a little over 1 um of Z). [choice]
+pub fn input_ranges[&a, &b](lo: &!a [int], hi: &!b [int]) -> [] int {
+    lo[0] = 0 - 65535; hi[0] = 65535;
+    lo[1] = 0 - 32768; hi[1] = 32767;
+    lo[2] = 0; hi[2] = 1048575;
+    lo[3] = 0 - 32768; hi[3] = 32767;
+    lo[4] = 0; hi[4] = 4095;
+    lo[5] = 0; hi[5] = 4095;
+    lo[6] = 0; hi[6] = 4095;
+    lo[7] = 0; hi[7] = 65535;
+    lo[8] = 0; hi[8] = 1048575;
+    lo[9] = 0; hi[9] = 1048575;
+    return 0;
+}
+
+pub fn cases() -> [] int {
+    return 1024 + 3000;
+}
+
+pub fn sample[&a, &b, &c](k: int, lo: &a [int], hi: &b [int], inp: &!c [int]) -> [] int {
+    return ir.sample(k, 10, lo, hi, inp);
+}

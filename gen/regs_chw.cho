@@ -1,0 +1,80 @@
+edition 7;
+
+import std.buffer;
+import regs;
+
+// Prints the cancho-hdl contract (hw/afm.chw) for afm_top from the table in host/regs.cho. `chw check` validates it and `chw generate --target c-header` makes
+// a C header from it. Do not edit the output: change host/regs.cho and run this.
+fn text[&h, &r](heap: &!h Heap, b: buffer.Buffer, s: &r [byte]) -> [heap] buffer.Buffer { return buffer.append(heap, b, s); }
+
+fn nat[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer { return buffer.push_nat(heap, b, n); }
+
+fn hexdigit(d: int) -> [] int {
+    if d < 10 { return 48 + d; }
+    return 87 + d;
+}
+
+// "0x" and `digits` hex digits of n
+fn hex[&h](heap: &!h Heap, b: buffer.Buffer, n: int, digits: int) -> [heap] buffer.Buffer {
+    var o = buffer.append(heap, b, "0x");
+    var i = digits - 1;
+    while i >= 0 {
+        var p = 1;
+        var k = 0;
+        while k < i { p = p * 16; k = k + 1; }
+        o = buffer.push(heap, o, byte_of(hexdigit(n / p % 16)));
+        i = i - 1;
+    }
+    return o;
+}
+
+fn kind_text(k: int) -> [] &static [byte] {
+    if k == 1 { return "RO"; }
+    if k == 2 { return "WO"; }
+    return "RW";
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(args); release(net); release(clock); release(signals); release(exec);
+    var code = 0;
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 16384);
+        o = text(h, o, "{\n  \"version\": \"0.1.0\",\n  \"block\": {\n    \"name\": \"Afm\",\n    \"base_address\": \"0x40000000\",\n    \"bus_width\": 32,\n    \"endianness\": \"little\",\n    \"registers\": [\n");
+        var k = 0;
+        while k < regs.count() {
+            o = text(h, o, "      {\n        \"name\": \"");
+            o = text(h, o, regs.name_at(k));
+            o = text(h, o, "\",\n        \"offset\": \"");
+            o = hex(h, o, 4 * k, 2);
+            o = text(h, o, "\",\n        \"kind\": \"");
+            o = text(h, o, kind_text(regs.kind_at(k)));
+            o = text(h, o, "\",\n        \"reset\": \"");
+            o = hex(h, o, regs.reset_at(k), 8);
+            o = text(h, o, "\",\n        \"fields\": [\n");
+            var nf = regs.nfields(k);
+            if nf == 0 {
+                o = text(h, o, "          { \"name\": \"VALUE\", \"lsb\": 0, \"msb\": 31 }\n");
+            }
+            var j = 0;
+            while j < nf {
+                o = text(h, o, "          { \"name\": \"");
+                o = text(h, o, regs.field_name(k, j));
+                o = nat(h, text(h, o, "\", \"lsb\": "), regs.field_lsb(k, j));
+                o = nat(h, text(h, o, ", \"msb\": "), regs.field_msb(k, j));
+                if j + 1 < nf { o = text(h, o, " },\n"); } else { o = text(h, o, " }\n"); }
+                j = j + 1;
+            }
+            o = text(h, o, "        ]\n      }");
+            if k + 1 < regs.count() { o = text(h, o, ",\n"); } else { o = text(h, o, "\n"); }
+            k = k + 1;
+        }
+        o = text(h, o, "    ]\n  }\n}\n");
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(heap);
+    release(io);
+    if code < 0 { return 1; }
+    return 0;
+}
