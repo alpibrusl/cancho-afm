@@ -1,0 +1,35 @@
+* X/Y piezo driver, VARIANT B (the design): DC feedback from the load side of Riso, high-frequency feedback through Cf from the op-amp output.
+* X/Y piezo driver (variant A, kept for comparison in docs/amplifier.md; see xy_amp.cir's first version): DAC 0..2.5 V -> -10..+10 V, non-inverting gain 7.98 with the inverting input returned to a reference instead of ground:
+*   Vout = (1 + Rf/Rg) Vin - (Rf/Rg) Vref.  At Vin = 1.25 V (mid-code) Vout = 0 V.  Feedback is taken BEFORE the isolation resistor: the load is a
+*   capacitor, so no DC current flows and Rf from the load side is exact. Above the Rf*Cf corner the loop is closed through Cf from the op-amp's own
+*   output, so the load's capacitance and the op-amp's (unknown) output resistance no longer move the loop's phase.
+.include opamp.lib
+.param CP=30n RISO=47 RDAC=6.25k ROUT=25 CF=330p
+Vdac in 0 DC 1.25 AC 1 PWL(0 0.5 1u 0.5 2u 2.0 400u 2.0)
+Rdac in inp {RDAC}
+Cin inp 0 5p
+Vref ref 0 DC 1.43
+Rg inn ref 10k
+Rf inn out 69.8k
+Cf inn oa {CF}
+XU1 inp inn oa opamp RO={ROUT}
+Riso oa out {RISO}
+Cp out 0 {CP}
+.control
+op
+echo RESULT vout_at_midcode = $&v(out)
+ac dec 200 10 10Meg
+meas ac gain_lf FIND vdb(out) AT=100
+meas ac bw3db WHEN vdb(out)=gain_lf-3 FALL=1
+echo RESULT gain_lf_db = $&gain_lf  bw_3db_hz = $&bw3db
+tran 0.1u 400u
+* the step is 0.5 V -> 2.0 V at the DAC, i.e. -5.99 V -> +5.98 V at the output; 10% and 90% of that are -4.79 V and +4.99 V
+meas tran vpeak MAX v(out) FROM=3u TO=400u
+meas tran vfinal FIND v(out) AT=399u
+meas tran t10 WHEN v(out)=-4.79 RISE=1
+meas tran t90 WHEN v(out)=4.99 RISE=1
+let rise = t90 - t10
+let over = (vpeak - vfinal) * 1000
+echo RESULT final_v = $&vfinal  overshoot_mV = $&over  rise_10_90_s = $&rise
+.endc
+.end

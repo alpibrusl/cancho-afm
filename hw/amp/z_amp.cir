@@ -1,0 +1,31 @@
+* Z piezo driver: DAC 0..2.5 V -> 0..+10 V, non-inverting gain 4.01 (Rg to ground). Same compensation as xy_amp_b.cir: Rf from the load side of
+* Riso, Cf from the op-amp's own output to the inverting input. 1 LSB of the DAC (38 uV) becomes 153 uV, 15 pm of Z at 1 um per 10 V.
+.include opamp.lib
+.param CP=30n RISO=47 RDAC=6.25k ROUT=25 CF=330p
+Vdac in 0 DC 1.25 AC 1 PWL(0 0.5 1u 0.5 2u 2.0 600u 2.0)
+Rdac in inp {RDAC}
+Cin inp 0 5p
+Rg inn 0 10k
+Rf inn out 30.1k
+Cf inn oa {CF}
+XU1 inp inn oa opamp RO={ROUT} VMAX=10.5
+Riso oa out {RISO}
+Cp out 0 {CP}
+.control
+op
+echo RESULT vout_at_midcode = $&v(out)
+ac dec 200 10 10Meg
+meas ac gain_lf FIND vdb(out) AT=100
+meas ac bw3db WHEN vdb(out)=gain_lf-3 FALL=1
+echo RESULT gain_lf_db = $&gain_lf  bw_3db_hz = $&bw3db
+tran 0.1u 600u
+* the step is 0.5 V -> 2.0 V at the DAC, i.e. 2.005 V -> 8.02 V at the output; 10% and 90% are 2.61 V and 7.42 V
+meas tran vpeak MAX v(out) FROM=3u TO=600u
+meas tran vfinal FIND v(out) AT=599u
+meas tran t10 WHEN v(out)=2.61 RISE=1
+meas tran t90 WHEN v(out)=7.42 RISE=1
+let rise = t90 - t10
+let over = (vpeak - vfinal) * 1000
+echo RESULT final_v = $&vfinal  overshoot_mV = $&over  rise_10_90_s = $&rise
+.endc
+.end

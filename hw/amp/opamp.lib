@@ -1,0 +1,12 @@
+* A behavioural single-pole op-amp for first-order design checks (NOT a vendor model). Parameters: A0 open-loop gain, GBW gain-bandwidth (Hz),
+* RO output resistance (ohm), VMAX output swing (V). Linear: no slew limit, no noise, no input bias. The numbers used for the OPA2134-class part are
+* from memory of its datasheet (GBW 8 MHz, swing about 1.5 V inside the rails) and must be replaced by the vendor's SPICE model before building.
+.subckt opamp inp inn out
+.param A0=1e5 GBW=8e6 RO=25 VMAX=10.5
+Rin inp inn 1G
+G1 0 n1 inp inn 1m
+R1 n1 0 {A0/1m}
+C1 n1 0 {1m/(2*3.14159265*GBW)}
+Bout n2 0 V = max(min(V(n1), VMAX), -VMAX)
+Ro n2 out {RO}
+.ends opamp

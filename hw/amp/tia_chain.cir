@@ -1,0 +1,27 @@
+* The receive chain on its own, driven by a current source in place of the fork: transimpedance 1 Mohm || 1 pF, then AC-coupled gain 11 about 1.65 V.
+.include opamp.lib
+Iin 0 tin DC 0 AC 1
+Rf tin tout 1Meg
+Cfb tin tout 1p
+Cin tin 0 5p
+XU3 0 tin tout opamp
+Vmid vmid 0 DC 1.65
+Cc2 tout b 100n
+Rb b vmid 100k
+Rg2 n2 vmid 10k
+Rf2 n2 sout 100k
+Cf2 n2 sout 10p
+XU4 b n2 sout opamp
+Rs sout adc 1k
+Cadc adc 0 20p
+.control
+ac dec 100 1 10Meg
+meas ac zmid FIND vm(adc) AT=32768
+meas ac zref FIND vm(adc) AT=10k
+meas ac f_lo WHEN vm(adc)=zref/1.41421356 RISE=1
+meas ac f_hi WHEN vm(adc)=zref/1.41421356 FALL=1
+meas ac ph FIND vp(adc) AT=32768
+echo RESULT transimpedance_total_ohm_at_32768Hz = $&zmid  low_corner_hz = $&f_lo  high_corner_hz = $&f_hi
+echo RESULT phase_rad_at_32768Hz = $&ph
+.endc
+.end
