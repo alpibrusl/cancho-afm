@@ -1,0 +1,39 @@
+edition 5;
+
+module run_twin;
+
+import board;
+import proto;
+import script;
+import twin_link;
+
+// `run_twin` -- executes a script (host/script.cho) against the twin, through the real byte protocol: every write and read is encoded by
+// host/proto.cho, answered by host/twin_link.cho, and decoded again. Waits advance the twin's simulated time. Returns the number of failed writes (an answer other than OKAY); the read values go to out[1..], their count to out[0].
+pub fn run[&a, &b, &c, &d, &e, &f, &g](sc: &a [int], n: int, rf: &!b [int], st: &!c [int], fl: &!d [float], out: &!e [int], req: &!f [byte], rsp: &!g [byte]) -> [] int {
+    var failures = 0;
+    var reads = 0;
+    var i = 0;
+    while i < n {
+        let op = sc[4 * i];
+        let idx = sc[4 * i + 1];
+        let x = sc[4 * i + 2];
+        if op == 1 {
+            proto.write_req(req, idx, x);
+            twin_link.exchange(rf, st, req, rsp, fl);
+            if proto.resp_code(rsp) != 0 { failures = failures + 1; }
+        }
+        if op == 2 {
+            proto.read_req(req, idx);
+            twin_link.exchange(rf, st, req, rsp, fl);
+            if proto.resp_code(rsp) != 0 { failures = failures + 1; }
+            reads = reads + 1;
+            out[reads] = proto.resp_value(rsp);
+        }
+        if op == 3 {
+            board.advance_clocks(rf, st, fl, x);
+        }
+        i = i + 1;
+    }
+    out[0] = reads;
+    return failures;
+}

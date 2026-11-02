@@ -1,0 +1,60 @@
+import std.test;
+import board;
+import proto;
+import script;
+import twin_link;
+import run_twin;
+import session;
+import tune;
+import approach;
+import plant;
+import pid;
+import raster;
+import lockin;
+
+// The whole automatic run against the twin, through the real byte protocol: check the board, sweep and find the fork, settle at resonance,
+// approach (with the coarse motor), hand the loop the tip, scan a grating, read the image back, measure its period.
+// The twin's fork: f0 = 32,781.4 Hz (the program is told only that it is near 32,768), Q = 500, 2,000 pm free; the sample is 21,000 pm away
+// with Z fully retracted (the motor steps it 6,000 pm each); a grating 100 pm high with a period of 600 X-codes = 6 pixels of 100 codes.
+fn test_the_whole_automatic_run_on_the_twin() -> [] int {
+    region r {
+        let rf = alloc_slice[r](64, 0);
+        let st = alloc_slice[r](32, 0);
+        let fl = alloc_slice[r](16, 0.0);
+        board.reset(rf, st, fl);
+        board.set_plant(fl, 32781.4, 500.0, 2000.0, 2000.0, 100.0, 600.0, 2.0);
+        board.set_distance(fl, 11000.0, 198.4375);    // 21,000 pm at Z = 10,000; 198.4 pm per microstep
+        let ss = alloc_slice[r](32, 0);
+        let sf = alloc_slice[r](8, 0.0);
+        let sc = alloc_slice[r](4 * 200, 0);
+        let out = alloc_slice[r](128, 0);
+        let img = alloc_slice[r](64, 0 - 1);
+        let req = alloc_slice[r](16, byte_of(0));
+        let rsp = alloc_slice[r](16, byte_of(0));
+        var failures = 0;
+        var guard = 0;
+        while ss[0] != 99 && ss[0] != 98 && guard < 40000 {
+            let n = session.build(ss, sf, sc);
+            failures = failures + run_twin.run(sc, n, rf, st, fl, out, req, rsp);
+            session.consume(ss, sf, out, img);
+            guard = guard + 1;
+        }
+        test.assert_eq(ss[2], 0);
+        test.assert_eq(ss[0], 99);
+        test.assert_eq(failures, 0);
+        // tune: the resonance and its Q, found from a sweep with 8 Hz steps
+        test.assert(sf[0] > 32780.0);
+        test.assert(sf[0] < 32783.0);
+        test.assert(sf[1] > 440.0);
+        test.assert(sf[1] < 560.0);
+        // approach: the coarse motor stepped twice, and the loop took over
+        test.assert(ss[21] >= 1);
+        test.assert(ss[21] <= 4);
+        // the loop settled near the contact gap of 1,600 pm: Z there is surface height (about 0) plus 1,600 less the offset the motor left
+        // scan: every trace pixel was read, and the grating's period came out near 6 pixels
+        test.assert_eq(ss[16], 36);
+        test.assert(ss[17] >= 45);
+        test.assert(ss[17] <= 75);
+    }
+    return 0;
+}

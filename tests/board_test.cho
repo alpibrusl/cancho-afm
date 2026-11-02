@@ -1,0 +1,214 @@
+import std.test;
+import board;
+import plant;
+import pid;
+import raster;
+import lockin;
+
+fn test_defaults_and_refusals_match_the_hardware() -> [] int {
+    region r {
+        let rf = alloc_slice[r](64, 0);
+        let st = alloc_slice[r](32, 0);
+        let fl = alloc_slice[r](16, 0.0);
+        board.reset(rf, st, fl);
+        let (id, r0) = board.read(rf, st, 0);
+        test.assert_eq(id, 0xAF500001);
+        test.assert_eq(r0, 0);
+        // fails closed: every limit zero, nothing running
+        let (zmax, r1) = board.read(rf, st, 14);
+        test.assert_eq(zmax, 0);
+        let (ctrl, r2) = board.read(rf, st, 1);
+        test.assert_eq(ctrl, 0);
+        // read-back
+        test.assert_eq(board.write(rf, st, 3, 103), 0);
+        let (sd, r3) = board.read(rf, st, 3);
+        test.assert_eq(sd, 103);
+        // a write to a read-only register, and to and from unmapped ones, are refused
+        test.assert_eq(board.write(rf, st, 2, 1), 2);
+        test.assert_eq(board.write(rf, st, 0, 1), 2);
+        test.assert_eq(board.write(rf, st, 50, 1), 2);
+        let (z, r4) = board.read(rf, st, 50);
+        test.assert_eq(r4, 2);
+        test.assert_eq(board.write(rf, st, 27, 7), 0);
+        let (pd, r5) = board.read(rf, st, 27);
+        test.assert_eq(pd, 7);
+    }
+    return 0;
+}
+
+// The same settings the Verilog system test uses (gen/afm_top_tb.v): window 64, sample 103 clocks, 2,000 pm free, a first-order lag of 0.0016
+// per conversion (f0 = 32,768 Hz, Q = 245 gives pi f0 / (Q fs) = 0.0016 at 262 kS/s). The Verilog run measured a free figure of 41,822 and
+// settled Z at 1,599 pm against a 1,600 pm target.
+fn setup[&a, &b, &c](rf: &!a [int], st: &!b [int], fl: &!c [float]) -> [] int {
+    board.reset(rf, st, fl);
+    board.set_plant(fl, 32768.0, 245.0, 2000.0, 2000.0, 0.0, 0.0, 0.0);
+    board.write(rf, st, 5, 64);
+    return 0;
+}
+
+fn test_the_free_figure_matches_the_verilog_run() -> [] int {
+    region r {
+        let rf = alloc_slice[r](64, 0);
+        let st = alloc_slice[r](32, 0);
+        let fl = alloc_slice[r](16, 0.0);
+        setup(rf, st, fl);
+        board.write(rf, st, 1, 24);        // manual + adc_run
+        board.write(rf, st, 28, 2500);     // Z at 40,000 pm: far above the surface
+        board.advance(rf, st, fl, 2000);
+        let (fig, rr) = board.read(rf, st, 32);
+        // Verilog: 41,822. The twin has the same detector arithmetic and the same samples, so it matches to a few counts
+        test.assert(fig > 41700);
+        test.assert(fig < 41950);
+        let (adc0, r1) = board.read(rf, st, 38);
+        test.assert(adc0 > 1000);
+        test.assert(adc0 < 3100);
+    }
+    return 0;
+}
+
+fn test_the_loop_settles_where_the_verilog_run_does() -> [] int {
+    region r {
+        let rf = alloc_slice[r](64, 0);
+        let st = alloc_slice[r](32, 0);
+        let fl = alloc_slice[r](16, 0.0);
+        setup(rf, st, fl);
+        board.write(rf, st, 1, 24); board.write(rf, st, 28, 2500);
+        board.advance(rf, st, fl, 2000);
+        let (free_fig, rr) = board.read(rf, st, 32);
+        board.write(rf, st, 1, 0);
+        board.write(rf, st, 7, 4); board.write(rf, st, 8, (free_fig * 8 / 10) / 16); board.write(rf, st, 9, 9);
+        board.write(rf, st, 12, 65535); board.write(rf, st, 13, 0); board.write(rf, st, 14, 60000);
+        board.write(rf, st, 15, 3000); board.write(rf, st, 16, 60000); board.write(rf, st, 17, 40000000);
+        board.write(rf, st, 1, 19);        // run + drive + adc_run
+        // the Verilog run reached the end of its phase 3 after about 285 windows of 64 conversions
+        board.advance(rf, st, fl, 285 * 64);
+        let (zz, r1) = board.read(rf, st, 33);
+        // Verilog: 1,599 pm (and the DAC 1,584 after its 16 pm quantisation). The twin lands within a few pm of it.
+        test.assert(zz > 1560);
+        test.assert(zz < 1640);
+        let (status, r2) = board.read(rf, st, 2);
+        test.assert_eq(status % 2, 0);
+    }
+    return 0;
+}
+
+fn test_the_limit_the_deadman_and_the_reset() -> [] int {
+    region r {
+        let rf = alloc_slice[r](64, 0);
+        let st = alloc_slice[r](32, 0);
+        let fl = alloc_slice[r](16, 0.0);
+        setup(rf, st, fl);
+        board.write(rf, st, 7, 4); board.write(rf, st, 8, 2190); board.write(rf, st, 9, 9);
+        board.write(rf, st, 12, 65535); board.write(rf, st, 13, 0); board.write(rf, st, 14, 60000);
+        board.write(rf, st, 15, 3000); board.write(rf, st, 16, 60000); board.write(rf, st, 17, 300000);
+        board.write(rf, st, 1, 17);        // run + adc_run
+        // a heartbeat every 80,000 clocks (about 776 conversions) keeps a 300,000-clock deadman quiet
+        var i = 0;
+        while i < 15 {
+            board.write(rf, st, 18, 0);
+            board.advance(rf, st, fl, 776);
+            i = i + 1;
+        }
+        let (s1, r1) = board.read(rf, st, 2);
+        test.assert_eq(s1 % 2, 0);
+        // lowering the limit clamps Z at once
+        board.write(rf, st, 14, 1000);
+        let (z1, r2) = board.read(rf, st, 33);
+        test.assert_eq(z1, 1000);
+        board.write(rf, st, 14, 60000);
+        // no more heartbeats: the deadman latches, Z goes to the retract value
+        board.advance(rf, st, fl, 4000);
+        let (s2, r3) = board.read(rf, st, 2);
+        test.assert_eq(s2 % 2, 1);
+        let (z2, r4) = board.read(rf, st, 33);
+        test.assert_eq(z2, 60000);
+        // run off clears the fault and returns Z to rest
+        board.write(rf, st, 1, 16);
+        let (s3, r5) = board.read(rf, st, 2);
+        test.assert_eq(s3 % 2, 0);
+        let (z3, r6) = board.read(rf, st, 33);
+        test.assert_eq(z3, 3000);
+    }
+    return 0;
+}
+
+// The raster, one pixel per 3 loop steps, as the Verilog phase 6 runs it: 4 pixels, 2 lines: 12 ticks, 36 windows; X ends at 1,000, Y at 2,250.
+fn test_the_scan_ends_where_the_verilog_scan_does() -> [] int {
+    region r {
+        let rf = alloc_slice[r](64, 0);
+        let st = alloc_slice[r](32, 0);
+        let fl = alloc_slice[r](16, 0.0);
+        setup(rf, st, fl);
+        board.write(rf, st, 7, 4); board.write(rf, st, 8, 2190); board.write(rf, st, 9, 9);
+        board.write(rf, st, 12, 65535); board.write(rf, st, 14, 60000); board.write(rf, st, 15, 3000); board.write(rf, st, 16, 60000);
+        board.write(rf, st, 21, 4); board.write(rf, st, 22, 2); board.write(rf, st, 23, 1000); board.write(rf, st, 24, 2000);
+        board.write(rf, st, 25, 100); board.write(rf, st, 26, 250); board.write(rf, st, 27, 3);
+        board.write(rf, st, 1, 21);        // run + scan + adc_run
+        board.advance(rf, st, fl, 20 * 64);
+        let (s1, r1) = board.read(rf, st, 2);
+        test.assert_eq(s1 / 8 % 2, 0);     // 20 windows: not done (36 are needed)
+        board.advance(rf, st, fl, 30 * 64);
+        let (s2, r2) = board.read(rf, st, 2);
+        test.assert_eq(s2 / 8 % 2, 1);
+        let (xx, r3) = board.read(rf, st, 34);
+        let (yy, r4) = board.read(rf, st, 35);
+        test.assert_eq(xx, 1000);
+        test.assert_eq(yy, 2250);
+    }
+    return 0;
+}
+
+// The coarse motor, as the Verilog phase 7 runs it: fails closed (MOTOR_MAX = 0 refuses everything, a disabled driver ignores), counts, direction,
+// the maximum, and an abort when disabled. 198.4375 pm of tip travel per microstep.
+fn test_the_motor_fails_closed_and_moves_the_tip() -> [] int {
+    region r {
+        let rf = alloc_slice[r](64, 0);
+        let st = alloc_slice[r](32, 0);
+        let fl = alloc_slice[r](16, 0.0);
+        board.reset(rf, st, fl);
+        board.set_distance(fl, 10000.0, 198.4375);
+        let (mx, r0) = board.read(rf, st, 47);
+        test.assert_eq(mx, 0);
+        board.write(rf, st, 44, 40);
+        board.write(rf, st, 1, 32);            // motor enable only
+        // MOTOR_MAX = 0: a command is refused and nothing moves
+        board.write(rf, st, 43, 1);
+        let (s0, r1) = board.read(rf, st, 45);
+        test.assert_eq(s0 / 4 % 2, 1);
+        board.advance(rf, st, fl, 100);
+        let (p0, r2) = board.read(rf, st, 46);
+        test.assert_eq(p0, 0);
+        board.write(rf, st, 47, 10);
+        board.write(rf, st, 43, 5);
+        board.advance(rf, st, fl, 100);        // 10,300 clocks: 5 steps of 40 clocks take 200
+        let (s1, r3) = board.read(rf, st, 45);
+        test.assert_eq(s1 % 8, 2);              // idle, enabled, not refused
+        let (p1, r4) = board.read(rf, st, 46);
+        test.assert_eq(p1, 5);
+        // 5 microsteps toward the sample lowered the distance by 5 x 198.4375 pm
+        test.assert(fl[11] > 9007.0);
+        test.assert(fl[11] < 9008.5);
+        board.write(rf, st, 43, 4294967293);   // -3
+        board.advance(rf, st, fl, 100);
+        let (p2, r5) = board.read(rf, st, 46);
+        test.assert_eq(p2, 2);
+        // longer than the maximum: refused
+        board.write(rf, st, 43, 20);
+        let (s2, r6) = board.read(rf, st, 45);
+        test.assert_eq(s2 / 4 % 2, 1);
+        let (p3, r7) = board.read(rf, st, 46);
+        test.assert_eq(p3, 2);
+        // disabling aborts a move in progress
+        board.write(rf, st, 44, 4000);
+        board.write(rf, st, 43, 8);
+        board.advance(rf, st, fl, 20);          // about 2,000 clocks: not even one step
+        board.advance(rf, st, fl, 60);          // 6,180 clocks in all: one step
+        board.write(rf, st, 1, 0);
+        let (s3, r8) = board.read(rf, st, 45);
+        test.assert_eq(s3 % 2, 0);
+        let (p4, r9) = board.read(rf, st, 46);
+        test.assert(p4 >= 3);
+        test.assert(p4 < 10);
+    }
+    return 0;
+}

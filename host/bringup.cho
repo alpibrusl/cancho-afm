@@ -1,0 +1,183 @@
+edition 8;
+
+import std.io;
+import std.buffer;
+import proto;
+import regs;
+
+// bringup.cho -- the first-contact check of docs/first-hardware.md, in cancho over the board's serial port (the Tty capability; edition 8).
+// It READS the identifier first and stops, writing nothing, if it is not afm_top's. It then writes only harmless registers: SAMPLE_DIV (restored),
+// a signed word in SETPOINT (restored), and the motor-enable bit with MOTOR_MAX = 0, which must refuse the command. Nothing needs to be wired to the board.
+//   cancho run host/bringup.cho host/proto.cho --std            exit code 0 = every check passed
+
+// One request, one answer: write `n` request bytes, collect `want` answer bytes. Returns how many arrived.
+fn exchange[&q, &p, &a, &b, &c, &d](port: &!q Port, pw: &!p Poller, req: &a [byte], n: int, rsp: &!b [byte], want: int, chunk: &!c [byte], ev: &!d [int]) -> [poll, tty_read, tty_write] int {
+    tty_flush_input(port);
+    tty_write(port, req[0..n]);
+    var got = 0;
+    var tries = 0;
+    while got < want && tries < 60 {
+        let k = tty_read(port, chunk);
+        if k > 0 {
+            var i = 0;
+            while i < k && got < want {
+                rsp[got] = chunk[i];
+                got = got + 1;
+                i = i + 1;
+            }
+        } else {
+            poller_wait(pw, ev, 20);
+            tries = tries + 1;
+        }
+    }
+    return got;
+}
+
+// read register `idx`: ans[0] = the answer code (-1 if it did not answer), ans[1] = the value
+fn read_reg[&q, &p, &a, &b, &c, &d, &e](port: &!q Port, pw: &!p Poller, req: &!a [byte], rsp: &!b [byte], chunk: &!c [byte], ev: &!d [int], ans: &!e [int], idx: int) -> [poll, tty_read, tty_write] int {
+    proto.read_req(req, idx);
+    let got = exchange(port, pw, req, 5, rsp, 5, chunk, ev);
+    if got == 5 {
+        ans[0] = proto.resp_code(rsp);
+        ans[1] = proto.resp_value(rsp);
+    } else {
+        ans[0] = 0 - 1;
+        ans[1] = 0;
+    }
+    return ans[0];
+}
+
+// write register `idx`: returns the answer code (-1 if it did not answer)
+fn write_reg[&q, &p, &a, &b, &c, &d](port: &!q Port, pw: &!p Poller, req: &!a [byte], rsp: &!b [byte], chunk: &!c [byte], ev: &!d [int], idx: int, value: int) -> [poll, tty_read, tty_write] int {
+    proto.write_req(req, idx, value);
+    let got = exchange(port, pw, req, 9, rsp, 1, chunk, ev);
+    if got == 1 { return proto.resp_code(rsp); }
+    return 0 - 1;
+}
+
+fn check[&h, &r](heap: &!h Heap, o: buffer.Buffer, label: &r [byte], ok: bool) -> [heap] buffer.Buffer {
+    if ok { return buffer.append(heap, buffer.append(heap, buffer.append(heap, o, "PASS "), label), "\n"); }
+    return buffer.append(heap, buffer.append(heap, buffer.append(heap, o, "FAIL "), label), "\n");
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec, tty } = split(world);
+    release(ffi); release(fs); release(args); release(net); release(signals); release(exec); release(clock);
+    var status = 3;
+    var fails = 0;
+    let device = narrow(tty, "/dev");
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 4096);
+        match poller_new() {
+            Polling::Failed(e) => { status = 1; }
+            Polling::Ok(open) => {
+                var p = open;
+                borrow device as &t in {
+                    match tty_open(t, "/dev/ttyUSB1") {
+                        TtyOpened::Failed(errno) => { status = 4; o = buffer.append(h, o, "cannot open /dev/ttyUSB1\n"); }
+                        TtyOpened::Ok(port) => {
+                            borrow mut port as &!q in {
+                                if tty_configure(q, 115200) != 0 { status = 5; }
+                                else {
+                                    borrow mut p as &!pw in { poller_add_tty(pw, q, 1, 1); }
+                                    region r {
+                                        let req = alloc_slice[r](16, byte_of(0));
+                                        let rsp = alloc_slice[r](16, byte_of(0));
+                                        let chunk = alloc_slice[r](16, byte_of(0));
+                                        let ev = alloc_slice[r](2, 0);
+                                        let ans = alloc_slice[r](2, 0);
+                                        var code = 0;
+                                        borrow mut p as &!pw in {
+                                            code = read_reg(q, pw, req, rsp, chunk, ev, ans, regs.id());
+                                            if code == 0 && ans[1] == 0xAF500001 {
+                                                o = check(h, o, "identifier is afm_top's (0xAF500001)", true);
+                                                var ok = false;
+                                                read_reg(q, pw, req, rsp, chunk, ev, ans, regs.ctrl());  ok = ans[1] == 0;
+                                                o = check(h, o, "CTRL is 0 at power-on", ok);
+                                                read_reg(q, pw, req, rsp, chunk, ev, ans, regs.zmax()); ok = ans[1] == 0;
+                                                o = check(h, o, "ZMAX is 0 at power-on (fails closed)", ok);
+                                                read_reg(q, pw, req, rsp, chunk, ev, ans, regs.motor_max()); ok = ans[1] == 0;
+                                                o = check(h, o, "MOTOR_MAX is 0 at power-on (the motor cannot move)", ok);
+                                                read_reg(q, pw, req, rsp, chunk, ev, ans, regs.sample_div());  ok = ans[1] == 103;
+                                                o = check(h, o, "SAMPLE_DIV default 103", ok);
+                                                read_reg(q, pw, req, rsp, chunk, ev, ans, regs.tuning());  ok = ans[1] == 536870912;
+                                                o = check(h, o, "TUNING default 536870912", ok);
+                                                read_reg(q, pw, req, rsp, chunk, ev, ans, regs.motor_rate()); ok = ans[1] == 27000;
+                                                o = check(h, o, "MOTOR_RATE default 27000", ok);
+                                                ok = write_reg(q, pw, req, rsp, chunk, ev, regs.sample_div(), 120) == 0;
+                                                read_reg(q, pw, req, rsp, chunk, ev, ans, regs.sample_div());
+                                                ok = ok && ans[1] == 120;
+                                                write_reg(q, pw, req, rsp, chunk, ev, regs.sample_div(), 103);
+                                                o = check(h, o, "SAMPLE_DIV written and read back", ok);
+                                                o = check(h, o, "write to read-only STATUS refused", write_reg(q, pw, req, rsp, chunk, ev, regs.status(), 1) == 2);
+                                                o = check(h, o, "write to read-only ID refused", write_reg(q, pw, req, rsp, chunk, ev, regs.id(), 1) == 2);
+                                                o = check(h, o, "read of an unmapped register refused", read_reg(q, pw, req, rsp, chunk, ev, ans, 60) == 2);
+                                                ok = write_reg(q, pw, req, rsp, chunk, ev, regs.setpoint(), 4294967286) == 0;
+                                                read_reg(q, pw, req, rsp, chunk, ev, ans, regs.setpoint());
+                                                ok = ok && ans[1] == 4294967286 && proto.signed(ans[1]) == 0 - 10;
+                                                write_reg(q, pw, req, rsp, chunk, ev, regs.setpoint(), 0);
+                                                o = check(h, o, "signed 32-bit word read back whole", ok);
+                                                // the motor fails closed: enabled, MOTOR_MAX = 0, a command is refused and nothing moves
+                                                write_reg(q, pw, req, rsp, chunk, ev, regs.ctrl(), 32);
+                                                write_reg(q, pw, req, rsp, chunk, ev, regs.motor_cmd(), 1);
+                                                poller_wait(pw, ev, 50);
+                                                read_reg(q, pw, req, rsp, chunk, ev, ans, regs.motor_status());
+                                                ok = ans[1] / 4 % 2 == 1 && ans[1] % 2 == 0;
+                                                o = check(h, o, "motor command refused while MOTOR_MAX = 0", ok);
+                                                read_reg(q, pw, req, rsp, chunk, ev, ans, regs.motor_pos()); ok = ans[1] == 0;
+                                                o = check(h, o, "motor position still 0", ok);
+                                                write_reg(q, pw, req, rsp, chunk, ev, regs.ctrl(), 0);
+                                                read_reg(q, pw, req, rsp, chunk, ev, ans, regs.motor_status()); ok = ans[1] / 2 % 2 == 0;
+                                                o = check(h, o, "motor disabled again", ok);
+                                                read_reg(q, pw, req, rsp, chunk, ev, ans, regs.status());  ok = ans[1] == 0;
+                                                o = check(h, o, "STATUS idle (no fault, no overflow)", ok);
+                                                var n = 0;
+                                                var again = true;
+                                                while n < 50 {
+                                                    read_reg(q, pw, req, rsp, chunk, ev, ans, regs.id());
+                                                    if ans[1] != 0xAF500001 { again = false; }
+                                                    n = n + 1;
+                                                }
+                                                o = check(h, o, "50 identifier reads in a row", again);
+                                                status = 0;
+                                            } else {
+                                                o = buffer.append(h, o, "stopping: not afm_top on this port (no answer, or another identifier); nothing was written\n");
+                                                if code < 0 { o = buffer.append(h, o, "  (no complete answer arrived)\n"); }
+                                                else {
+                                                    o = buffer.push_nat(h, buffer.append(h, o, "  answer code "), code);
+                                                    o = buffer.push_nat(h, buffer.append(h, o, ", value "), ans[1]);
+                                                    o = buffer.append(h, o, "\n");
+                                                }
+                                                status = 2;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            tty_close(port);
+                        }
+                    }
+                }
+                poller_close(p);
+            }
+        }
+        // a FAIL line anywhere means a non-zero exit
+        borrow o as &tb in {
+            let text = buffer.bytes(tb);
+            var i = 0;
+            while i + 3 < len(text) {
+                if int_of(text[i]) == 70 && int_of(text[i + 1]) == 65 && int_of(text[i + 2]) == 73 && int_of(text[i + 3]) == 76 { fails = fails + 1; }
+                i = i + 1;
+            }
+        }
+        borrow mut io as &!i2 in {
+            borrow o as &ob in { io.write_all(i2, buffer.bytes(ob)); }
+        }
+        buffer.drop(h, o);
+    }
+    release(device);
+    release(io);
+    release(heap);
+    if status == 0 && fails > 0 { return 1; }
+    return status;
+}

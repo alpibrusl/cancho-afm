@@ -1,0 +1,302 @@
+edition 5;
+
+module board;
+
+import std.math;
+import lockin;
+import pid;
+import raster;
+import plant;
+
+// `board` -- a software twin of the whole instrument: the register interface of `afm_top` (docs/registers.md) in front of the detector, the
+// Z loop with its limit and deadman, the raster, and a model of the fork, the tip and a surface. A host program that talks to the real board
+// over the serial port can talk to this instead, with no hardware, and a scenario can run for a million samples in seconds.
+//
+// What it IS: the validated models of this repository (sim/lockin.cho, sim/pid.cho, sim/raster.cho) wired as afm_top wires them, one ADC
+// conversion per step, with the same register indexes, defaults, read-only and unmapped refusals, and response codes. tests/board_test.cho
+// checks it against the numbers the Verilog system test gets (the free figure and the settled Z).
+// What it is NOT: clock-accurate (a window is applied at once, not 13 clocks later; the SPI masters, the serial link and the DAC refresh are
+// not modelled, so a DAC code is what the loop says at once); and the fork, tip and surface are the simplest models with the right shape
+// (docs/tune-approach.md), not any real sensor. Results from it are predictions of this software, not measurements.
+//
+// State lives in three slices the caller owns: rf (64 register words), st (internal integers), fl (plant floats). Index tables:
+//   st: 0 phase, 1 acc_i, 2 acc_q, 3 cnt, 4 out_i, 5 out_q, 6 figure, 7 integ, 8 prev, 9 z, 10 fault, 11 wd (clocks since a kick),
+//       12 overflow seen, 13 nsamp, 14 nwin, 15 adc0, 16 adc1, 17 r_t, 18 r_line, 19 r_x, 20 r_y, 21 r_done, 22 pixel counter, 23 trace,
+//       24 motor busy, 25 motor steps remaining, 26 motor direction (1 = toward the sample), 27 motor clocks into the step, 28 motor position,
+//       29 motor step period, 30 last motor command refused
+//   fl: 0 amplitude now (pm), 1 f0 (Hz), 2 Q, 3 free amplitude a0 (pm), 4 contact range (pm), 5 grating height (pm), 6 grating period
+//       (X DAC codes; 0 = flat), 7 ADC noise (counts), 8 surface drift (pm per window), 9 loopback (1.0: ADC channel 0 reads the Z DAC, the
+//       bench wiring of tutorial Part 5), 11 tip-sample distance at Z = 0 (pm; the coarse motor lowers it), 13 pm the tip moves per microstep
+
+pub fn rf_len() -> [] int { return 64; }
+pub fn st_len() -> [] int { return 32; }
+pub fn fl_len() -> [] int { return 16; }
+
+fn clampi(v: int, lo: int, hi: int) -> [] int {
+    if v < lo { return lo; }
+    if v > hi { return hi; }
+    return v;
+}
+
+// a 32-bit register word as a signed number
+fn s32(v: int) -> [] int {
+    if v >= 2147483648 { return v - 4294967296; }
+    return v;
+}
+
+fn u32(v: int) -> [] int {
+    if v < 0 { return v + 4294967296; }
+    return v;
+}
+
+fn pow2(n: int) -> [] int {
+    var r = 1;
+    var i = 0;
+    while i < n && i < 31 {
+        r = r * 2;
+        i = i + 1;
+    }
+    return r;
+}
+
+// Power-on state: every register at its default (docs/registers.md), nothing running, every limit zero.
+pub fn reset[&a, &b, &c](rf: &!a [int], st: &!b [int], fl: &!c [float]) -> [] int {
+    var i = 0;
+    while i < 64 { rf[i] = 0; i = i + 1; }
+    i = 0;
+    while i < 32 { st[i] = 0; i = i + 1; }
+    rf[44] = 27000; rf[3] = 103; rf[4] = 536870912; rf[5] = 256; rf[6] = 2; rf[20] = 32768; rf[21] = 2; rf[22] = 1; rf[27] = 1; rf[31] = 32768;
+    fl[0] = 2000.0; fl[1] = 32768.0; fl[2] = 5000.0; fl[3] = 2000.0; fl[4] = 2000.0; fl[5] = 0.0; fl[6] = 0.0; fl[7] = 0.0; fl[8] = 0.0; fl[9] = 0.0; fl[11] = 0.0; fl[13] = 198.4375;
+    return 0;
+}
+
+// The sample: its fork, its tip's contact range, a grating of `height` pm and `period` X-DAC codes (0 for none), ADC noise in counts.
+pub fn set_plant[&c](fl: &!c [float], f0: float, q: float, a0: float, contact_range: float, height: float, period: float, noise: float) -> [] int {
+    fl[1] = f0; fl[2] = q; fl[3] = a0; fl[4] = contact_range; fl[5] = height; fl[6] = period; fl[7] = noise; fl[0] = a0;
+    return 0;
+}
+
+// The bench wiring (Part 5): the Z DAC's output goes into ADC channel 0. DA3: 0 to 2.5 V over 16 bits; AD1 at 3.3 V: 12 bits over 0 to 3.3 V.
+pub fn set_loopback[&c](fl: &!c [float], on: int) -> [] int {
+    fl[9] = float_of(on);
+    return 0;
+}
+
+// The sample's distance from the tip with Z at 0, pm, and how far one microstep of the coarse motor moves the tip (a 0.635 mm lead screw at
+// 1.8 degrees and 1/16 microstepping: 198.4 pm; an assumption about a screw that has not been chosen).
+pub fn set_distance[&c](fl: &!c [float], distance: float, pm_per_microstep: float) -> [] int {
+    fl[11] = distance;
+    fl[13] = pm_per_microstep;
+    return 0;
+}
+
+// the Z the loop wants out, pm: the clamped loop value, or after a fault the clamped retract value
+fn zout[&a, &b](rf: &a [int], st: &b [int]) -> [] int {
+    if st[10] == 1 { return clampi(s32(rf[16]), s32(rf[13]), s32(rf[14])); }
+    return clampi(st[9], s32(rf[13]), s32(rf[14]));
+}
+
+// the surface height under the tip, pm
+fn surface[&a, &b, &c](rf: &a [int], st: &b [int], fl: &c [float]) -> [] float {
+    if fl[6] <= 0.0 { return 0.0; }
+    let x = float_of(st[19]);
+    return fl[5] / 2.0 * (1.0 + math.sin(6.283185307179586 * x / fl[6]));
+}
+
+// What the host sees when the run bit, the scan bit or the ADC bit is off: the blocks they gate are held in reset.
+fn resets[&a, &b](rf: &a [int], st: &!b [int]) -> [] int {
+    let run = rf[1] % 2;
+    let scan = rf[1] / 4 % 2;
+    let adc = rf[1] / 16 % 2;
+    if run == 0 {
+        st[7] = 0; st[8] = 0; st[9] = s32(rf[15]); st[10] = 0; st[11] = 0; st[12] = 0;
+    }
+    if run == 0 || scan == 0 {
+        st[17] = 0; st[18] = 0; st[19] = rf[23]; st[20] = rf[24]; st[21] = 0; st[22] = 0;
+    }
+    // the motor driver stops at once when disabled, and (see step_one) when the deadman has latched
+    if rf[1] / 32 % 2 == 0 { st[24] = 0; st[25] = 0; st[27] = 0; }
+    if adc == 0 {
+        st[0] = 0; st[1] = 0; st[2] = 0; st[3] = 0; st[13] = 0; st[14] = 0; st[15] = 0; st[16] = 0;
+    }
+    return 0;
+}
+
+// 0 = OKAY, 2 = SLVERR, like the serial bridge: a write to a read-only or unmapped register is refused and changes nothing.
+pub fn write[&a, &b](rf: &!a [int], st: &!b [int], idx: int, value: int) -> [] int {
+    if idx < 0 || idx > 47 { return 2; }
+    if idx == 0 || idx == 2 || (idx >= 32 && idx <= 42) || idx == 45 || idx == 46 { return 2; }
+    if idx == 18 {
+        st[11] = 0;
+        return 0;
+    }
+    if idx == 43 {
+        // a command is refused if it is longer than MOTOR_MAX (0 after power-on: nothing may move until the host allows it); otherwise it
+        // starts only when the driver is enabled, not held by a fault, idle, and the command is not zero
+        let v = s32(value);
+        var mag = v;
+        if v < 0 { mag = 0 - v; }
+        if mag > rf[47] {
+            st[30] = 1;
+        } else {
+            st[30] = 0;
+            if rf[1] / 32 % 2 == 1 && st[10] == 0 && st[24] == 0 && v != 0 {
+                st[24] = 1; st[25] = mag; st[27] = 0;
+                if v > 0 { st[26] = 1; } else { st[26] = 0; }
+                var per = rf[44];
+                if per < 4 { per = 4; }
+                st[29] = per;
+            }
+        }
+        return 0;
+    }
+    if idx == 1 || (idx >= 3 && idx <= 17) || (idx >= 19 && idx <= 31) || idx == 44 || idx == 47 {
+        rf[idx] = value % 4294967296;
+        // blocks held in reset load their start values continuously (x0, y0, zinit), so any write can change what a held block shows
+        resets(rf, st);
+        return 0;
+    }
+    return 2;
+}
+
+// (value, response) of a read, like the serial bridge.
+pub fn read[&a, &b](rf: &a [int], st: &b [int], idx: int) -> [] (int, int) {
+    if idx == 0 { return (0xAF500001, 0); }
+    if idx == 2 {
+        let status = st[10] + st[12] * 4 + st[21] * 8;
+        return (status, 0);
+    }
+    if idx == 18 { return (0, 0); }
+    if idx == 1 || (idx >= 3 && idx <= 17) || (idx >= 19 && idx <= 31) { return (rf[idx], 0); }
+    if idx == 32 { return (st[6], 0); }
+    if idx == 33 { return (u32(zout(rf, st)), 0); }
+    if idx == 34 { return (st[19], 0); }
+    if idx == 35 { return (st[20], 0); }
+    if idx == 36 { return (u32(st[4]), 0); }
+    if idx == 37 { return (u32(st[5]), 0); }
+    if idx == 38 { return (st[15], 0); }
+    if idx == 39 { return (st[16], 0); }
+    if idx == 40 { return (st[13], 0); }
+    if idx == 41 { return (st[14], 0); }
+    if idx == 42 { return (st[17] % 65536 * 65536 + st[18] % 65536, 0); }
+    if idx == 43 { return (0, 0); }
+    if idx == 44 || idx == 47 { return (rf[idx], 0); }
+    if idx == 45 { return (st[24] + rf[1] / 32 % 2 * 2 + st[30] * 4, 0); }
+    if idx == 46 { return (u32(st[28]), 0); }
+    return (0, 2);
+}
+
+fn step_one[&a, &b, &c](rf: &!a [int], st: &!b [int], fl: &!c [float]) -> [] int {
+    resets(rf, st);
+    let run = rf[1] % 2;
+    let scan = rf[1] / 4 % 2;
+    let manual = rf[1] / 8 % 2;
+    let adc = rf[1] / 16 % 2;
+    var sdiv = rf[3];
+    if sdiv < 1 { sdiv = 1; }
+    // the deadman counts clocks while the loop is enabled
+    if run == 1 {
+        st[11] = st[11] + sdiv;
+        if rf[17] != 0 && st[11] >= rf[17] { st[10] = 1; }
+    }
+    // the coarse motor: one step per period of MOTOR_RATE clocks; a fault stops it
+    if st[24] == 1 {
+        if st[10] == 1 {
+            st[24] = 0; st[25] = 0; st[27] = 0;
+        } else {
+            st[27] = st[27] + sdiv;
+            while st[27] >= st[29] && st[24] == 1 {
+                st[27] = st[27] - st[29];
+                st[25] = st[25] - 1;
+                if st[26] == 1 {
+                    st[28] = st[28] + 1;
+                    fl[11] = fl[11] - fl[13];
+                } else {
+                    st[28] = st[28] - 1;
+                    fl[11] = fl[11] + fl[13];
+                }
+                if st[25] == 0 { st[24] = 0; }
+            }
+        }
+    }
+    if adc == 0 { return 0; }
+    let fs = 27000000.0 / float_of(sdiv);
+    let fref = float_of(rf[4]) / 4294967296.0 * fs;
+    var zc = zout(rf, st) / 16;
+    if manual == 1 { zc = rf[28] % 65536; }
+    let gap = float_of(zc * 16) + fl[11] - surface(rf, st, fl);
+    let target = plant.response(fref, fl[1], fl[2], fl[3]) * plant.contact(gap, fl[4]);
+    var alpha = 3.141592653589793 * fl[1] / (fl[2] * fs);
+    if alpha > 1.0 { alpha = 1.0; }
+    fl[0] = plant.lag(fl[0], target, alpha);
+    // the converter: 12 bits, mid-scale 2048, the signal at the reference's own phase
+    let ph = 6.283185307179586 * float_of(st[0]) / 4294967296.0;
+    var v = 2048.0 + 0.5 * fl[0] * math.sin(ph + 0.5);
+    let nzi = truncate(fl[7]);
+    if nzi > 0 {
+        v = v + float_of((st[13] * 1103515245 + 12345) / 65536 % (2 * nzi + 1) - nzi);
+    }
+    var code = truncate(math.round(v));
+    code = clampi(code, 0, 4095);
+    if fl[9] > 0.5 {
+        code = truncate(math.round(float_of(zc) / 65536.0 * 2.5 / 3.3 * 4096.0));
+        code = clampi(code, 0, 4095);
+    }
+    st[15] = code;
+    st[16] = 1234;
+    st[13] = st[13] + 1;
+    let ls = lockin.step(lockin.L { phase: st[0], acc_i: st[1], acc_q: st[2], cnt: st[3], done: 0, out_i: st[4], out_q: st[5], amp: st[6] }, code - 2048, rf[4], rf[5]);
+    st[0] = ls.phase; st[1] = ls.acc_i; st[2] = ls.acc_q; st[3] = ls.cnt;
+    if ls.done == 1 {
+        st[4] = ls.out_i; st[5] = ls.out_q; st[6] = ls.amp; st[14] = st[14] + 1;
+        var big = 0;
+        if ls.out_i > 8388607 || ls.out_i < 0 - 8388607 || ls.out_q > 8388607 || ls.out_q < 0 - 8388607 { big = 1; }
+        if run == 1 && big == 1 { st[12] = 1; }
+        if run == 1 && big == 0 && st[10] == 0 {
+            // one loop step per detector window: error = (figure >> shift) - setpoint
+            let fig = ls.amp / pow2(rf[7]);
+            let err = fig - s32(rf[8]);
+            let ps = pid.step(pid.State { integ: st[7], prev: st[8], z: st[9] }, err, rf[9], rf[10], rf[11], rf[12], s32(rf[13]), s32(rf[14]));
+            st[7] = ps.integ; st[8] = ps.prev; st[9] = ps.z;
+            if scan == 1 {
+                var pd = rf[27];
+                if pd < 1 { pd = 1; }
+                if st[22] + 1 >= pd {
+                    st[22] = 0;
+                    let r = raster.step(raster.R { t: st[17], line: st[18], x: st[19], y: st[20], done: st[21] }, rf[21], rf[22], rf[23], rf[25], rf[26]);
+                    st[17] = r.t; st[18] = r.line; st[19] = r.x; st[20] = r.y; st[21] = r.done;
+                } else {
+                    st[22] = st[22] + 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+// Run `n` ADC conversions of simulated time (one conversion = SAMPLE_DIV clocks, 103 by default: 262 kS/s).
+pub fn advance[&a, &b, &c](rf: &!a [int], st: &!b [int], fl: &!c [float], n: int) -> [] int {
+    var k = 0;
+    while k < n {
+        step_one(rf, st, fl);
+        k = k + 1;
+    }
+    return 0;
+}
+
+// The same, in FPGA clocks.
+pub fn advance_clocks[&a, &b, &c](rf: &!a [int], st: &!b [int], fl: &!c [float], clocks: int) -> [] int {
+    var sdiv = rf[3];
+    if sdiv < 1 { sdiv = 1; }
+    return advance(rf, st, fl, clocks / sdiv);
+}
+
+// The Z DAC code the board would be holding (Z / 16, or the manual register), the X and Y codes, for tests and the host.
+pub fn z_code[&a, &b](rf: &a [int], st: &b [int]) -> [] int {
+    if rf[1] / 8 % 2 == 1 { return rf[28] % 65536; }
+    return zout(rf, st) / 16;
+}
+
+pub fn surface_at[&a, &b, &c](rf: &a [int], st: &b [int], fl: &c [float]) -> [] float {
+    return surface(rf, st, fl);
+}

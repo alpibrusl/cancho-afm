@@ -1,0 +1,266 @@
+edition 5;
+
+module session;
+
+import script;
+import regs;
+import tune;
+import approach;
+
+// `session` -- the automatic run, as a host program that has no I/O of its own: for each stage it BUILDS a script of register operations
+// (`build`), a runner executes it (over the serial port or against the twin), and `consume` looks at what the reads returned and decides what
+// comes next. Stages: 0 check the board and set its limits; 1 sweep the drive frequency; 2 settle at resonance and fix the setpoint; 3 approach;
+// 4 hand the loop the tip; 5 start the scan; 6 read the image pixel by pixel; 7 stop; 99 done; 98 failed (see ss[2] for why).
+// Everything here is plan and software: the instrument it would drive does not exist yet. The constants below are choices of this program
+// (the sweep span, the settle times, the scan size) and each is written next to its reason.
+//
+// State, in slices the caller owns:
+//   ss ints:  0 stage, 1 iteration, 2 failure code, 4..8 the approach state (phase, z, motor, dwell, fault), 9 contact z, 10 free figure,
+//             11 shift, 12 setpoint, 13 kp, 14 ki, 16 pixels stored, 17 measured period (tenths of a pixel), 20 coarse motor steps pending,
+//             21 coarse motor steps taken, 22 loop settled z at hand-off
+//   sf floats: 0 f0, 1 Q, 2 peak figure, 3 alpha (fraction of a step the plant follows per window)
+// failure codes: 1 the board's identity or limits did not read back; 2x the tune refused (x = the reason of tune.analyse); 3 the approach
+// parameters were unsafe; 4x the approach faulted (x = its fault code); 5 the loop faulted after hand-off; 6 too many iterations; 7 a write was refused;
+// 9 the coarse motor was still busy or refused a command.
+
+// ---- the program's choices ----
+pub fn sample_div() -> [] int { return 103; }                     // 262 kS/s at 27 MHz: 8 samples per period of a 32.768 kHz fork
+pub fn window() -> [] int { return 64; }                          // samples per detector window (0.24 ms): short, so a loop step is quick
+pub fn window_clocks() -> [] int { return 64 * 103; }
+pub fn window_s() -> [] float { return 64.0 * 103.0 / 27000000.0; }
+pub fn fs() -> [] float { return 27000000.0 / 103.0; }
+pub fn free_pm() -> [] float { return 2000.0; }                   // the free amplitude the program ASSUMES (no calibration yet), pm
+pub fn zmax() -> [] int { return 10000; }
+pub fn motor_rate() -> [] int { return 27000; }                  // clocks per microstep: 1 kHz, gentle for a driver and a small stepper
+pub fn coarse_steps() -> [] int { return 30; }                   // microsteps per approach "coarse step"
+pub fn pm_per_step() -> [] int { return 198; }                   // ASSUMED: a 0.635 mm lead screw, 1.8 degrees, 1/16 microstepping; calibrate before trusting                         // the Z range, pm: 0 to 10,000
+pub fn sweep_points() -> [] int { return 63; }
+pub fn sweep_f(i: int) -> [] float { return 32520.0 + 8.0 * float_of(i); }   // +-250 Hz about 32,768 Hz in 8 Hz steps
+pub fn settle_clocks() -> [] int { return 540000; }                // 20 ms: four time constants of a Q = 500 fork; a Q = 5,000 one needs ten times as long
+pub fn tuning_word(f: float) -> [] int { return truncate(f / fs() * 4294967296.0 + 0.5); }
+pub fn npix() -> [] int { return 12; }
+pub fn nlines() -> [] int { return 3; }
+pub fn pixdiv() -> [] int { return 60; }                          // loop steps per pixel: the loop needs about 20 to follow a feature
+
+fn pow2(n: int) -> [] int {
+    var r = 1;
+    var i = 0;
+    while i < n { r = r * 2; i = i + 1; }
+    return r;
+}
+
+fn params[&a](ss: &a [int]) -> [] approach.P {
+    return approach.P { free_r: ss[10], free_pm: truncate(free_pm()), contact_pct: 90, dz: 192, dwell: 40, zmin: 0, zmax: zmax(), coarse: coarse_steps() * pm_per_step(), max_motor: 20 };
+}
+
+// ---- building the script of a stage; returns the number of operations ----
+pub fn build[&a, &b, &c](ss: &a [int], sf: &b [float], sc: &!c [int]) -> [] int {
+    let stage = ss[0];
+    var n = 0;
+    if stage == 0 {
+        n = script.read(sc, n, regs.id());
+        n = script.write(sc, n, regs.sample_div(), sample_div());
+        n = script.write(sc, n, regs.window(), window());
+        n = script.write(sc, n, regs.half(), 2);
+        n = script.write(sc, n, regs.timeout(), 0);
+        n = script.write(sc, n, regs.zmin(), 0);
+        n = script.write(sc, n, regs.zmax(), zmax());
+        n = script.write(sc, n, regs.zinit(), zmax());
+        n = script.write(sc, n, regs.zretract(), zmax());
+        n = script.write(sc, n, regs.motor_rate(), motor_rate());
+        n = script.write(sc, n, regs.motor_max(), 2 * coarse_steps());       // the most steps one command may ask for: the board refuses more
+        n = script.read(sc, n, regs.zmin());
+        n = script.read(sc, n, regs.zmax());
+        n = script.read(sc, n, regs.zinit());
+        n = script.read(sc, n, regs.zretract());
+    }
+    if stage == 1 {
+        n = script.write(sc, n, regs.ctrl(), 56);                      // manual + ADC + motor enable: Z held at the manual value, the detector running
+        n = script.write(sc, n, regs.man_z(), zmax() / 16);            // fully retracted, far from the surface
+        var i = 0;
+        while i < sweep_points() {
+            n = script.write(sc, n, regs.tuning(), tuning_word(sweep_f(i)));
+            n = script.wait(sc, n, settle_clocks());
+            n = script.read(sc, n, regs.amp());
+            i = i + 1;
+        }
+    }
+    if stage == 2 {
+        n = script.write(sc, n, regs.tuning(), tuning_word(sf[0]));
+        n = script.wait(sc, n, 2 * settle_clocks());
+        n = script.read(sc, n, regs.amp());
+    }
+    if stage == 3 {
+        n = script.write(sc, n, regs.man_z(), ss[5] / 16);
+        if ss[20] > 0 {
+            n = script.write(sc, n, regs.motor_cmd(), ss[20] * coarse_steps());
+            n = script.wait(sc, n, ss[20] * coarse_steps() * motor_rate() + 20000);
+            n = script.read(sc, n, regs.motor_status());                      // the motor must be idle and must not have refused
+        }
+        n = script.wait(sc, n, window_clocks());
+        n = script.read(sc, n, regs.amp());
+    }
+    if stage == 4 {
+        n = script.write(sc, n, regs.zinit(), ss[9]);
+        n = script.write(sc, n, regs.shift(), ss[11]);
+        n = script.write(sc, n, regs.setpoint(), ss[12]);
+        n = script.write(sc, n, regs.kp(), ss[13]);
+        n = script.write(sc, n, regs.ki(), ss[14]);
+        n = script.write(sc, n, regs.kd(), 0);
+        n = script.write(sc, n, regs.ilim(), 65535);
+        n = script.write(sc, n, regs.timeout(), 4000000);                // the deadman: 150 ms without a heartbeat
+        n = script.write(sc, n, regs.ctrl(), 17);                      // run + ADC, manual off: the loop takes over from the contact height
+        var k = 0;
+        while k < 8 {
+            n = script.write(sc, n, regs.kick(), 0);
+            n = script.wait(sc, n, 20 * window_clocks());
+            k = k + 1;
+        }
+        n = script.read(sc, n, regs.status());
+        n = script.read(sc, n, regs.zout());
+    }
+    if stage == 5 {
+        n = script.write(sc, n, regs.npix(), npix());
+        n = script.write(sc, n, regs.nlines(), nlines());
+        n = script.write(sc, n, regs.x0(), 1000);
+        n = script.write(sc, n, regs.y0(), 2000);
+        n = script.write(sc, n, regs.dx(), 100);
+        n = script.write(sc, n, regs.dy(), 250);
+        n = script.write(sc, n, regs.pixdiv(), pixdiv());
+        n = script.write(sc, n, regs.ctrl(), 21);                      // run + scan + ADC
+    }
+    if stage == 6 {
+        n = script.write(sc, n, regs.kick(), 0);
+        n = script.wait(sc, n, (pixdiv() - 1) * window_clocks());
+        n = script.read(sc, n, regs.pixline());
+        n = script.read(sc, n, regs.zout());
+        n = script.read(sc, n, regs.status());
+        n = script.wait(sc, n, window_clocks());
+    }
+    if stage == 7 {
+        n = script.write(sc, n, regs.ctrl(), 0);
+        n = script.read(sc, n, regs.status());
+    }
+    return n;
+}
+
+// The period of the image's middle line in tenths of a pixel, from the upward crossings of its mean (linear interpolation), or 0 if fewer than two.
+fn period_of[&a](img: &a [int], line: int) -> [] int {
+    let np = npix();
+    var mean = 0.0;
+    var i = 0;
+    while i < np {
+        mean = mean + float_of(img[line * np + i]);
+        i = i + 1;
+    }
+    mean = mean / float_of(np);
+    var first = 0.0 - 1.0;
+    var last = 0.0;
+    var count = 0;
+    i = 1;
+    while i < np {
+        let a0 = float_of(img[line * np + i - 1]) - mean;
+        let a1 = float_of(img[line * np + i]) - mean;
+        if a0 < 0.0 && a1 >= 0.0 {
+            let pos = float_of(i - 1) + (0.0 - a0) / (a1 - a0);
+            if count == 0 { first = pos; }
+            last = pos;
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    if count < 2 { return 0; }
+    return truncate((last - first) / float_of(count - 1) * 10.0 + 0.5);
+}
+
+// ---- looking at the results of a stage and choosing the next one ----
+pub fn consume[&a, &b, &c, &d](ss: &!a [int], sf: &!b [float], out: &c [int], img: &!d [int]) -> [] int {
+    let stage = ss[0];
+    ss[1] = ss[1] + 1;
+    if ss[1] > 40000 { ss[2] = 6; ss[0] = 98; return 0; }
+    if stage == 0 {
+        // the identity, and the limits read back as written (the board must not be trusted to have taken them)
+        if out[1] == 0xAF500001 && out[2] == 0 && out[3] == zmax() && out[4] == zmax() && out[5] == zmax() {
+            ss[0] = 1;
+        } else {
+            ss[2] = 1; ss[0] = 98;
+        }
+    }
+    if stage == 1 {
+        region r {
+            let f = alloc_slice[r](63, 0.0);
+            let d = alloc_slice[r](63, 0.0);
+            var i = 0;
+            while i < sweep_points() {
+                f[i] = sweep_f(i);
+                d[i] = float_of(out[1 + i]);
+                i = i + 1;
+            }
+            let t = tune.analyse(f, d, sweep_points());
+            if t.ok == 0 {
+                ss[2] = 20 + t.why; ss[0] = 98;
+            } else {
+                sf[0] = t.f0; sf[1] = t.q; sf[2] = t.peak;
+                // the plant gain k (figure counts per pm) assumes the free amplitude above; with no calibration it is the one number the program takes on trust
+                let g = tune.choose(t, t.peak / free_pm(), window_s(), 0.8);
+                ss[11] = g.shift; ss[13] = g.kp; ss[14] = g.ki; sf[3] = g.alpha;
+                ss[0] = 2;
+            }
+        }
+    }
+    if stage == 2 {
+        ss[10] = out[1];
+        ss[12] = (out[1] * 8 / 10) / pow2(ss[11]);
+        if approach.check(params(ss), sf[3]) != 0 {
+            ss[2] = 3; ss[0] = 98;
+        } else {
+            let p = params(ss);
+            let a0 = approach.start(p);
+            ss[4] = a0.phase; ss[5] = a0.z; ss[6] = a0.motor; ss[7] = a0.dwell; ss[8] = a0.fault;
+            ss[0] = 3;
+        }
+    }
+    if stage == 3 {
+        var motor_ok = 1;
+        if out[0] == 2 && out[1] % 2 == 0 && out[1] / 4 % 2 == 0 { motor_ok = 1; }
+        if out[0] == 2 && (out[1] % 2 == 1 || out[1] / 4 % 2 == 1) { motor_ok = 0; }
+        ss[20] = 0;
+        let p = params(ss);
+        let a = approach.next(approach.A { phase: ss[4], z: ss[5], motor: ss[6], dwell: ss[7], fault: ss[8] }, out[out[0]], p);
+        if a.motor > ss[6] { ss[20] = a.motor - ss[6]; ss[21] = ss[21] + (a.motor - ss[6]); }
+        ss[4] = a.phase; ss[5] = a.z; ss[6] = a.motor; ss[7] = a.dwell; ss[8] = a.fault;
+        if a.phase == 2 { ss[9] = a.z; ss[0] = 4; }
+        if a.phase == 3 { ss[2] = 40 + a.fault; ss[0] = 98; }
+        if motor_ok == 0 { ss[2] = 9; ss[0] = 98; }
+    }
+    if stage == 4 {
+        if out[1] % 2 == 0 {
+            ss[22] = out[2];
+            ss[0] = 5;
+        } else {
+            ss[2] = 5; ss[0] = 98;
+        }
+    }
+    if stage == 5 {
+        var i = 0;
+        while i < npix() * nlines() { img[i] = 0 - 1; i = i + 1; }
+        ss[16] = 0;
+        ss[0] = 6;
+    }
+    if stage == 6 {
+        let pl = out[1];
+        let pix = pl / 65536;
+        let line = pl % 65536;
+        if out[3] % 2 == 1 { ss[2] = 5; ss[0] = 98; }
+        else if out[3] / 8 % 2 == 1 { ss[0] = 7; }
+        else if pix < npix() && line < nlines() && img[line * npix() + pix] < 0 {
+            img[line * npix() + pix] = out[2];
+            ss[16] = ss[16] + 1;
+        }
+    }
+    if stage == 7 {
+        ss[17] = period_of(img, nlines() / 2);
+        ss[0] = 99;
+    }
+    return 0;
+}

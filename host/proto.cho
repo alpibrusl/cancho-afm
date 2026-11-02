@@ -1,0 +1,49 @@
+edition 5;
+
+module proto;
+
+// `proto` -- the serial byte protocol of the board, as the host speaks it (the cancho-hdl bridge protocol, see docs/registers.md):
+//   write: 'W' a3 a2 a1 a0 d3 d2 d1 d0   -> one byte
+//   read:  'R' a3 a2 a1 a0               -> one byte, then d3 d2 d1 d0
+// Big-endian. The first byte back is 0 (OKAY) or 2 (SLVERR). A register index i is at address 0x40000000 + 4 i.
+// These build and read byte slices only: whether the bytes then go to the real board over a serial port or to the software twin
+// (host/twin_link.cho) is the caller's business, so what is tested here is what goes on the wire.
+
+// Fill `buf` with the 9-byte write request; returns 9.
+pub fn write_req[&a](buf: &!a [byte], idx: int, value: int) -> [] int {
+    buf[0] = byte_of(87);
+    buf[1] = byte_of(64);
+    buf[2] = byte_of(0);
+    buf[3] = byte_of(0);
+    buf[4] = byte_of(idx * 4);
+    buf[5] = byte_of(value / 16777216 % 256);
+    buf[6] = byte_of(value / 65536 % 256);
+    buf[7] = byte_of(value / 256 % 256);
+    buf[8] = byte_of(value % 256);
+    return 9;
+}
+
+// Fill `buf` with the 5-byte read request; returns 5.
+pub fn read_req[&a](buf: &!a [byte], idx: int) -> [] int {
+    buf[0] = byte_of(82);
+    buf[1] = byte_of(64);
+    buf[2] = byte_of(0);
+    buf[3] = byte_of(0);
+    buf[4] = byte_of(idx * 4);
+    return 5;
+}
+
+pub fn resp_code[&a](buf: &a [byte]) -> [] int {
+    return int_of(buf[0]);
+}
+
+// The 32-bit value of a read response (bytes 1 to 4, big-endian), as a non-negative number.
+pub fn resp_value[&a](buf: &a [byte]) -> [] int {
+    return int_of(buf[1]) * 16777216 + int_of(buf[2]) * 65536 + int_of(buf[3]) * 256 + int_of(buf[4]);
+}
+
+// A 32-bit register word as a signed number.
+pub fn signed(v: int) -> [] int {
+    if v >= 2147483648 { return v - 4294967296; }
+    return v;
+}
