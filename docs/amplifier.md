@@ -98,4 +98,4 @@ about 100 nF; a bigger one (a stack of microfarads) needs Cf raised and re-simul
 4. Measure the **fork's C0, Q and motional resistance** (tutorial Part 6) and set the trimmer for the flattest baseline; the simulation only says where to look.
 5. Check the whole chain with a **dummy 30 nF capacitor** and no piezo: mid-code reads 0 V (trim Vref), full-scale 9.97 V, and a step has no overshoot.
 
-**Not done:** a schematic in a schematic-capture tool and a circuit board layout; noise and slew rate in simulation; the supply's switching noise; thermal drift of the gain resistors.
+**Schematic:** the piezo drivers, the reference and the supply are drawn as a KiCad schematic, generated and checked against these netlists ([`hw/kicad/`](../hw/kicad/README.md)); the fork's front end is not drawn yet. **Not done:** a circuit board layout, and that front end's schematic; noise and slew rate in simulation; the supply's switching noise; thermal drift of the gain resistors.

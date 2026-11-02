@@ -1,0 +1,67 @@
+// ui/afm.cui: the cancho-afm console. It shows what the SOFTWARE TWIN did (host/twin_export.cho writes ui/twin.json): the resonance found, the
+// gains chosen, the approach, the image of the grating and a trace of the amplitude figure, Z and X while it was scanned. The only authority is
+// `Network`, to read twin.json from the page's own origin; with the real instrument the same page would read the same document from the Pi.
+// A prediction of this software, not a measurement.
+
+component Afm {
+    requires Network;
+
+    state doc: Result[String, String] = Ok("");
+    state note: String = "loading";
+    state f0: String = "-";
+    state q: String = "-";
+    state shift: String = "-";
+    state kp: String = "-";
+    state ki: String = "-";
+    state steps: String = "-";
+    state contact: String = "-";
+    state settled: String = "-";
+    state period: String = "-";
+    state failure: String = "-";
+    state image: List[Float] = [];
+    state amp: List[Float] = [];
+    state zt: List[Float] = [];
+    state xt: List[Float] = [];
+
+    start Load;
+
+    on Load {
+        note = "loading";
+        doc = await(net.get("twin.json"));
+        note = match doc {
+            Ok(_) => { "software twin run loaded" }
+            Err(e) => { "error: " + e }
+            Cancelled => { "cancelled" }
+        };
+        f0 = match doc { Ok(t) => { json.get(t, "f0_tenths_hz", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        q = match doc { Ok(t) => { json.get(t, "q", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        shift = match doc { Ok(t) => { json.get(t, "shift", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        kp = match doc { Ok(t) => { json.get(t, "kp", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        ki = match doc { Ok(t) => { json.get(t, "ki", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        steps = match doc { Ok(t) => { json.get(t, "motor_steps", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        contact = match doc { Ok(t) => { json.get(t, "contact_z_pm", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        settled = match doc { Ok(t) => { json.get(t, "settled_z_pm", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        period = match doc { Ok(t) => { json.get(t, "period_tenths_px", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        failure = match doc { Ok(t) => { json.get(t, "failure", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        image = match doc { Ok(t) => { map(json.items(t, "image_z_pm"), x => num(x, 0)) } Err(_) => { [] } Cancelled => { [] } };
+        amp = match doc { Ok(t) => { map(json.items(t, "trace_amp"), x => num(x, 0)) } Err(_) => { [] } Cancelled => { [] } };
+        zt = match doc { Ok(t) => { map(json.items(t, "trace_z_pm"), x => num(x, 0)) } Err(_) => { [] } Cancelled => { [] } };
+        xt = match doc { Ok(t) => { map(json.items(t, "trace_x_codes"), x => num(x, 0)) } Err(_) => { [] } Cancelled => { [] } };
+    }
+
+    view {
+        Column {
+            Text { role: heading "cancho-afm: software twin run" }
+            Text { role: status "{note}. Failure code {failure} (0 = none). A prediction of this software, not a measurement." }
+            Text { "Fork resonance found: {f0} (tenths of Hz), Q about {q}." }
+            Text { "Loop chosen: shift {shift}, kp {kp}, ki {ki} (Q16)." }
+            Text { "Approach: {steps} coarse motor steps, contact at Z = {contact} pm, settled at Z = {settled} pm." }
+            Text { "Grating period measured: {period} tenths of a pixel (the twin's: 60)." }
+            Chart { label: "Topography, 3 lines of 12 pixels (Z)" kind: "line" values: image unit: "pm" }
+            Chart { label: "Amplitude figure during a second scan" kind: "line" values: amp }
+            Chart { label: "Z during the scan (the surface, as the loop follows it)" kind: "line" values: zt unit: "pm" }
+            Chart { label: "X DAC code during the scan" kind: "line" values: xt }
+            Button { label: "Reload" on: Load }
+        }
+    }
+}

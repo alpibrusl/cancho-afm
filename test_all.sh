@@ -38,3 +38,8 @@ if [ -n "${CHW:-}" ]; then
   rm -f /tmp/afm.chw /tmp/afm.h.new
   echo "chw check accepts hw/afm.chw and hw/afm.h is up to date: passed"
 fi
+# optional: with KICAD_CLI set to kicad-cli, the schematic is checked by KiCad's ERC and against the simulated circuits
+if [ -n "${KICAD_CLI:-}" ]; then
+  sh hw/kicad/check.sh > /dev/null
+  echo "hw/kicad schematic: generator, ERC and nets against the simulation: passed"
+fi

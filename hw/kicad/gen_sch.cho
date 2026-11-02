@@ -1,0 +1,292 @@
+edition 7;
+
+import std.buffer;
+
+// Prints hw/kicad/amp.kicad_sch: the piezo driver board of docs/amplifier.md (X, Y and Z drivers, the 1.43 V reference, the supply with its fuses),
+// as a KiCad schematic. Do not edit the output; change this and run
+//   cancho run hw/kicad/gen_sch.cho --std > hw/kicad/amp.kicad_sch
+// The schematic is written the way a netlist is: every pin ends in a net label, not a wire, so the nets are exactly the names below and nothing depends on where a
+// part sits. The part values are those of hw/amp/xy_amp_b.cir and z_amp.cir (checked by hw/kicad/check.sh). The symbols are this file's own (library `cancho`, drawn
+// below), so the file needs no KiCad library; the footprints are named for the part to be bought and are NOT checked against its pad numbering (check them in the
+// board editor). NOT BUILT, NOT SIMULATED AS A SCHEMATIC: the circuit simulated is hw/amp/*.cir; this is a transcription of it, checked by an ERC and by comparing values.
+fn text[&h, &r](heap: &!h Heap, b: buffer.Buffer, s: &r [byte]) -> [heap] buffer.Buffer { return buffer.append(heap, b, s); }
+
+// n in hundredths of a millimetre, written as a decimal
+fn dec[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer {
+    var o = b;
+    var m = n;
+    if n < 0 { o = buffer.append(heap, o, "-"); m = 0 - n; }
+    o = buffer.push_nat(heap, o, m / 100);
+    o = buffer.append(heap, o, ".");
+    let f = m % 100;
+    o = buffer.push_nat(heap, o, f / 10);
+    o = buffer.push_nat(heap, o, f % 10);
+    return o;
+}
+
+// the next uuid: a fixed prefix and a counter, so the output is the same every time
+fn uuid[&h](heap: &!h Heap, b: buffer.Buffer, k: int) -> [heap] buffer.Buffer {
+    var o = buffer.append(heap, b, "\"00000000-0000-4000-8000-");
+    var d = 100000000000;
+    var m = k;
+    while d > 0 {
+        o = buffer.push_nat(heap, o, m / d % 10);
+        d = d / 10;
+    }
+    return buffer.append(heap, o, "\"");
+}
+
+// ---- the symbols: 2-pin parts stand upright with pins at +-3.81 mm ----
+fn pin[&h](heap: &!h Heap, b: buffer.Buffer, kind: &static [byte], x: int, y: int, ang: int, len: int, name: &static [byte], num: &static [byte]) -> [heap] buffer.Buffer {
+    var o = text(heap, b, "        (pin "); o = text(heap, o, kind); o = text(heap, o, " line (at "); o = dec(heap, o, x); o = text(heap, o, " "); o = dec(heap, o, y);
+    o = text(heap, o, " "); o = buffer.push_nat(heap, o, ang); o = text(heap, o, ") (length "); o = dec(heap, o, len); o = text(heap, o, ") (name \"");
+    o = text(heap, o, name); o = text(heap, o, "\" (effects (font (size 1.27 1.27)))) (number \""); o = text(heap, o, num); o = text(heap, o, "\" (effects (font (size 1.27 1.27)))))\n");
+    return o;
+}
+
+fn rect[&h](heap: &!h Heap, b: buffer.Buffer, x0: int, y0: int, x1: int, y1: int) -> [heap] buffer.Buffer {
+    var o = text(heap, b, "        (rectangle (start "); o = dec(heap, o, x0); o = text(heap, o, " "); o = dec(heap, o, y0);
+    o = text(heap, o, ") (end "); o = dec(heap, o, x1); o = text(heap, o, " "); o = dec(heap, o, y1); o = text(heap, o, ") (stroke (width 0.254) (type default)) (fill (type background)))\n");
+    return o;
+}
+
+fn sym_head[&h](heap: &!h Heap, b: buffer.Buffer, name: &static [byte], refp: &static [byte]) -> [heap] buffer.Buffer {
+    var o = text(heap, b, "    (symbol \"cancho:"); o = text(heap, o, name); o = text(heap, o, "\"\n      (pin_names (offset 0.5))\n      (exclude_from_sim no) (in_bom yes) (on_board yes)\n");
+    o = text(heap, o, "      (property \"Reference\" \""); o = text(heap, o, refp); o = text(heap, o, "\" (at 2.54 0 0) (effects (font (size 1.27 1.27)) (justify left)))\n");
+    o = text(heap, o, "      (property \"Value\" \"\" (at 2.54 -2.54 0) (effects (font (size 1.27 1.27)) (justify left)))\n");
+    o = text(heap, o, "      (property \"Footprint\" \"\" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))\n");
+    o = text(heap, o, "      (property \"Datasheet\" \"~\" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))\n");
+    return o;
+}
+
+// a two-pin part: pin 1 on top, pin 2 below, passive
+fn two_pin[&h](heap: &!h Heap, b: buffer.Buffer, name: &static [byte], refp: &static [byte], n1: &static [byte], n2: &static [byte]) -> [heap] buffer.Buffer {
+    var o = sym_head(heap, b, name, refp);
+    o = text(heap, o, "      (symbol \""); o = text(heap, o, name); o = text(heap, o, "_1_1\"\n");
+    o = rect(heap, o, 0 - 102, 254, 102, 0 - 254);
+    o = pin(heap, o, "passive", 0, 381, 270, 127, n1, "1");
+    o = pin(heap, o, "passive", 0, 0 - 381, 90, 127, n2, "2");
+    o = text(heap, o, "      )\n");
+    return text(heap, o, "    )\n");
+}
+
+fn lib_symbols[&h](heap: &!h Heap, b: buffer.Buffer) -> [heap] buffer.Buffer {
+    var o = text(heap, b, "  (lib_symbols\n");
+    // R, C, a fuse and a diode are all upright two-pin parts here; their pin names say which end is which
+    o = two_pin(heap, o, "R", "R", "~", "~");
+    o = two_pin(heap, o, "C", "C", "~", "~");
+    o = two_pin(heap, o, "Fuse", "F", "~", "~");
+    o = two_pin(heap, o, "Diode", "D", "K", "A");
+    // the 3-pin shunt reference (SOT-23: pin 3 cathode, pin 1 anode, pin 2 not connected)
+    o = sym_head(heap, o, "Shunt", "U");
+    o = text(heap, o, "      (symbol \"Shunt_1_1\"\n");
+    o = rect(heap, o, 0 - 102, 254, 102, 0 - 254);
+    o = pin(heap, o, "passive", 0, 381, 270, 127, "K", "3");
+    o = pin(heap, o, "passive", 0, 0 - 381, 90, 127, "A", "1");
+    o = text(heap, o, "      )\n");
+    o = text(heap, o, "    )\n");
+    // the rheostat: pin 1 top, pin 3 bottom, wiper 2 on the right (tied to 3 on the sheet)
+    o = sym_head(heap, o, "Trim", "RV");
+    o = text(heap, o, "      (symbol \"Trim_1_1\"\n");
+    o = rect(heap, o, 0 - 102, 254, 102, 0 - 254);
+    o = pin(heap, o, "passive", 0, 381, 270, 127, "1", "1");
+    o = pin(heap, o, "passive", 0, 0 - 381, 90, 127, "3", "3");
+    o = pin(heap, o, "passive", 508, 0, 180, 254, "W", "2");
+    o = text(heap, o, "      )\n");
+    o = text(heap, o, "    )\n");
+    // the dual op-amp, as one box: 1 OUT1, 2 IN1-, 3 IN1+, 4 V-, 5 IN2+, 6 IN2-, 7 OUT2, 8 V+
+    o = sym_head(heap, o, "OPA2134", "U");
+    o = text(heap, o, "      (symbol \"OPA2134_1_1\"\n");
+    o = rect(heap, o, 0 - 508, 762, 508, 0 - 762);
+    o = pin(heap, o, "input", 0 - 762, 508, 0, 254, "IN1+", "3");
+    o = pin(heap, o, "input", 0 - 762, 254, 0, 254, "IN1-", "2");
+    o = pin(heap, o, "input", 0 - 762, 0 - 254, 0, 254, "IN2+", "5");
+    o = pin(heap, o, "input", 0 - 762, 0 - 508, 0, 254, "IN2-", "6");
+    o = pin(heap, o, "output", 762, 508, 180, 254, "OUT1", "1");
+    o = pin(heap, o, "output", 762, 0 - 508, 180, 254, "OUT2", "7");
+    o = pin(heap, o, "power_in", 0, 1016, 270, 254, "V+", "8");
+    o = pin(heap, o, "power_in", 0, 0 - 1016, 90, 254, "V-", "4");
+    o = text(heap, o, "      )\n");
+    o = text(heap, o, "    )\n");
+    // connectors of 2 and 3 pins, pins on the left
+    o = sym_head(heap, o, "Conn2", "J");
+    o = text(heap, o, "      (symbol \"Conn2_1_1\"\n");
+    o = rect(heap, o, 0 - 254, 381, 254, 0 - 127);
+    o = pin(heap, o, "passive", 0 - 508, 254, 0, 254, "1", "1");
+    o = pin(heap, o, "passive", 0 - 508, 0, 0, 254, "2", "2");
+    o = text(heap, o, "      )\n");
+    o = text(heap, o, "    )\n");
+    o = sym_head(heap, o, "Conn3", "J");
+    o = text(heap, o, "      (symbol \"Conn3_1_1\"\n");
+    o = rect(heap, o, 0 - 254, 381, 254, 0 - 381);
+    o = pin(heap, o, "passive", 0 - 508, 254, 0, 254, "1", "1");
+    o = pin(heap, o, "passive", 0 - 508, 0, 0, 254, "2", "2");
+    o = pin(heap, o, "passive", 0 - 508, 0 - 254, 0, 254, "3", "3");
+    o = text(heap, o, "      )\n");
+    o = text(heap, o, "    )\n");
+    // a power flag: tells the checker that a net is driven from outside the board
+    o = sym_head(heap, o, "PWR_FLAG", "#FLG");
+    o = text(heap, o, "      (symbol \"PWR_FLAG_1_1\"\n");
+    o = pin(heap, o, "power_out", 0, 0, 90, 0, "pwr", "1");
+    o = text(heap, o, "      )\n");
+    o = text(heap, o, "    )\n");
+    return text(heap, o, "  )\n");
+}
+
+// ---- placing ----
+// the instance counter lives in a one-element slice so the helpers can number as they go
+fn label[&h, &s](heap: &!h Heap, b: buffer.Buffer, id: &!s [int], name: &static [byte], x: int, y: int, ang: int) -> [heap] buffer.Buffer {
+    id[0] = id[0] + 1;
+    var o = text(heap, b, "  (label \""); o = text(heap, o, name); o = text(heap, o, "\" (at "); o = dec(heap, o, x); o = text(heap, o, " "); o = dec(heap, o, y);
+    o = text(heap, o, " "); o = buffer.push_nat(heap, o, ang); o = text(heap, o, ") (effects (font (size 1.27 1.27)) (justify ");
+    if ang == 180 { o = text(heap, o, "right bottom"); } else { o = text(heap, o, "left bottom"); }
+    o = text(heap, o, ")) (uuid "); o = uuid(heap, o, id[0]); o = text(heap, o, "))\n");
+    return o;
+}
+
+fn place[&h, &s](heap: &!h Heap, b: buffer.Buffer, id: &!s [int], lib: &static [byte], refd: &static [byte], value: &static [byte], fp: &static [byte], x: int, y: int, npins: int) -> [heap] buffer.Buffer {
+    id[0] = id[0] + 1;
+    var o = text(heap, b, "  (symbol (lib_id \"cancho:"); o = text(heap, o, lib); o = text(heap, o, "\") (at "); o = dec(heap, o, x); o = text(heap, o, " "); o = dec(heap, o, y);
+    o = text(heap, o, " 0) (unit 1) (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no) (uuid "); o = uuid(heap, o, id[0]); o = text(heap, o, ")\n");
+    o = text(heap, o, "    (property \"Reference\" \""); o = text(heap, o, refd); o = text(heap, o, "\" (at "); o = dec(heap, o, x + 254); o = text(heap, o, " "); o = dec(heap, o, y - 127);
+    o = text(heap, o, " 0) (effects (font (size 1.27 1.27)) (justify left)))\n");
+    o = text(heap, o, "    (property \"Value\" \""); o = text(heap, o, value); o = text(heap, o, "\" (at "); o = dec(heap, o, x + 254); o = text(heap, o, " "); o = dec(heap, o, y + 127);
+    o = text(heap, o, " 0) (effects (font (size 1.27 1.27)) (justify left)))\n");
+    o = text(heap, o, "    (property \"Footprint\" \""); o = text(heap, o, fp); o = text(heap, o, "\" (at "); o = dec(heap, o, x); o = text(heap, o, " "); o = dec(heap, o, y);
+    o = text(heap, o, " 0) (effects (font (size 1.27 1.27)) (hide yes)))\n");
+    o = text(heap, o, "    (property \"Datasheet\" \"~\" (at "); o = dec(heap, o, x); o = text(heap, o, " "); o = dec(heap, o, y); o = text(heap, o, " 0) (effects (font (size 1.27 1.27)) (hide yes)))\n");
+    var k = 1;
+    while k <= npins {
+        id[0] = id[0] + 1;
+        o = text(heap, o, "    (pin \""); o = buffer.push_nat(heap, o, k); o = text(heap, o, "\" (uuid "); o = uuid(heap, o, id[0]); o = text(heap, o, "))\n");
+        k = k + 1;
+    }
+    o = text(heap, o, "    (instances (project \"amp\" (path \"/00000000-0000-4000-8000-000000000001\" (reference \""); o = text(heap, o, refd);
+    o = text(heap, o, "\") (unit 1))))\n  )\n");
+    return o;
+}
+
+// a 2-pin part at (x, y) on nets n1 (top) and n2 (bottom)
+fn two[&h, &s](heap: &!h Heap, b: buffer.Buffer, id: &!s [int], lib: &static [byte], refd: &static [byte], value: &static [byte], fp: &static [byte], x: int, y: int, n1: &static [byte], n2: &static [byte]) -> [heap] buffer.Buffer {
+    var o = place(heap, b, id, lib, refd, value, fp, x, y, 2);
+    o = label(heap, o, id, n1, x, y - 381, 90);
+    o = label(heap, o, id, n2, x, y + 381, 270);
+    return o;
+}
+
+fn resistor[&h, &s](heap: &!h Heap, b: buffer.Buffer, id: &!s [int], refd: &static [byte], value: &static [byte], x: int, y: int, n1: &static [byte], n2: &static [byte]) -> [heap] buffer.Buffer {
+    return two(heap, b, id, "R", refd, value, "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal", x, y, n1, n2);
+}
+
+fn cap[&h, &s](heap: &!h Heap, b: buffer.Buffer, id: &!s [int], refd: &static [byte], value: &static [byte], fp: &static [byte], x: int, y: int, n1: &static [byte], n2: &static [byte]) -> [heap] buffer.Buffer {
+    return two(heap, b, id, "C", refd, value, fp, x, y, n1, n2);
+}
+
+// the dual op-amp at (x, y) with its eight nets: in1+, in1-, in2+, in2-, out1, out2
+fn opamp[&h, &s](heap: &!h Heap, b: buffer.Buffer, id: &!s [int], refd: &static [byte], x: int, y: int, p1: &static [byte], m1: &static [byte], p2: &static [byte], m2: &static [byte], o1: &static [byte], o2: &static [byte]) -> [heap] buffer.Buffer {
+    var o = place(heap, b, id, "OPA2134", refd, "OPA2134PA", "Package_DIP:DIP-8_W7.62mm", x, y, 8);
+    o = label(heap, o, id, p1, x - 762, y - 508, 180);
+    o = label(heap, o, id, m1, x - 762, y - 254, 180);
+    o = label(heap, o, id, p2, x - 762, y + 254, 180);
+    o = label(heap, o, id, m2, x - 762, y + 508, 180);
+    o = label(heap, o, id, o1, x + 762, y - 508, 0);
+    o = label(heap, o, id, o2, x + 762, y + 508, 0);
+    o = label(heap, o, id, "+12V", x, y - 1016, 90);
+    o = label(heap, o, id, "-12V", x, y + 1016, 270);
+    return o;
+}
+
+fn conn2[&h, &s](heap: &!h Heap, b: buffer.Buffer, id: &!s [int], refd: &static [byte], value: &static [byte], x: int, y: int, n1: &static [byte], n2: &static [byte]) -> [heap] buffer.Buffer {
+    var o = place(heap, b, id, "Conn2", refd, value, "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical", x, y, 2);
+    o = label(heap, o, id, n1, x - 508, y - 254, 180);
+    o = label(heap, o, id, n2, x - 508, y, 180);
+    return o;
+}
+
+// one piezo driver channel: the op-amp half is placed by the caller; here the passives. `rg_to` is the net Rg returns to (VREF for X and Y, GND for Z)
+fn channel[&h, &s](heap: &!h Heap, b: buffer.Buffer, id: &!s [int], x: int, y: int, r_g: &static [byte], r_f: &static [byte], c_f: &static [byte],
+                   rg_ref: &static [byte], rf_ref: &static [byte], cf_ref: &static [byte], ri_ref: &static [byte], rg_to: &static [byte],
+                   inn: &static [byte], oa: &static [byte], out: &static [byte]) -> [heap] buffer.Buffer {
+    var o = resistor(heap, b, id, rg_ref, r_g, x, y, inn, rg_to);
+    o = resistor(heap, o, id, rf_ref, r_f, x + 1524, y, inn, out);
+    o = cap(heap, o, id, cf_ref, c_f, "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm", x + 3048, y, inn, oa);
+    o = resistor(heap, o, id, ri_ref, "47", x + 4572, y, oa, out);
+    return o;
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(args); release(net); release(clock); release(signals); release(exec);
+    var code = 0;
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 65532);
+        region r {
+            let id = alloc_slice[r](1, 1);
+            o = text(h, o, "(kicad_sch (version 20250114) (generator \"cancho-afm\") (generator_version \"1\") (uuid \"00000000-0000-4000-8000-000000000001\") (paper \"A3\")\n");
+            o = text(h, o, "  (title_block (title \"cancho-afm: piezo driver board\") (rev \"A\") (comment 1 \"generated by hw/kicad/gen_sch.cho; not built, not simulated as a schematic\"))\n");
+            o = lib_symbols(h, o);
+            // ---- X: U1 unit 1 ----
+            o = opamp(h, o, id, "U1", 7874, 6096, "X_IN", "XN", "Y_IN", "YN", "XOA", "YOA");
+            o = channel(h, o, id, 11938, 5080, "10k", "69.8k", "330p", "R1", "R2", "C1", "R3", "VREF", "XN", "XOA", "X_OUT");
+            // ---- Y: U1 unit 2 ----
+            o = channel(h, o, id, 11938, 7874, "10k", "69.8k", "330p", "R4", "R5", "C2", "R6", "VREF", "YN", "YOA", "Y_OUT");
+            // ---- Z: U2 unit 1, and the reference buffer on unit 2 ----
+            o = opamp(h, o, id, "U2", 7874, 11938, "Z_IN", "ZN", "VDIV", "VREF", "ZOA", "VREF");
+            o = channel(h, o, id, 11938, 10922, "10k", "30.1k", "680p", "R7", "R8", "C3", "R9", "GND", "ZN", "ZOA", "Z_OUT");
+            // ---- the 1.43 V reference: 2.5 V shunt, a divider with a trimmer, buffered by U2 unit 2 ----
+            o = resistor(h, o, id, "R10", "9.53k", 3048, 11938, "+12V", "VR25");
+            o = place(h, o, id, "Shunt", "U3", "LM4040-2.5", "Package_TO_SOT_SMD:SOT-23", 3048, 14986, 3);
+            o = label(h, o, id, "VR25", 3048, 14986 - 381, 90);
+            o = label(h, o, id, "GND", 3048, 14986 + 381, 270);
+            o = resistor(h, o, id, "R11", "2.2k", 5080, 14986, "VR25", "VDIV");
+            o = resistor(h, o, id, "R12", "2.7k", 6604, 14986, "VDIV", "VT");
+            o = place(h, o, id, "Trim", "RV1", "1k", "Potentiometer_THT:Potentiometer_Bourns_3296W_Vertical", 7874, 14986, 3);
+            o = label(h, o, id, "VT", 7874, 14986 - 381, 90);
+            o = label(h, o, id, "GND", 7874, 14986 + 381, 270);
+            o = label(h, o, id, "GND", 7874 + 508, 14986, 0);
+            // ---- connectors: the three DAC inputs, three outputs, the supply ----
+            o = conn2(h, o, id, "J1", "DAC X (Pmod DA3)", 1016, 5080, "X_IN", "GND");
+            o = conn2(h, o, id, "J2", "DAC Y (Pmod DA3)", 1016, 7874, "Y_IN", "GND");
+            o = conn2(h, o, id, "J3", "DAC Z (Pmod DA3)", 1016, 10922, "Z_IN", "GND");
+            o = conn2(h, o, id, "J4", "X piezo", 19050, 5080, "X_OUT", "GND");
+            o = conn2(h, o, id, "J5", "Y piezo", 19050, 7874, "Y_OUT", "GND");
+            o = conn2(h, o, id, "J6", "Z piezo", 19050, 10922, "Z_OUT", "GND");
+            // the supply: +12 V, GND, -12 V in; a fuse in each rail and a diode across each, reversed, so a wrong supply blows the fuse
+            o = place(h, o, id, "Conn3", "J7", "supply", "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical", 1016, 16002, 3);
+            o = label(h, o, id, "+12V_IN", 1016 - 508, 16002 - 254, 180);
+            o = label(h, o, id, "GND", 1016 - 508, 16002, 180);
+            o = label(h, o, id, "-12V_IN", 1016 - 508, 16002 + 254, 180);
+            o = two(h, o, id, "Fuse", "F1", "500mA", "Fuse:Fuse_1206_3216Metric", 13970, 16002, "+12V_IN", "+12V");
+            o = two(h, o, id, "Fuse", "F2", "500mA", "Fuse:Fuse_1206_3216Metric", 15494, 16002, "-12V_IN", "-12V");
+            o = two(h, o, id, "Diode", "D1", "1N5819", "Diode_THT:D_DO-41_SOD81_P10.16mm_Horizontal", 17018, 16002, "+12V", "GND");
+            o = two(h, o, id, "Diode", "D2", "1N5819", "Diode_THT:D_DO-41_SOD81_P10.16mm_Horizontal", 18542, 16002, "GND", "-12V");
+            var k = 0;
+            while k < 3 {
+                var fr = "#FLG01";
+                if k == 1 { fr = "#FLG02"; }
+                if k == 2 { fr = "#FLG03"; }
+                o = place(h, o, id, "PWR_FLAG", fr, "PWR_FLAG", "", 13970 + 1524 * k, 18034, 1);
+                if k == 0 { o = label(h, o, id, "+12V", 13970, 18034, 0); }
+                if k == 1 { o = label(h, o, id, "GND", 15494, 18034, 0); }
+                if k == 2 { o = label(h, o, id, "-12V", 17018, 18034, 0); }
+                k = k + 1;
+            }
+            // decoupling at each op-amp: 100 nF and 10 uF from each rail to ground
+            o = cap(h, o, id, "C4", "100n", "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm", 22098, 5080, "+12V", "GND");
+            o = cap(h, o, id, "C5", "10u", "Capacitor_THT:C_Rect_L7.2mm_W3.0mm_P5.00mm_FKS2_FKP2_MKS2_MKP2", 23622, 5080, "+12V", "GND");
+            o = cap(h, o, id, "C6", "100n", "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm", 24892, 5080, "GND", "-12V");
+            o = cap(h, o, id, "C7", "10u", "Capacitor_THT:C_Rect_L7.2mm_W3.0mm_P5.00mm_FKS2_FKP2_MKS2_MKP2", 26416, 5080, "GND", "-12V");
+            o = cap(h, o, id, "C8", "100n", "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm", 22098, 7874, "+12V", "GND");
+            o = cap(h, o, id, "C9", "10u", "Capacitor_THT:C_Rect_L7.2mm_W3.0mm_P5.00mm_FKS2_FKP2_MKS2_MKP2", 23622, 7874, "+12V", "GND");
+            o = cap(h, o, id, "C10", "100n", "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm", 24892, 7874, "GND", "-12V");
+            o = cap(h, o, id, "C11", "10u", "Capacitor_THT:C_Rect_L7.2mm_W3.0mm_P5.00mm_FKS2_FKP2_MKS2_MKP2", 26416, 7874, "GND", "-12V");
+            o = text(h, o, "  (sheet_instances (path \"/\" (page \"1\")))\n  (embedded_fonts no)\n)\n");
+        }
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(heap);
+    release(io);
+    if code < 0 { return 1; }
+    return 0;
+}

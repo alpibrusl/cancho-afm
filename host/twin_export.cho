@@ -1,0 +1,110 @@
+edition 7;
+
+import std.buffer;
+import board;
+import script;
+import run_twin;
+import session;
+
+// Runs the whole automatic procedure against the software twin and prints a JSON document for the cancho-ui page (ui/afm.cui): what was found, what was chosen,
+// the image, and a trace of the amplitude, Z and X while the scan is run once more. Software twin: a prediction of this software, not a measurement.
+// `cancho run host/demo_twin.cho host/session.cho host/script.cho host/run_twin.cho host/proto.cho host/twin_link.cho sim/board.cho sim/lockin.cho
+//  sim/pid.cho sim/raster.cho sim/raster_sine.cho sim/plant.cho sim/tune.cho sim/approach.cho host/regs.cho --std > ui/twin.json`
+fn text[&h, &r](heap: &!h Heap, b: buffer.Buffer, s: &r [byte]) -> [heap] buffer.Buffer { return buffer.append(heap, b, s); }
+
+fn num[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer {
+    if n < 0 { return buffer.push_nat(heap, buffer.append(heap, b, "-"), 0 - n); }
+    return buffer.push_nat(heap, b, n);
+}
+
+fn list[&h, &k, &s](heap: &!h Heap, b: buffer.Buffer, key: &k [byte], v: &s [int], n: int) -> [heap] buffer.Buffer {
+    var o = text(heap, b, "\"");
+    o = text(heap, o, key); o = text(heap, o, "\":[");
+    var i = 0;
+    while i < n {
+        if i > 0 { o = text(heap, o, ","); }
+        o = num(heap, o, v[i]);
+        i = i + 1;
+    }
+    return text(heap, o, "]");
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(args); release(net); release(clock); release(signals); release(exec);
+    var code = 0;
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 16384);
+        region r {
+            let rf = alloc_slice[r](64, 0);
+            let st = alloc_slice[r](32, 0);
+            let fl = alloc_slice[r](16, 0.0);
+            board.reset(rf, st, fl);
+            board.set_plant(fl, 32781.4, 500.0, 2000.0, 2000.0, 100.0, 600.0, 2.0);
+            board.set_distance(fl, 11000.0, 198.4375);
+            let ss = alloc_slice[r](32, 0);
+            let sf = alloc_slice[r](8, 0.0);
+            let sc = alloc_slice[r](4 * 200, 0);
+            let out = alloc_slice[r](128, 0);
+            let img = alloc_slice[r](64, 0 - 1);
+            let req = alloc_slice[r](16, byte_of(0));
+            let rsp = alloc_slice[r](16, byte_of(0));
+            var guard = 0;
+            var failures = 0;
+            while ss[0] != 99 && ss[0] != 98 && guard < 40000 {
+                let n = session.build(ss, sf, sc);
+                failures = failures + run_twin.run(sc, n, rf, st, fl, out, req, rsp);
+                session.consume(ss, sf, out, img);
+                guard = guard + 1;
+            }
+            // the same scan once more, sampled every loop step pair: amplitude figure, Z and X
+            // the session stops at the end (run = 0); start the loop from the Z it handed over at (as the session's own hand-off does), scanning
+            board.write(rf, st, 1, 0);
+            board.write(rf, st, 15, ss[22]);
+            board.write(rf, st, 1, 23);       // run + drive + scan + adc_run
+            let ta = alloc_slice[r](400, 0);
+            let tz = alloc_slice[r](400, 0);
+            let tx = alloc_slice[r](400, 0);
+            var k = 0;
+            while k < 400 {
+                board.write(rf, st, 18, 0);       // the host's heartbeat: the deadman retracts the tip without it
+                board.advance(rf, st, fl, 64 * 4);
+                let (a, ra) = board.read(rf, st, 32);
+                let (z, rz) = board.read(rf, st, 33);
+                let (x, rx) = board.read(rf, st, 34);
+                ta[k] = a; tz[k] = z; tx[k] = x;
+                k = k + 1;
+            }
+            o = text(h, o, "{\"note\":\"software twin: a prediction of this software, not a measurement\"");
+            o = text(h, o, ",\"stage\":"); o = num(h, o, ss[0]);
+            o = text(h, o, ",\"failure\":"); o = num(h, o, ss[2]);
+            o = text(h, o, ",\"refused_writes\":"); o = num(h, o, failures);
+            o = text(h, o, ",\"f0_tenths_hz\":"); o = num(h, o, truncate(sf[0] * 10.0));
+            o = text(h, o, ",\"q\":"); o = num(h, o, truncate(sf[1]));
+            o = text(h, o, ",\"shift\":"); o = num(h, o, ss[11]);
+            o = text(h, o, ",\"setpoint\":"); o = num(h, o, ss[12]);
+            o = text(h, o, ",\"kp\":"); o = num(h, o, ss[13]);
+            o = text(h, o, ",\"ki\":"); o = num(h, o, ss[14]);
+            o = text(h, o, ",\"motor_steps\":"); o = num(h, o, ss[21]);
+            o = text(h, o, ",\"contact_z_pm\":"); o = num(h, o, ss[9]);
+            o = text(h, o, ",\"settled_z_pm\":"); o = num(h, o, ss[22]);
+            o = text(h, o, ",\"pixels\":"); o = num(h, o, ss[16]);
+            o = text(h, o, ",\"period_tenths_px\":"); o = num(h, o, ss[17]);
+            o = text(h, o, ",\"line_width\":12,");
+            o = list(h, o, "image_z_pm", img, 36);
+            o = text(h, o, ",");
+            o = list(h, o, "trace_amp", ta, 400);
+            o = text(h, o, ",");
+            o = list(h, o, "trace_z_pm", tz, 400);
+            o = text(h, o, ",");
+            o = list(h, o, "trace_x_codes", tx, 400);
+            o = text(h, o, "}\n");
+        }
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(heap);
+    release(io);
+    if code < 0 { return 1; }
+    return 0;
+}
