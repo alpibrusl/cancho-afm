@@ -1,0 +1,118 @@
+edition 8;
+
+import std.io;
+import std.buffer;
+import proto;
+import regs;
+import live_json;
+
+// live_tty.cho -- a READ-ONLY monitor of the real board for the live console (ui/live.cui). It reads the identifier first and stops, writing nothing, if it is not afm_top's;
+// then, every 250 ms, it READS CTRL, STATUS, AMP, ZOUT, XOUT, YOUT and ADC0 and prints one JSON line (host/live_json.cho, source "board"). It never writes a register, so it can
+// watch a scan another program runs and cannot disturb it. Needs the edition-8 compiler (Tty). Pace and publish with ui/README.md's loop.
+//   cancho run host/live_tty.cho host/live_json.cho host/proto.cho host/regs.cho --std      (prints 8 lines, 2 s, and exits 0: stdout is flushed at exit, so ui/README.md runs it in a loop)
+
+// One request, one answer: write `n` request bytes, collect `want` answer bytes. Returns how many arrived.
+fn exchange[&q, &p, &a, &b, &c, &d](port: &!q Port, pw: &!p Poller, req: &a [byte], n: int, rsp: &!b [byte], want: int, chunk: &!c [byte], ev: &!d [int]) -> [poll, tty_read, tty_write] int {
+    tty_flush_input(port);
+    tty_write(port, req[0..n]);
+    var got = 0;
+    var tries = 0;
+    while got < want && tries < 60 {
+        let k = tty_read(port, chunk);
+        if k > 0 {
+            var i = 0;
+            while i < k && got < want {
+                rsp[got] = chunk[i];
+                got = got + 1;
+                i = i + 1;
+            }
+        } else {
+            poller_wait(pw, ev, 20);
+            tries = tries + 1;
+        }
+    }
+    return got;
+}
+
+// read register `idx`: ans[0] = the answer code (-1 if it did not answer), ans[1] = the value
+fn read_reg[&q, &p, &a, &b, &c, &d, &e](port: &!q Port, pw: &!p Poller, req: &!a [byte], rsp: &!b [byte], chunk: &!c [byte], ev: &!d [int], ans: &!e [int], idx: int) -> [poll, tty_read, tty_write] int {
+    proto.read_req(req, idx);
+    let got = exchange(port, pw, req, 5, rsp, 5, chunk, ev);
+    if got == 5 {
+        ans[0] = proto.resp_code(rsp);
+        ans[1] = proto.resp_value(rsp);
+    } else {
+        ans[0] = 0 - 1;
+        ans[1] = 0;
+    }
+    return ans[0];
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec, tty } = split(world);
+    release(ffi); release(fs); release(args); release(net); release(signals); release(exec); release(clock);
+    var status = 3;
+    let device = narrow(tty, "/dev");
+    borrow mut heap as &!h in {
+        match poller_new() {
+            Polling::Failed(e) => { status = 1; }
+            Polling::Ok(open) => {
+                var p = open;
+                borrow device as &t in {
+                    match tty_open(t, "/dev/ttyUSB1") {
+                        TtyOpened::Failed(errno) => { status = 4; }
+                        TtyOpened::Ok(port) => {
+                            borrow mut port as &!q in {
+                                if tty_configure(q, 115200) != 0 { status = 5; }
+                                else {
+                                    borrow mut p as &!pw in { poller_add_tty(pw, q, 1, 1); }
+                                    region r {
+                                        let req = alloc_slice[r](16, byte_of(0));
+                                        let rsp = alloc_slice[r](16, byte_of(0));
+                                        let chunk = alloc_slice[r](16, byte_of(0));
+                                        let ev = alloc_slice[r](2, 0);
+                                        let ans = alloc_slice[r](2, 0);
+                                        let v = alloc_slice[r](8, 0);
+                                        borrow mut p as &!pw in {
+                                            let code = read_reg(q, pw, req, rsp, chunk, ev, ans, regs.id());
+                                            if code != 0 || ans[1] != 0xAF500001 { status = 6; }
+                                            else {
+                                                status = 0;
+                                                var t = 0;
+                                                while t < 8 && status == 0 {
+                                                    var ok = 0;
+                                                    ok = ok + read_reg(q, pw, req, rsp, chunk, ev, ans, regs.ctrl());    v[0] = ans[1];
+                                                    ok = ok + read_reg(q, pw, req, rsp, chunk, ev, ans, regs.status());  v[1] = ans[1];
+                                                    ok = ok + read_reg(q, pw, req, rsp, chunk, ev, ans, regs.amp());     v[2] = ans[1];
+                                                    ok = ok + read_reg(q, pw, req, rsp, chunk, ev, ans, regs.zout());    v[3] = proto.signed(ans[1]);
+                                                    ok = ok + read_reg(q, pw, req, rsp, chunk, ev, ans, regs.xout());    v[4] = ans[1];
+                                                    ok = ok + read_reg(q, pw, req, rsp, chunk, ev, ans, regs.yout());    v[5] = ans[1];
+                                                    ok = ok + read_reg(q, pw, req, rsp, chunk, ev, ans, regs.adc0());    v[6] = ans[1];
+                                                    if ok != 0 { status = 7; }
+                                                    else {
+                                                        var o = buffer.empty(h, 256);
+                                                        o = live_json.line(h, o, "board", t, v[0], v[1], v[2], v[3], v[4], v[5], v[6]);
+                                                        borrow mut io as &!w in { borrow o as &b in { buffer.write(w, b); } }
+                                                        buffer.drop(h, o);
+                                                    }
+                                                    poller_wait(pw, ev, 250);
+                                                    t = t + 1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            tty_close(port);
+                        }
+                    }
+                }
+                poller_close(p);
+            }
+        }
+    }
+    release(device);
+    release(heap);
+    release(io);
+    return status;
+}

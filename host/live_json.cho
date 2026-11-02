@@ -1,0 +1,33 @@
+edition 5;
+
+module live_json;
+
+import std.buffer;
+
+// `live_json` -- the one line of JSON the live console (ui/live.cui) reads, written the same way by the twin (host/live_twin.cho) and by the real board (host/live_tty.cho):
+// {"source":..,"t":n,"ctrl":..,"status":..,"amp":..,"z_pm":..,"x":..,"y":..,"adc0":..}. Numbers are the raw register values (host/regs.cho): AMP the detector's figure, Z in pm,
+// X and Y in DAC codes, ADC0 the converter's last code. `source` says which one wrote it, so a page can never show twin data as a measurement without saying so.
+fn text[&h, &r](heap: &!h Heap, b: buffer.Buffer, s: &r [byte]) -> [heap] buffer.Buffer { return buffer.append(heap, b, s); }
+
+fn field[&h, &r](heap: &!h Heap, b: buffer.Buffer, key: &r [byte], n: int) -> [heap] buffer.Buffer {
+    var o = text(heap, b, ",\"");
+    o = text(heap, o, key);
+    o = text(heap, o, "\":");
+    if n < 0 { return buffer.push_nat(heap, buffer.append(heap, o, "-"), 0 - n); }
+    return buffer.push_nat(heap, o, n);
+}
+
+pub fn line[&h, &r](heap: &!h Heap, b: buffer.Buffer, source: &r [byte], t: int, ctrl: int, status: int, amp: int, z: int, x: int, y: int, adc0: int) -> [heap] buffer.Buffer {
+    var o = text(heap, b, "{\"source\":\"");
+    o = text(heap, o, source);
+    o = text(heap, o, "\"");
+    o = field(heap, o, "t", t);
+    o = field(heap, o, "ctrl", ctrl);
+    o = field(heap, o, "status", status);
+    o = field(heap, o, "amp", amp);
+    o = field(heap, o, "z_pm", z);
+    o = field(heap, o, "x", x);
+    o = field(heap, o, "y", y);
+    o = field(heap, o, "adc0", adc0);
+    return text(heap, o, "}\n");
+}
