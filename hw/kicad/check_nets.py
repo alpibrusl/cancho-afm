@@ -79,5 +79,30 @@ check(between('R11', 'VR25', 'VDIV') and between('R12', 'VDIV', 'VT') and pin_ne
 # every op-amp is decoupled on both rails
 for c, a, b in [('C4', '+12V', 'GND'), ('C5', '+12V', 'GND'), ('C6', 'GND', '-12V'), ('C7', 'GND', '-12V')]:
     check(between(c, a, b), f"decoupling {c} {parts[c]} between {a} and {b}")
+
+# ---- the fork's front end against hw/amp/fork_fe.cir ----
+fe = {}
+for line in open('../amp/fork_fe.cir'):
+    m = re.match(r'^(Cc|Rd1|Rd2|Rc1|Rc2|Rf|Cfb|Cc2|Rb|Rg2|Rf2|Cf2|Rs)\s+\S+\s+\S+\s+(\S+)', line)
+    if m: fe[m.group(1)] = m.group(2)
+    m = re.search(r'\.param.*\bRF=(\S+).*\bCFB=(\S+)', line)
+    if m: fe['Rf'], fe['Cfb'] = m.group(1), m.group(2)
+def norm(v):
+    v = v.replace('Meg', 'M')
+    return {'{RF}': '1M', '{CFB}': '1p'}.get(v, v)
+spice_ref = {'Cc': 'C12', 'Rd1': 'R13', 'Rd2': 'R14', 'Rc1': 'R15', 'Rc2': 'R16', 'Rf': 'R17', 'Cfb': 'C14', 'Cc2': 'C15', 'Rb': 'R18', 'Rg2': 'R19', 'Rf2': 'R20', 'Cf2': 'C16', 'Rs': 'R21'}
+for k, ref in spice_ref.items():
+    want = {'Rf': '1M', 'Cfb': '1p'}.get(k, norm(fe.get(k, '?')))
+    check(parts[ref] == want, f"fork front end: {ref} ({k}) is {parts[ref]}, the simulation's {want}")
+check(between('C12', 'DACF', 'DD') and between('R13', 'DD', 'E') and between('R14', 'E', 'GND'), "fork front end: drive Cc - Rd1 - E - Rd2 - GND")
+check(between('R15', 'E', 'CI') and between('R16', 'CI', 'CO') and between('C13', 'CO', 'TIN'), "fork front end: C0 compensation E - inverter - trimmer - TIN")
+check(pin_net.get(('U4', '3')) == 'GND' and pin_net.get(('U4', '2')) == 'CI' and pin_net.get(('U4', '1')) == 'CO', "fork front end: U4 unit 1 is the inverter (CI -> CO)")
+check(pin_net.get(('U4', '5')) == 'GND' and pin_net.get(('U4', '6')) == 'TIN' and pin_net.get(('U4', '7')) == 'TOUT', "fork front end: U4 unit 2 is the transimpedance stage (TIN -> TOUT)")
+check(between('R17', 'TIN', 'TOUT') and between('C14', 'TIN', 'TOUT'), "fork front end: 1 Mohm || 1 pF across the transimpedance stage")
+check(between('C15', 'TOUT', 'B') and between('R18', 'B', 'VMID') and between('R19', 'N2', 'VMID') and between('R20', 'N2', 'SOUT') and between('C16', 'N2', 'SOUT'), "fork front end: AC coupling, gain 11 about VMID")
+check(pin_net.get(('U5', '3')) == 'B' and pin_net.get(('U5', '2')) == 'N2' and pin_net.get(('U5', '1')) == 'SOUT', "fork front end: U5 unit 1 is the gain stage")
+check(pin_net.get(('U5', '5')) == 'VMIDD' and pin_net.get(('U5', '6')) == 'VMID' and pin_net.get(('U5', '7')) == 'VMID', "fork front end: U5 unit 2 buffers the 1.65 V middle")
+check(between('R22', '+3V3', 'VMIDD') and between('R23', 'VMIDD', 'GND') and parts['R22'] == parts['R23'], "fork front end: VMID is half of 3.3 V")
+check(between('R21', 'SOUT', 'ADC') and between('D3', '+3V3', 'ADC') and between('D4', 'ADC', 'GND'), "fork front end: 1 kohm and the two clamp diodes protect the ADC input")
 print("%d failure(s)" % fails)
 sys.exit(1 if fails else 0)
