@@ -134,8 +134,10 @@ if os.environ.get('PADS_OUT'):
                     r = (float(size[1]) ** 2 + float(size[2]) ** 2) ** 0.5 / 2     # a square pad reaches its corner
                 through = str(node[2]) in ('thru_hole', 'np_thru_hole')
                 owner = code if code else 250
-                route = 0 if (name is None or name == '/GND') else 1
-                lines.append('%d %d %d %d %d %d' % (owner, round((dx + float(at[1])) * 1000), round((dy + float(at[2])) * 1000), round(r * 1000), 0 if through else 1, route))
+                route = 0 if name is None else 1
+                width = 500 if name in ('/+12V', '/-12V') else 250
+                guard = 900 if name == '/TIN' else 0
+                lines.append('%d %d %d %d %d %d %d %d' % (owner, round((dx + float(at[1])) * 1000), round((dy + float(at[2])) * 1000), round(r * 1000), 0 if through else 1, route, width, guard))
     open(os.environ['PADS_OUT'], 'w').write('\n'.join(lines) + '\n')
 
 out = []
@@ -172,7 +174,8 @@ if len(sys.argv) > 3:
         f = line.split()
         if f and f[0] == 'S':
             layer, net_, x1, y1, x2, y2 = f[1], int(f[2]), *[int(v) / 1000 for v in f[3:7]]
-            out.append('  (segment (start %.3f %.3f) (end %.3f %.3f) (width 0.25) (layer "%s") (net %d) (uuid %s))' % (x1, y1, x2, y2, 'F.Cu' if layer == '0' else 'B.Cu', net_, u()))
+            wd = int(f[7]) / 1000
+            out.append('  (segment (start %.3f %.3f) (end %.3f %.3f) (width %.3f) (layer "%s") (net %d) (uuid %s))' % (x1, y1, x2, y2, wd, 'F.Cu' if layer == '0' else 'B.Cu', net_, u()))
         elif f and f[0] == 'V':
             out.append('  (via (at %.3f %.3f) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net %s) (uuid %s))' % (int(f[2]) / 1000, int(f[3]) / 1000, f[1], u()))
         elif f and f[0] == 'F':

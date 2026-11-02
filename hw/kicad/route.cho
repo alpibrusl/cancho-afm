@@ -4,9 +4,9 @@ import std.io;
 import std.buffer;
 
 // route.cho -- a grid router for the piezo driver board, in cancho. It reads /tmp/amprouter/pads.txt (written by gen_pcb.py) and prints the tracks and vias that join each net's pads:
-//   input   line 1: "W H" the board in micrometres; then one line per pad: "net x y radius layers route"  (layers 0 = through-hole, 1 = front copper only; route 0 = an obstacle only, as the GND pad
-//           of a poured net)
-//   output  "S layer net x1 y1 x2 y2" a track segment (layer 0 front, 1 back), "V net x y" a via; "F net" on stderr for a net it could not finish.
+//   input   line 1: "W H" the board in micrometres; then one line per pad: "net x y radius layers route width guard"  (layers 0 = through-hole, 1 = front copper only; route 0 = an obstacle only, as the GND pad
+//           of a poured net; width the net's track width in um; guard 0, or the clearance in um that other copper must keep from this net, for a high-impedance node)
+//   output  "S layer net x1 y1 x2 y2 width" a track segment (layer 0 front, 1 back), "V net x y" a via; "F net" on stderr for a net it could not finish.
 // How: a grid of 127 um, two layers; a net grows as a tree, one pad at a time, by a shortest-path search (Dijkstra, uniform steps, a penalty for a track against the layer's preferred direction
 // and for a via) from every cell of the tree to the nearest pad of the net not yet joined. A routed track and each pad are written into the grid as keep-out disks for the other nets: radius of a
 // track 0.25 mm wide with 0.2 mm clearance, of a via 0.8 mm; a second grid with the larger disks decides where a via may go. No rip-up: a net that is blocked is reported and left, so the answer
@@ -17,7 +17,7 @@ fn track_w() -> [] int { return 250; }
 fn clearance() -> [] int { return 200; }
 fn via_um() -> [] int { return 800; }
 fn edge_um() -> [] int { return 500; }
-fn via_cost() -> [] int { return 30; }
+fn via_cost() -> [] int { return 60; }
 fn big() -> [] int { return 1099511627776; }
 
 fn text[&h, &r](heap: &!h Heap, b: buffer.Buffer, s: &r [byte]) -> [heap] buffer.Buffer { return buffer.append(heap, b, s); }
@@ -167,7 +167,7 @@ fn search[&b, &d, &k, &v, &s, &t](bm: &!b [byte], dist: &!d [int], hk: &!k [int]
 }
 
 // the cells tl[from..to) are one path from the end back to the source: write its straight runs as tracks and its layer changes as vias
-fn emit_path[&h, &t](heap: &!h Heap, out: buffer.Buffer, tl: &t [int], from: int, to: int, nt: int, nx: int, ny: int) -> [heap] buffer.Buffer {
+fn emit_path[&h, &t](heap: &!h Heap, out: buffer.Buffer, tl: &t [int], from: int, to: int, nt: int, wn: int, nx: int, ny: int) -> [heap] buffer.Buffer {
     let g = gridum();
     var o = out;
     var j = from;
@@ -196,7 +196,7 @@ fn emit_path[&h, &t](heap: &!h Heap, out: buffer.Buffer, tl: &t [int], from: int
             let e = tl[k];
             o = text(heap, o, "S "); o = nat(heap, o, la); o = text(heap, o, " "); o = nat(heap, o, nt);
             o = text(heap, o, " "); o = nat(heap, o, xa * g); o = text(heap, o, " "); o = nat(heap, o, ya * g);
-            o = text(heap, o, " "); o = nat(heap, o, (e % nx) * g); o = text(heap, o, " "); o = nat(heap, o, (e / nx % ny) * g); o = text(heap, o, "\n");
+            o = text(heap, o, " "); o = nat(heap, o, (e % nx) * g); o = text(heap, o, " "); o = nat(heap, o, (e / nx % ny) * g); o = text(heap, o, " "); o = nat(heap, o, wn); o = text(heap, o, "\n");
             j = k;
         }
     }
@@ -211,6 +211,18 @@ fn route_all[&h, &b, &d, &k, &v, &s, &t, &p, &o](heap: &!h Heap, bm: &!b [byte],
     while ow[q] > 0 {
         let nt = ow[q];
         q = q + 1;
+        var wnet = track_w();
+        var gnet = 0;
+        var pi = 0;
+        while pi < np {
+            if pr[pi * 8] == nt { wnet = pr[pi * 8 + 6]; gnet = pr[pi * 8 + 7]; pi = np; } else { pi = pi + 1; }
+        }
+        var clr = clearance();
+        if gnet > 0 { clr = gnet; }
+        let rtrack = (wnet / 2 + track_w() / 2 + clr + 2 * g - 1) / g;
+        let rtvia = (wnet / 2 + clr + via_um() / 2 + 2 * g - 1) / g;
+        let rvia = (via_um() / 2 + clr + track_w() / 2 + 2 * g - 1) / g;
+        let rviav = (via_um() + clr + 2 * g - 1) / g;
         var i = 0;
         var c0 = 0;
         while c0 < total { bm[2 * total + c0] = byte_of(0); bm[3 * total + c0] = byte_of(0); c0 = c0 + 1; }
@@ -218,12 +230,12 @@ fn route_all[&h, &b, &d, &k, &v, &s, &t, &p, &o](heap: &!h Heap, bm: &!b [byte],
         var first = true;
         var left = 0;
         while i < np {
-            if pr[i * 6] == nt {
-                let cx = (pr[i * 6 + 1] + g / 2) / g;
-                let cy = (pr[i * 6 + 2] + g / 2) / g;
+            if pr[i * 8] == nt {
+                let cx = (pr[i * 8 + 1] + g / 2) / g;
+                let cy = (pr[i * 8 + 2] + g / 2) / g;
                 var l = 0;
                 while l < 2 {
-                    if l == 0 || pr[i * 6 + 4] == 0 {
+                    if l == 0 || pr[i * 8 + 4] == 0 {
                         let c = cell(l, cx, cy, nx, ny);
                         if first { tl[tn] = c; tn = tn + 1; } else { bm[2 * total + c] = byte_of(1); }
                     }
@@ -255,7 +267,7 @@ fn route_all[&h, &b, &d, &k, &v, &s, &t, &p, &o](heap: &!h Heap, bm: &!b [byte],
                     else if dir == 4 { c = c - nx; }
                     else { c = c + (1 - 2 * (c / (nx * ny))) * nx * ny; }
                 }
-                o2 = emit_path(heap, o2, tl, from, tn, nt, nx, ny);
+                o2 = emit_path(heap, o2, tl, from, tn, nt, wnet, nx, ny);
                 // keep-outs of the new copper
                 var j = from;
                 while j < tn {
@@ -263,11 +275,11 @@ fn route_all[&h, &b, &d, &k, &v, &s, &t, &p, &o](heap: &!h Heap, bm: &!b [byte],
                     let l1 = c1 / (nx * ny);
                     let x1 = c1 % nx;
                     let y1 = c1 / nx % ny;
-                    mark(bm, 0, l1, x1, y1, (track_w() + clearance() + 2 * g - 1) / g, nt, nx, ny);
-                    mark(bm, 1, l1, x1, y1, (track_w() / 2 + clearance() + via_um() / 2 + 2 * g - 1) / g, nt, nx, ny);
+                    mark(bm, 0, l1, x1, y1, rtrack, nt, nx, ny);
+                    mark(bm, 1, l1, x1, y1, rtvia, nt, nx, ny);
                     if j + 1 < tn && tl[j + 1] / (nx * ny) != l1 {
-                        mark(bm, 0, 2, x1, y1, (via_um() / 2 + clearance() + track_w() / 2 + 2 * g - 1) / g, nt, nx, ny);
-                        mark(bm, 1, 2, x1, y1, (via_um() + clearance() + 2 * g - 1) / g, nt, nx, ny);
+                        mark(bm, 0, 2, x1, y1, rvia, nt, nx, ny);
+                        mark(bm, 1, 2, x1, y1, rviav, nt, nx, ny);
                     }
                     j = j + 1;
                 }
@@ -303,7 +315,7 @@ fn main(world: World) -> [] int {
         else {
             var out = buffer.empty(h, 65536);
             let pos = box_slice(h, 2, 0);
-            let pd = box_slice(h, 4096 * 6, 0);
+            let pd = box_slice(h, 4096 * 8, 0);
             var np = 0;
             var wum = 0;
             var hum = 0;
@@ -317,9 +329,9 @@ fn main(world: World) -> [] int {
                             let a = next_int(rr, n, pp);
                             if a < 0 { more = false; }
                             else {
-                                pw[np * 6] = a;
+                                pw[np * 8] = a;
                                 var f = 1;
-                                while f < 6 { pw[np * 6 + f] = next_int(rr, n, pp); f = f + 1; }
+                                while f < 8 { pw[np * 8 + f] = next_int(rr, n, pp); f = f + 1; }
                                 np = np + 1;
                             }
                         }
@@ -340,7 +352,7 @@ fn main(world: World) -> [] int {
             var maxnet = 0;
             borrow pd as &prx in { let pr = contents(prx);
                 var i = 0;
-                while i < np { if pr[i * 6] > maxnet { maxnet = pr[i * 6]; } i = i + 1; }
+                while i < np { if pr[i * 8] > maxnet { maxnet = pr[i * 8]; } i = i + 1; }
             }
             let orderb = box_slice(h, maxnet + 2, 0);
             borrow mut bmb as &!bmx in { let bm = contents(bmx);
@@ -365,13 +377,15 @@ fn main(world: World) -> [] int {
                     }
                     var i = 0;
                     while i < np {
-                        let cx = (pr[i * 6 + 1] + g / 2) / g;
-                        let cy = (pr[i * 6 + 2] + g / 2) / g;
-                        let r = pr[i * 6 + 3];
+                        let cx = (pr[i * 8 + 1] + g / 2) / g;
+                        let cy = (pr[i * 8 + 2] + g / 2) / g;
+                        let r = pr[i * 8 + 3];
                         var ly = 2;
-                        if pr[i * 6 + 4] == 1 { ly = 0; }
-                        mark(bm, 0, ly, cx, cy, (r + clearance() + track_w() / 2 + 2 * g - 1) / g, pr[i * 6], nx, ny);
-                        mark(bm, 1, ly, cx, cy, (r + clearance() + via_um() / 2 + 2 * g - 1) / g, pr[i * 6], nx, ny);
+                        if pr[i * 8 + 4] == 1 { ly = 0; }
+                        var cl = clearance();
+                        if pr[i * 8 + 7] > 0 { cl = pr[i * 8 + 7]; }
+                        mark(bm, 0, ly, cx, cy, (r + cl + 250 + 2 * g - 1) / g, pr[i * 8], nx, ny);
+                        mark(bm, 1, ly, cx, cy, (r + cl + via_um() / 2 + 2 * g - 1) / g, pr[i * 8], nx, ny);
                         i = i + 1;
                     }
                     // nets to route, shortest span first
@@ -380,21 +394,26 @@ fn main(world: World) -> [] int {
                         borrow mut spanb as &!swx in { let sw = contents(swx);
                             var m = 0;
                             while m <= maxnet {
-                                var lo_x = 1000000000; var hi_x = 0; var lo_y = 1000000000; var hi_y = 0; var cnt = 0; var rt = 0;
+                                var lo_x = 1000000000; var hi_x = 0; var lo_y = 1000000000; var hi_y = 0; var cnt = 0; var rt = 0; var wm = 250; var gm = 0;
                                 i = 0;
                                 while i < np {
-                                    if pr[i * 6] == m {
+                                    if pr[i * 8] == m {
                                         cnt = cnt + 1;
-                                        if pr[i * 6 + 5] == 1 { rt = 1; }
-                                        if pr[i * 6 + 1] < lo_x { lo_x = pr[i * 6 + 1]; }
-                                        if pr[i * 6 + 1] > hi_x { hi_x = pr[i * 6 + 1]; }
-                                        if pr[i * 6 + 2] < lo_y { lo_y = pr[i * 6 + 2]; }
-                                        if pr[i * 6 + 2] > hi_y { hi_y = pr[i * 6 + 2]; }
+                                        if pr[i * 8 + 5] == 1 { rt = 1; }
+                                        wm = pr[i * 8 + 6]; gm = pr[i * 8 + 7];
+                                        if pr[i * 8 + 1] < lo_x { lo_x = pr[i * 8 + 1]; }
+                                        if pr[i * 8 + 1] > hi_x { hi_x = pr[i * 8 + 1]; }
+                                        if pr[i * 8 + 2] < lo_y { lo_y = pr[i * 8 + 2]; }
+                                        if pr[i * 8 + 2] > hi_y { hi_y = pr[i * 8 + 2]; }
                                     }
                                     i = i + 1;
                                 }
                                 sw[m] = 0;
-                                if m > 0 && cnt >= 2 && rt == 1 { sw[m] = (hi_x - lo_x) + (hi_y - lo_y) + cnt * 1000; }
+                                if m > 0 && cnt >= 2 && rt == 1 {
+                                    sw[m] = (hi_x - lo_x) + (hi_y - lo_y) + cnt * 1000 + 10;
+                                    if gm > 0 { sw[m] = 2; }
+                                    if wm > 250 { sw[m] = 1; }
+                                }
                                 m = m + 1;
                             }
                             var kk = 0;
