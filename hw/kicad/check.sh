@@ -29,3 +29,5 @@ grep -q "Found 0 unconnected pads" /tmp/amp_drc.rpt || { echo "the board has unr
 bad=$(grep -E '^\[' /tmp/amp_drc.rpt | grep -v -E '^\[lib_footprint_issues\]' || true)
 [ -z "$bad" ] || { echo "DRC findings:"; echo "$bad" | sort | uniq -c; exit 1; }
 echo "DRC: no clearance, overlap or connection finding, schematic parity 0, every net routed: passed"
+python3 -I gen_bom.py /tmp/amp.net 2> /dev/null | cmp -s - amp_bom.csv || { echo "hw/kicad/amp_bom.csv is stale: regenerate it with gen_bom.py"; exit 1; }
+echo "amp_bom.csv equals the schematic's bill of materials: passed"

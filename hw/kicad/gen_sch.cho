@@ -282,13 +282,13 @@ fn main(world: World) -> [] int {
             }
             // decoupling at each op-amp: 100 nF and 10 uF from each rail to ground
             o = cap(h, o, id, "C4", "100n", "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm", 22098, 5080, "+12V", "GND");
-            o = cap(h, o, id, "C5", "10u", "Capacitor_THT:C_Rect_L7.2mm_W3.0mm_P5.00mm_FKS2_FKP2_MKS2_MKP2", 23622, 5080, "+12V", "GND");
+            o = cap(h, o, id, "C5", "10u", "Capacitor_THT:C_Disc_D6.0mm_W4.4mm_P5.00mm", 23622, 5080, "+12V", "GND");
             o = cap(h, o, id, "C6", "100n", "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm", 24892, 5080, "GND", "-12V");
-            o = cap(h, o, id, "C7", "10u", "Capacitor_THT:C_Rect_L7.2mm_W3.0mm_P5.00mm_FKS2_FKP2_MKS2_MKP2", 26416, 5080, "GND", "-12V");
+            o = cap(h, o, id, "C7", "10u", "Capacitor_THT:C_Disc_D6.0mm_W4.4mm_P5.00mm", 26416, 5080, "GND", "-12V");
             o = cap(h, o, id, "C8", "100n", "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm", 22098, 7874, "+12V", "GND");
-            o = cap(h, o, id, "C9", "10u", "Capacitor_THT:C_Rect_L7.2mm_W3.0mm_P5.00mm_FKS2_FKP2_MKS2_MKP2", 23622, 7874, "+12V", "GND");
+            o = cap(h, o, id, "C9", "10u", "Capacitor_THT:C_Disc_D6.0mm_W4.4mm_P5.00mm", 23622, 7874, "+12V", "GND");
             o = cap(h, o, id, "C10", "100n", "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm", 24892, 7874, "GND", "-12V");
-            o = cap(h, o, id, "C11", "10u", "Capacitor_THT:C_Rect_L7.2mm_W3.0mm_P5.00mm_FKS2_FKP2_MKS2_MKP2", 26416, 7874, "GND", "-12V");
+            o = cap(h, o, id, "C11", "10u", "Capacitor_THT:C_Disc_D6.0mm_W4.4mm_P5.00mm", 26416, 7874, "GND", "-12V");
             // ---- the fork front end (docs/amplifier.md, hw/amp/fork_fe.cir): drive divider, the fork, C0 compensation, transimpedance stage, gain about 1.65 V, ADC protection ----
             o = conn2(h, o, id, "J10", "fork drive (Pmod DA3)", 1016, 20066, "DACF", "GND");
             o = cap(h, o, id, "C12", "100n", "Capacitor_THT:C_Rect_L7.2mm_W3.0mm_P5.00mm_FKS2_FKP2_MKS2_MKP2", 2540, 20066, "DACF", "DD");
@@ -317,13 +317,13 @@ fn main(world: World) -> [] int {
             o = opamp(h, o, id, "U4", 10160, 23114, "GND", "CI", "GND", "TIN", "CO", "TOUT");
             o = opamp(h, o, id, "U5", 17780, 23114, "B", "N2", "VMIDD", "VMID", "SOUT", "VMID");
             o = cap(h, o, id, "C17", "100n", "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm", 12446, 23876, "+12V", "GND");
-            o = cap(h, o, id, "C18", "10u", "Capacitor_THT:C_Rect_L7.2mm_W3.0mm_P5.00mm_FKS2_FKP2_MKS2_MKP2", 13970, 23876, "+12V", "GND");
+            o = cap(h, o, id, "C18", "10u", "Capacitor_THT:C_Disc_D6.0mm_W4.4mm_P5.00mm", 13970, 23876, "+12V", "GND");
             o = cap(h, o, id, "C19", "100n", "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm", 15494, 23876, "GND", "-12V");
-            o = cap(h, o, id, "C20", "10u", "Capacitor_THT:C_Rect_L7.2mm_W3.0mm_P5.00mm_FKS2_FKP2_MKS2_MKP2", 17018, 23876, "GND", "-12V");
+            o = cap(h, o, id, "C20", "10u", "Capacitor_THT:C_Disc_D6.0mm_W4.4mm_P5.00mm", 17018, 23876, "GND", "-12V");
             o = cap(h, o, id, "C21", "100n", "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm", 20066, 23876, "+12V", "GND");
-            o = cap(h, o, id, "C22", "10u", "Capacitor_THT:C_Rect_L7.2mm_W3.0mm_P5.00mm_FKS2_FKP2_MKS2_MKP2", 21590, 23876, "+12V", "GND");
+            o = cap(h, o, id, "C22", "10u", "Capacitor_THT:C_Disc_D6.0mm_W4.4mm_P5.00mm", 21590, 23876, "+12V", "GND");
             o = cap(h, o, id, "C23", "100n", "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm", 23114, 23876, "GND", "-12V");
-            o = cap(h, o, id, "C24", "10u", "Capacitor_THT:C_Rect_L7.2mm_W3.0mm_P5.00mm_FKS2_FKP2_MKS2_MKP2", 24384, 23876, "GND", "-12V");
+            o = cap(h, o, id, "C24", "10u", "Capacitor_THT:C_Disc_D6.0mm_W4.4mm_P5.00mm", 24384, 23876, "GND", "-12V");
             o = text(h, o, "  (sheet_instances (path \"/\" (page \"1\")))\n  (embedded_fonts no)\n)\n");
         }
         borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
