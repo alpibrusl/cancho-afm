@@ -6,6 +6,7 @@ import std.math;
 import lockin;
 import pid;
 import raster;
+import raster_sine;
 import plant;
 
 // `board` -- a software twin of the whole instrument: the register interface of `afm_top` (docs/registers.md) in front of the detector, the
@@ -111,6 +112,12 @@ fn resets[&a, &b](rf: &a [int], st: &!b [int]) -> [] int {
     if run == 0 {
         st[7] = 0; st[8] = 0; st[9] = s32(rf[15]); st[10] = 0; st[11] = 0; st[12] = 0;
     }
+    // the sinusoidal raster (SINE, CTRL bit 6) and the triangle one are two blocks; the one not selected is held in reset, so a switch starts the other afresh
+    let sine = rf[1] / 64 % 2;
+    if sine != st[31] {
+        st[31] = sine;
+        st[17] = 0; st[18] = 0; st[19] = rf[23]; st[20] = rf[24]; st[21] = 0; st[22] = 0;
+    }
     if run == 0 || scan == 0 {
         st[17] = 0; st[18] = 0; st[19] = rf[23]; st[20] = rf[24]; st[21] = 0; st[22] = 0;
     }
@@ -124,7 +131,7 @@ fn resets[&a, &b](rf: &a [int], st: &!b [int]) -> [] int {
 
 // 0 = OKAY, 2 = SLVERR, like the serial bridge: a write to a read-only or unmapped register is refused and changes nothing.
 pub fn write[&a, &b](rf: &!a [int], st: &!b [int], idx: int, value: int) -> [] int {
-    if idx < 0 || idx > 47 { return 2; }
+    if idx < 0 || idx > 49 { return 2; }
     if idx == 0 || idx == 2 || (idx >= 32 && idx <= 42) || idx == 45 || idx == 46 { return 2; }
     if idx == 18 {
         st[11] = 0;
@@ -150,7 +157,7 @@ pub fn write[&a, &b](rf: &!a [int], st: &!b [int], idx: int, value: int) -> [] i
         }
         return 0;
     }
-    if idx == 1 || (idx >= 3 && idx <= 17) || (idx >= 19 && idx <= 31) || idx == 44 || idx == 47 {
+    if idx == 1 || (idx >= 3 && idx <= 17) || (idx >= 19 && idx <= 31) || idx == 44 || idx == 47 || idx == 48 || idx == 49 {
         rf[idx] = value % 4294967296;
         // blocks held in reset load their start values continuously (x0, y0, zinit), so any write can change what a held block shows
         resets(rf, st);
@@ -180,7 +187,7 @@ pub fn read[&a, &b](rf: &a [int], st: &b [int], idx: int) -> [] (int, int) {
     if idx == 41 { return (st[14], 0); }
     if idx == 42 { return (st[17] % 65536 * 65536 + st[18] % 65536, 0); }
     if idx == 43 { return (0, 0); }
-    if idx == 44 || idx == 47 { return (rf[idx], 0); }
+    if idx == 44 || idx == 47 || idx == 48 || idx == 49 { return (rf[idx], 0); }
     if idx == 45 { return (st[24] + rf[1] / 32 % 2 * 2 + st[30] * 4, 0); }
     if idx == 46 { return (u32(st[28]), 0); }
     return (0, 2);
@@ -263,8 +270,15 @@ fn step_one[&a, &b, &c](rf: &!a [int], st: &!b [int], fl: &!c [float]) -> [] int
                 if pd < 1 { pd = 1; }
                 if st[22] + 1 >= pd {
                     st[22] = 0;
-                    let r = raster.step(raster.R { t: st[17], line: st[18], x: st[19], y: st[20], done: st[21] }, rf[21], rf[22], rf[23], rf[25], rf[26]);
-                    st[17] = r.t; st[18] = r.line; st[19] = r.x; st[20] = r.y; st[21] = r.done;
+                    if rf[1] / 64 % 2 == 1 {
+                        // the phase is st[17], the slow axis y is st[20]; x follows the phase
+                        let q = raster_sine.step(raster_sine.S { phase: st[17], line: st[18], y: st[20], done: st[21] }, rf[49] % 131072, rf[22], rf[26]);
+                        st[17] = q.phase; st[18] = q.line; st[20] = q.y; st[21] = q.done;
+                        st[19] = raster_sine.x_of(q, rf[23], rf[48] % 65536);
+                    } else {
+                        let r = raster.step(raster.R { t: st[17], line: st[18], x: st[19], y: st[20], done: st[21] }, rf[21], rf[22], rf[23], rf[25], rf[26]);
+                        st[17] = r.t; st[18] = r.line; st[19] = r.x; st[20] = r.y; st[21] = r.done;
+                    }
                 } else {
                     st[22] = st[22] + 1;
                 }

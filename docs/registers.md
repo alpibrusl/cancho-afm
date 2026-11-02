@@ -23,6 +23,7 @@ register file (`gen/regs_tb.cho`), and a test of the twin (`tests/contract_test.
 * **Units:** Z, ZMIN, ZMAX, ZINIT, ZRETRACT and ZOUT are picometres (the Z DAC code is Z / 16); X, Y, X0, Y0, DX, DY and the DRIVE and MAN registers are DAC codes; TIMEOUT and MOTOR_RATE are FPGA clocks (27 MHz); gains are Q16 (65536 = 1.0).
 * **TUNING** is 2^32 x f / fs (536870912 = 8 samples per period); **SHIFT** shifts the detector figure right before the loop; **SETPOINT** is a signed 32-bit word.
 * **Fail closed:** after power-on every limit and the motor's MOTOR_MAX are 0 and CTRL is 0, so nothing moves or runs until the host sets them.
+* **SINE** (CTRL bit 6) swaps the triangle raster for a sinusoidal fast axis (`sim/raster_sine.cho`): X = X0 + SINE_AMP (1 - cos) / 2 over one 16-bit phase per line, advancing SINE_STEP per raster tick (65536 / SINE_STEP ticks a line; the first half is the trace); NPIX and DX are not used, NLINES, Y0, DY and PIXDIV are. The block not selected is held in reset, so changing the bit restarts the scan. Not tested on any scanner.
 * **KICK** (any write) restarts the deadman; **MOTOR_CMD** takes a signed number of microsteps, positive toward the sample, refused if longer than MOTOR_MAX, ignored if the driver is disabled, held by a fault, busy, or the number is 0.
 * **Not registers:** PIXLINE is the raster's pixel (bits 31:16) and line (15:0); MOTOR_STATUS bit 0 BUSY, 1 ENABLED, 2 REFUSED (the last command was too long).
 

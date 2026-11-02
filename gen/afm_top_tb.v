@@ -76,7 +76,7 @@ module afm_top_tb;
   task w(input [7:0] idx, input [31:0] d); reg [7:0] r; begin wr(idx, d, r); if (r !== 8'h00) begin fails = fails + 1; $display("FAIL write of register %0d answered %h", idx, r); end end endtask
 
   integer i, loop_ok; integer x_max = 0;
-  always @(code_x) if (code_x > x_max && code_x < 16'd5000) x_max = code_x;
+  always @(code_x) if (code_x > x_max && code_x < 16'd50000) x_max = code_x;
   reg [31:0] d, free_r, spv; reg [7:0] rp;
   real zf, gapf;
   initial begin #3000000000; $display("WATCHDOG at %0t", $time); $finish; end
@@ -172,6 +172,19 @@ module afm_top_tb;
     w(1, 0); repeat (200) @(posedge clk);
     rdi(45, d); if (d[0] !== 1'b0 || motor_en_n !== 1'b1 || m_edges >= 8 || m_edges < 1) begin fails = fails + 1; $display("FAIL abort: status %b, %0d of 8 steps", d[1:0], m_edges); end
     $display("phase 7 (motor): ok so far, %0d failures", fails);
+    // ---- phase 8: the sinusoidal fast axis (CTRL bit 6): 2 lines of 4 ticks (PSTEP 16384), 3 windows a tick, so 24 windows
+    w(1, 0); repeat (1000) @(posedge clk);
+    rdi(48, d); if (d !== 0) begin fails = fails + 1; $display("FAIL SINE_AMP default %0d, must be 0", d); end
+    w(48, 40000); w(49, 16384); w(21, 4); w(22, 2); w(23, 1000); w(24, 2000); w(26, 250); w(27, 3); w(17, 0);
+    x_max = 0;
+    w(1, 32'h55);   // run + scan + adc_run + sine
+    repeat (60000) @(posedge clk);
+    rdi(2, d); if (d[3] !== 1'b0) begin fails = fails + 1; $display("FAIL the sine scan was done after %0d windows; 24 are needed", nconv / 64); end
+    repeat (600000) @(posedge clk);
+    rdi(2, d); if (d[3] !== 1'b1) begin fails = fails + 1; $display("FAIL the sine scan did not finish"); end
+    if (x_max !== 40999) begin fails = fails + 1; $display("FAIL the X DAC reached %0d, wanted 40999", x_max); end
+    if (code_x !== 16'd1000 || code_y !== 16'd2250) begin fails = fails + 1; $display("FAIL after the sine scan X=%0d Y=%0d, wanted 1000 and 2250", code_x, code_y); end
+    $display("phase 8 (sine scan): x max %0d, final x %0d y %0d", x_max, code_x, code_y);
     $display("afm_top system test: %0d failures, %0d bad DAC frames, %0d conversions", fails, bad_frames, nconv);
     $finish;
   end

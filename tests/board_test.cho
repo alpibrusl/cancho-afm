@@ -158,6 +158,37 @@ fn test_the_scan_ends_where_the_verilog_scan_does() -> [] int {
     return 0;
 }
 
+// The sinusoidal fast axis (CTRL bit 6, registers 48 and 49): x = x0 + amp (1 - cos) / 2, four ticks a line at PSTEP 16384, three windows a tick.
+fn test_the_sine_scan_follows_the_cosine() -> [] int {
+    region r {
+        let rf = alloc_slice[r](64, 0);
+        let st = alloc_slice[r](32, 0);
+        let fl = alloc_slice[r](16, 0.0);
+        setup(rf, st, fl);
+        board.write(rf, st, 7, 4); board.write(rf, st, 8, 2190); board.write(rf, st, 9, 2304);
+        board.write(rf, st, 12, 65535); board.write(rf, st, 14, 60000); board.write(rf, st, 15, 3000); board.write(rf, st, 16, 60000);
+        board.write(rf, st, 22, 2); board.write(rf, st, 23, 1000); board.write(rf, st, 24, 2000);
+        board.write(rf, st, 26, 250); board.write(rf, st, 27, 3);
+        board.write(rf, st, 48, 40000); board.write(rf, st, 49, 16384);
+        let (a48, ra) = board.read(rf, st, 48);
+        test.assert_eq(a48, 40000);
+        board.write(rf, st, 1, 85);        // run + scan + adc_run + sine
+        board.advance(rf, st, fl, 6 * 64);
+        let (xm, r1) = board.read(rf, st, 34);
+        test.assert_eq(xm, 40999);          // half a turn: x0 + amp * 65535 / 65536
+        let (s1, r2) = board.read(rf, st, 2);
+        test.assert_eq(s1 / 8 % 2, 0);
+        board.advance(rf, st, fl, 18 * 64);
+        let (s2, r3) = board.read(rf, st, 2);
+        test.assert_eq(s2 / 8 % 2, 1);      // 8 ticks: two lines
+        let (xx, r4) = board.read(rf, st, 34);
+        let (yy, r5) = board.read(rf, st, 35);
+        test.assert_eq(xx, 1000);
+        test.assert_eq(yy, 2250);
+    }
+    return 0;
+}
+
 // The coarse motor, as the Verilog phase 7 runs it: fails closed (MOTOR_MAX = 0 refuses everything, a disabled driver ignores), counts, direction,
 // the maximum, and an abort when disabled. 198.4375 pm of tip travel per microstep.
 fn test_the_motor_fails_closed_and_moves_the_tip() -> [] int {

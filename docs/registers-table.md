@@ -3,7 +3,7 @@
 | Index | Address | Name | Access | Reset | Bit fields | What |
 |---|---|---|---|---|---|---|
 | 0 | 0x40000000 | ID | RO | 2941255681 | 32 bits | identifier and version |
-| 1 | 0x40000004 | CTRL | RW | 0 | RUN [0:0], DRIVE_EN [1:1], SCAN [2:2], MANUAL [3:3], ADC_RUN [4:4], MOTOR_EN [5:5] | run bits |
+| 1 | 0x40000004 | CTRL | RW | 0 | RUN [0:0], DRIVE_EN [1:1], SCAN [2:2], MANUAL [3:3], ADC_RUN [4:4], MOTOR_EN [5:5], SINE [6:6] | run bits |
 | 2 | 0x40000008 | STATUS | RO | 0 | FAULT [0:0], LOOP_BUSY [1:1], OVERFLOW [2:2], SCAN_DONE [3:3], ADC_BUSY [4:4] | status bits |
 | 3 | 0x4000000c | SAMPLE_DIV | RW | 103 | 32 bits | FPGA clocks between ADC conversions |
 | 4 | 0x40000010 | TUNING | RW | 536870912 | 32 bits | reference phase step per sample: 2^32 f / fs |
@@ -50,3 +50,5 @@
 | 45 | 0x400000b4 | MOTOR_STATUS | RO | 0 | BUSY [0:0], ENABLED [1:1], REFUSED [2:2] | motor status bits |
 | 46 | 0x400000b8 | MOTOR_POS | RO | 0 | 32 bits | microsteps since power-on (signed) |
 | 47 | 0x400000bc | MOTOR_MAX | RW | 0 | 32 bits | most microsteps one command may ask for; 0 = none |
+| 48 | 0x400000c0 | SINE_AMP | RW | 0 | 32 bits | sinusoidal fast axis: amplitude, X DAC codes |
+| 49 | 0x400000c4 | SINE_STEP | RW | 0 | 32 bits | sinusoidal fast axis: phase step per raster tick (65536 = one line) |

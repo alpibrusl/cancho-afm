@@ -20,7 +20,8 @@ typedef struct {
     uint32_t manual : 1; /* chw:Afm.register.CTRL.field.MANUAL */
     uint32_t adc_run : 1; /* chw:Afm.register.CTRL.field.ADC_RUN */
     uint32_t motor_en : 1; /* chw:Afm.register.CTRL.field.MOTOR_EN */
-    uint32_t _rsvd6 : 26;
+    uint32_t sine : 1; /* chw:Afm.register.CTRL.field.SINE */
+    uint32_t _rsvd7 : 25;
 } ctrl_t;
 
 /* chw:Afm.register.STATUS */
@@ -308,6 +309,18 @@ typedef struct {
     uint32_t value : 32; /* chw:Afm.register.MOTOR_MAX.field.VALUE */
 } motor_max_t;
 
+/* chw:Afm.register.SINE_AMP */
+/* kind: RW */
+typedef struct {
+    uint32_t value : 32; /* chw:Afm.register.SINE_AMP.field.VALUE */
+} sine_amp_t;
+
+/* chw:Afm.register.SINE_STEP */
+/* kind: RW */
+typedef struct {
+    uint32_t value : 32; /* chw:Afm.register.SINE_STEP.field.VALUE */
+} sine_step_t;
+
 /* chw:Afm.block */
 typedef struct {
     volatile uint32_t id; /* chw:Afm.register.ID */ /* RO */
@@ -358,6 +371,8 @@ typedef struct {
     volatile uint32_t motor_status; /* chw:Afm.register.MOTOR_STATUS */ /* RO */
     volatile uint32_t motor_pos; /* chw:Afm.register.MOTOR_POS */ /* RO */
     volatile uint32_t motor_max; /* chw:Afm.register.MOTOR_MAX */
+    volatile uint32_t sine_amp; /* chw:Afm.register.SINE_AMP */
+    volatile uint32_t sine_step; /* chw:Afm.register.SINE_STEP */
 } afm_t;
 
 /* chw:Afm */
@@ -412,5 +427,7 @@ typedef struct {
 #define AFM_MOTOR_STATUS_RESET 0x00000000u
 #define AFM_MOTOR_POS_RESET 0x00000000u
 #define AFM_MOTOR_MAX_RESET 0x00000000u
+#define AFM_SINE_AMP_RESET 0x00000000u
+#define AFM_SINE_STEP_RESET 0x00000000u
 
 #endif /* CANCHO_HDL_AFM_H */

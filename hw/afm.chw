@@ -26,7 +26,8 @@
           { "name": "SCAN", "lsb": 2, "msb": 2 },
           { "name": "MANUAL", "lsb": 3, "msb": 3 },
           { "name": "ADC_RUN", "lsb": 4, "msb": 4 },
-          { "name": "MOTOR_EN", "lsb": 5, "msb": 5 }
+          { "name": "MOTOR_EN", "lsb": 5, "msb": 5 },
+          { "name": "SINE", "lsb": 6, "msb": 6 }
         ]
       },
       {
@@ -444,6 +445,24 @@
       {
         "name": "MOTOR_MAX",
         "offset": "0xbc",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "SINE_AMP",
+        "offset": "0xc0",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "SINE_STEP",
+        "offset": "0xc4",
         "kind": "RW",
         "reset": "0x00000000",
         "fields": [

@@ -59,8 +59,8 @@ fn main(world: World) -> [] int {
             k = k + 1;
         }
         // every address that is not a register must be refused, on read and on write
-        o = text(h, o, "    // unmapped indices 48 to 63, a misaligned address, the wrong base, and the top of the space\n");
-        var u = 48;
+        o = text(h, o, "    // unmapped indices 50 to 63, a misaligned address, the wrong base, and the top of the space\n");
+        var u = regs.count();
         while u < 64 {
             o = nat(h, text(h, o, "    rd(32'h40000000 + 4 * "), u);
             o = text(h, o, ", 32'd0, 1'b0, 1'b1, \"unmapped\");\n");

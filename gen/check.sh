@@ -27,6 +27,14 @@ iverilog -g2012 -o rt.vvp raster.sv ../gen/raster_tb.v
 vvp rt.vvp | tee rt.log
 grep -q "raster: 246 ticks, 0 mismatches, done=1" rt.log
 grep -q "hold, done, reset: 0 failures" rt.log
+# the sinusoidal fast axis
+cd ..
+$CANCHO run gen/raster_sine_trace.cho sim/raster_sine.cho --std > build/raster_sine_trace.txt
+$CANCHO run gen/main_glue.cho gen/glue.cho --std > build/afm_glue.sv
+cd build
+iverilog -g2012 -s rsine_tb -o rsn.vvp afm_glue.sv ../gen/raster_sine_tb.v
+vvp rsn.vvp | tee rsn.log
+grep -q "raster_sine lockstep: 12000 clocks, 0 mismatches" rsn.log
 # the amplitude detector
 cd ..
 $CANCHO run gen/main_lockin.cho gen/ir.cho gen/lockin_ir.cho gen/sv.cho --std > build/lockin.sv
@@ -70,4 +78,4 @@ $CANCHO run gen/regs_tb.cho host/regs.cho --std > build/contract_tb.v
 cd build
 iverilog -g2012 -s contract_tb -o ct.vvp afm_glue.sv pid_step.sv raster.sv lockin.sv spi.sv contract_tb.v
 vvp ct.vvp | tee ct.log
-grep -q "contract check: 48 registers, 0 failures" ct.log
+grep -q "contract check: 50 registers, 0 failures" ct.log

@@ -1,0 +1,65 @@
+edition 7;
+
+import std.buffer;
+import raster_sine;
+
+// Lockstep trace for the sinusoidal raster: one row per clock, the inputs (rst tick hold pstep amp) then the state after that clock (x y phase line trace done). The
+// configuration is fixed: nlines 3, y0 2000, dy 250, x0 1000, amp varying between 1 and 65535. Ticks at random moments, holds now and then, and a phase step that changes every 2,500 clocks.
+fn num[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer {
+    return buffer.push_nat(heap, buffer.append(heap, b, " "), n);
+}
+
+fn mix(x: int) -> [] int {
+    let a = (x * 2654435761 + 12345) % 4294967296;
+    return (a * 1103515245 + 12345) % 2147483648;
+}
+
+fn pstep_at(t: int) -> [] int {
+    let k = t / 2500 % 4;
+    if k == 0 { return 9000; }
+    if k == 1 { return 20000; }
+    if k == 2 { return 5000; }
+    return 33000;
+}
+
+fn amp_at(t: int) -> [] int {
+    let k = t / 3000 % 4;
+    if k == 0 { return 3000; }
+    if k == 1 { return 65535; }
+    if k == 2 { return 40000; }
+    return 1;
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(args); release(net); release(clock); release(signals); release(exec);
+    var code = 0;
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 1048576);
+        var s = raster_sine.start(2000);
+        var t = 0;
+        while t < 12000 {
+            var rst = 0;
+            if t % 3000 == 0 && t > 0 { rst = 1; }
+            var tick = 0;
+            if mix(t) / 4096 % 3 == 0 { tick = 1; }
+            var hold = 0;
+            if mix(t * 5 + 2) / 4096 % 40 == 0 { hold = 1; }
+            let ps = pstep_at(t);
+            let am = amp_at(t);
+            if rst == 1 { s = raster_sine.start(2000); }
+            else if tick == 1 && hold == 0 { s = raster_sine.step(s, ps, 3, 250); }
+            o = num(h, o, rst); o = num(h, o, tick); o = num(h, o, hold); o = num(h, o, ps); o = num(h, o, am);
+            o = num(h, o, raster_sine.x_of(s, 1000, am)); o = num(h, o, s.y); o = num(h, o, s.phase); o = num(h, o, s.line);
+            o = num(h, o, raster_sine.tracing(s)); o = num(h, o, s.done);
+            o = buffer.append(h, o, "\n");
+            t = t + 1;
+        }
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(heap);
+    release(io);
+    if code < 0 { return 1; }
+    return 0;
+}

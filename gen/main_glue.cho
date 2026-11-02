@@ -14,6 +14,7 @@ fn main(world: World) -> [] int {
         o = glue.emit_uart_bridge(h, o);
         o = glue.emit_dac_refresh(h, o);
         o = glue.emit_motor(h, o);
+        o = glue.emit_raster_sine(h, o);
         o = glue.emit_top(h, o);
         borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
         buffer.drop(h, o);

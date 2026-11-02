@@ -7,7 +7,7 @@ module regs;
 // which also gives a C header), gen/regs_doc.cho the table of docs/registers.md, and gen/regs_tb.cho a Verilog check of the real register file; tests/contract_test.cho
 // checks the twin against this table. A register's address is 0x40000000 + 4 * index. Kinds: 0 RW, 1 RO, 2 WO.
 
-pub fn count() -> [] int { return 48; }
+pub fn count() -> [] int { return 50; }
 
 // the name of the register at index k
 pub fn name_at(k: int) -> [] &static [byte] {
@@ -59,6 +59,8 @@ pub fn name_at(k: int) -> [] &static [byte] {
     if k == 45 { return "MOTOR_STATUS"; }
     if k == 46 { return "MOTOR_POS"; }
     if k == 47 { return "MOTOR_MAX"; }
+    if k == 48 { return "SINE_AMP"; }
+    if k == 49 { return "SINE_STEP"; }
     return "";
 }
 
@@ -147,12 +149,14 @@ pub fn doc_at(k: int) -> [] &static [byte] {
     if k == 45 { return "motor status bits"; }
     if k == 46 { return "microsteps since power-on (signed)"; }
     if k == 47 { return "most microsteps one command may ask for; 0 = none"; }
+    if k == 48 { return "sinusoidal fast axis: amplitude, X DAC codes"; }
+    if k == 49 { return "sinusoidal fast axis: phase step per raster tick (65536 = one line)"; }
     return "";
 }
 
 // bit fields: how many a register has (0 = one field spanning all 32 bits, named VALUE), and the j-th one
 pub fn nfields(k: int) -> [] int {
-    if k == 1 { return 6; }
+    if k == 1 { return 7; }
     if k == 2 { return 5; }
     if k == 42 { return 2; }
     if k == 45 { return 3; }
@@ -166,6 +170,7 @@ pub fn field_name(k: int, j: int) -> [] &static [byte] {
     if k == 1 && j == 3 { return "MANUAL"; }
     if k == 1 && j == 4 { return "ADC_RUN"; }
     if k == 1 && j == 5 { return "MOTOR_EN"; }
+    if k == 1 && j == 6 { return "SINE"; }
     if k == 2 && j == 0 { return "FAULT"; }
     if k == 2 && j == 1 { return "LOOP_BUSY"; }
     if k == 2 && j == 2 { return "OVERFLOW"; }
@@ -185,6 +190,7 @@ pub fn field_lsb(k: int, j: int) -> [] int {
     if k == 1 && j == 3 { return 3; }
     if k == 1 && j == 4 { return 4; }
     if k == 1 && j == 5 { return 5; }
+    if k == 1 && j == 6 { return 6; }
     if k == 2 && j == 1 { return 1; }
     if k == 2 && j == 2 { return 2; }
     if k == 2 && j == 3 { return 3; }
@@ -202,6 +208,7 @@ pub fn field_msb(k: int, j: int) -> [] int {
     if k == 1 && j == 3 { return 3; }
     if k == 1 && j == 4 { return 4; }
     if k == 1 && j == 5 { return 5; }
+    if k == 1 && j == 6 { return 6; }
     if k == 2 && j == 0 { return 0; }
     if k == 2 && j == 1 { return 1; }
     if k == 2 && j == 2 { return 2; }
@@ -264,3 +271,5 @@ pub fn motor_rate() -> [] int { return 44; }
 pub fn motor_status() -> [] int { return 45; }
 pub fn motor_pos() -> [] int { return 46; }
 pub fn motor_max() -> [] int { return 47; }
+pub fn sine_amp() -> [] int { return 48; }
+pub fn sine_step() -> [] int { return 49; }
