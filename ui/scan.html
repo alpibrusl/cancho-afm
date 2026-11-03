@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>cancho-afm: the last scan</title>
+    <style>
+        .cui-col { display: flex; flex-direction: column; gap: 0.5rem; }
+        :root { color-scheme: light dark; }
+        body { font-family: system-ui, -apple-system, sans-serif; padding: 1rem; max-width: 46rem; }
+        [role="status"] { font-size: 1rem; font-weight: 600; }
+        figure { margin: 1rem 0; }
+        /* the image is 64 x 64: scaled up without smoothing, so a pixel stays a pixel */
+        #scan { width: 100%; max-width: 32rem; height: auto; image-rendering: pixelated; display: block; border: 1px solid currentColor; }
+        figcaption { font-size: 0.9rem; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <figure>
+        <img id="scan" src="scan.png" alt="the levelled topography of the last scan: not loaded yet">
+        <figcaption id="cap">Levelled topography (plane and line offsets removed); colour from the lowest (dark purple) to the highest (yellow) point.</figcaption>
+    </figure>
+    <script type="module" src="./scan.js"></script>
+    <script>
+        // cancho-ui has no image element: this page loads scan.png itself every 5 s, and sets its text alternative from scan.json
+        function refresh() {
+            var t = Date.now();
+            document.getElementById('scan').src = 'scan.png?' + t;
+            fetch('scan.json?' + t).then(function (r) { return r.json(); }).then(function (d) {
+                document.getElementById('scan').alt = 'Levelled topography of the last scan (' + d.source + '): ' + d.size + ' pixels, heights from ' + d.z_min_pm + ' to ' + d.z_max_pm + ' pm, ' + d.particles + ' particles: ' + d.particles_text + '.';
+            }).catch(function () {});
+        }
+        refresh();
+        setInterval(refresh, 5000);
+    </script>
+</body>
+</html>

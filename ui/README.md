@@ -61,3 +61,16 @@ argument, as in the compiler's own `examples/api`), `tty_open("/dev")`, `fs_read
 `serve.cho` reads only and has no authentication. When the console gains write access (starting a scan, moving the motor, changing limits) or is reachable beyond a trusted network, run
 [cancho-gateway](https://github.com/alpibrusl/cancho-gateway) in front of it on the Pi (TLS 1.3, an API key, rate limits, an access log), with the write routes admitted only on the authenticated path. Keep the identifier
 check and the register limits in `serve.cho`, so a gateway mistake cannot bypass them. Decided 2026-11-02; not built, and the gateway has not been run for this (its own README calls it a working slice, its TLS server not independently reviewed).
+
+## The last scan (`scan.cui`, `scan.html`)
+
+`scan.cui` polls `scan.json` every 5 s and prints the analysis of the last scan: roughness, the step, the grating, the particles and the drift, with the document's `source` (`twin`: a prediction). The levelled image is `scan.png`, an `<img>` of the host page `scan.html`, which also sets its text alternative from `scan.json`: `cancho-ui` has no image element yet (docs/image-processing.md, I5). Both files are written by the twin's analysis:
+
+```sh
+cancho build host/scan_twin.cho sim/*.cho host/regs.cho gen/ir.cho gen/pid_ir.cho gen/raster_ir.cho gen/lockin_ir.cho host/proto.cho host/twin_link.cho host/script.cho host/run_twin.cho \
+    host/session.cho host/image.cho host/metrics.cho host/features.cho host/drift.cho host/report.cho host/png.cho --std -o scan_twin
+./scan_twin 1 0 500 5 > ui/scan.json        # profile 1 (the high-speed cantilever), ideal Z scanner, 500 kHz, mode 5: the document
+./scan_twin 1 0 500 6 > ui/scan.png         # mode 6: the levelled image
+cancho-ui check ui/scan.cui && cancho-ui build ui/scan.cui -o ui/scan.js
+cd ui && python3 -m http.server 8765        # open http://localhost:8765/scan.html
+```

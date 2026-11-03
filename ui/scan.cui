@@ -1,0 +1,61 @@
+// ui/scan.cui: the last scan, analysed (docs/image-processing.md, I5). Every 5 s it reads scan.json from its own origin (`requires Network;`, nothing else): one line of JSON written by
+// `scan_twin <profile> <scanner> <kHz> 5` (the software twin: a prediction) and says so in its `source` field. The levelled image is scan.png, an <img> of the host page (scan.html):
+// cancho-ui has no image element yet, so the page, not this component, draws it.
+
+component Scan {
+    requires Network;
+
+    state doc: Result[String, String] = Ok("");
+    state note: String = "waiting for the first scan";
+    state source: String = "-";
+    state profile: String = "-";
+    state size: String = "-";
+    state frame: String = "-";
+    state ra: String = "-";
+    state rq: String = "-";
+    state rz: String = "-";
+    state step: String = "-";
+    state step_line: String = "-";
+    state pitch: String = "-";
+    state grating: String = "-";
+    state count: String = "-";
+    state plist: String = "-";
+    state drift: String = "-";
+
+    start Poll;
+    every 5000 Poll;
+
+    on Poll {
+        doc = await(net.get("scan.json"));
+        note = match doc {
+            Ok(_) => { "last scan" }
+            Err(e) => { "no scan: " + e }
+            Cancelled => { "cancelled" }
+        };
+        source = match doc { Ok(d) => { json.get(d, "source", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        profile = match doc { Ok(d) => { json.get(d, "profile", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        size = match doc { Ok(d) => { json.get(d, "size", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        frame = match doc { Ok(d) => { json.get(d, "frame_s", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        ra = match doc { Ok(d) => { json.get(d, "ra_pm", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        rq = match doc { Ok(d) => { json.get(d, "rq_pm", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        rz = match doc { Ok(d) => { json.get(d, "rz_pm", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        step = match doc { Ok(d) => { json.get(d, "step_pm", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        step_line = match doc { Ok(d) => { json.get(d, "step_line", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        pitch = match doc { Ok(d) => { json.get(d, "pitch_px", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        grating = match doc { Ok(d) => { json.get(d, "grating_pm", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        count = match doc { Ok(d) => { json.get(d, "particles", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        plist = match doc { Ok(d) => { json.get(d, "particles_text", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        drift = match doc { Ok(d) => { json.get(d, "drift_text", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+    }
+
+    view {
+        Column {
+            Text { role: heading "cancho-afm: the last scan" }
+            Text { role: status "Source: {source}. {note}. {profile}, {size} pixels, {frame} s. (source twin = a prediction of this software, not a measurement.)" }
+            Text { "Roughness of the levelled image: Ra {ra} pm, Rq {rq} pm, Rz {rz} pm." }
+            Text { "Step: {step} pm, edge at line {step_line}. Grating: pitch {pitch} pixels, height {grating} pm peak to peak." }
+            Text { "Particles ({count}): {plist}." }
+            Text { "Drift: {drift}." }
+        }
+    }
+}

@@ -10,6 +10,8 @@ import image;
 import metrics;
 import features;
 import drift;
+import report;
+import png;
 
 // The twin's automatic procedure up to the loop being closed (host/session.cho: tune, choose, approach), then a larger raster (64 x 64) over the made-up sample of sim/board.cho
 // (grating, terrace step, three particles) with noise and slow drift. Prints the image (Z, pm), one `line pixel Z` record per reading (a pixel may be read more than once; the last reading is the one the loop settled to). A prediction of this software, not a measurement.
@@ -202,7 +204,89 @@ fn drift_check[&h, &a, &c, &d, &e](heap: &!h Heap, o: buffer.Buffer, pic: &a [in
     return bb;
 }
 
-// the profile: argument 1 (the scanner, argument 2, and for the high-speed profile the cantilever's resonance in kHz, argument 3, the same way; default 500; argument 4 = 1 prints the levelling check, 2 the metrics check, 4 the drift check (arguments 5 and 6: the sample's drift along x in milli-pixels per tick and in height in milli-pm per tick), of docs/image-processing.md instead of the pixels), `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md)
+// A float with one decimal and a sign ("-1.5").
+fn sdec[&h](heap: &!h Heap, o: buffer.Buffer, v: float) -> [heap] buffer.Buffer {
+    var b = o;
+    var x = v;
+    if x < 0.0 { b = text(heap, b, "-"); x = 0.0 - x; }
+    let c = truncate(x * 10.0 + 0.5);
+    b = num(heap, b, c / 10); b = text(heap, b, "."); return num(heap, b, c % 10);
+}
+
+// The console's document for one scan (docs/image-processing.md, I5), mode 5: one line of JSON, flat, every value a number or a string the page prints as it is; mode 6: the levelled image as a PNG.
+// The analysis is `report.run`; `frame_us` is the scan's duration in the twin's time. "source" is "twin": a prediction of this software.
+fn scan_out[&h, &a](heap: &!h Heap, o: buffer.Buffer, pic: &a [int], mode: int, frame_us: int, prof: int) -> [heap] buffer.Buffer {
+    var b = o;
+    region r1 {
+        let t = alloc_slice[r1](4096, 0.0);
+        var k = 0;
+        while k < 4096 { t[k] = float_of(tr_of(pic[k])); k = k + 1; }
+        region r2 {
+            let r = alloc_slice[r2](4096, 0.0);
+            k = 0;
+            while k < 4096 { r[k] = float_of(rt_of(pic[k])); k = k + 1; }
+            region r3 {
+                let lev = alloc_slice[r3](4096, 0.0);
+                let parts = alloc_slice[r3](4 * 16, 0.0);
+                let rp = report.run(t, r, 64, 64, 0.005, lev, parts, 16);
+                if mode == 5 {
+                    b = text(heap, b, "{\"source\":\"twin\",\"profile\":\""); if prof == 1 { b = text(heap, b, "high-speed cantilever"); } else { b = text(heap, b, "tuning fork"); }
+                    b = text(heap, b, "\",\"size\":\"64 x 64\",\"frame_s\":"); b = sdec(heap, b, float_of(frame_us) / 1000000.0);
+                    b = text(heap, b, ",\"ra_pm\":"); b = sdec(heap, b, rp.ra); b = text(heap, b, ",\"rq_pm\":"); b = sdec(heap, b, rp.rq); b = text(heap, b, ",\"rz_pm\":"); b = sdec(heap, b, rp.rz);
+                    b = text(heap, b, ",\"step_line\":"); b = num(heap, b, rp.step_line); b = text(heap, b, ",\"step_pm\":"); b = sdec(heap, b, rp.step_pm);
+                    b = text(heap, b, ",\"pitch_px\":"); b = sdec(heap, b, rp.pitch); b = text(heap, b, ",\"grating_pm\":"); b = sdec(heap, b, rp.grating_pm);
+                    b = text(heap, b, ",\"particles\":"); b = num(heap, b, rp.particles);
+                    b = text(heap, b, ",\"particles_text\":\"");
+                    var p = 0;
+                    while p < rp.particles && p < 16 {
+                        if p > 0 { b = text(heap, b, "; "); }
+                        b = num(heap, b, p + 1); b = text(heap, b, ": x "); b = sdec(heap, b, parts[4 * p]); b = text(heap, b, " y "); b = sdec(heap, b, parts[4 * p + 1]);
+                        b = text(heap, b, " px, "); b = num(heap, b, truncate(parts[4 * p + 2])); b = text(heap, b, " pm, area "); b = num(heap, b, truncate(parts[4 * p + 3])); b = text(heap, b, " px");
+                        p = p + 1;
+                    }
+                    b = text(heap, b, "\",\"drift_text\":\"x "); b = sdec(heap, b, rp.dv * 1000.0); b = text(heap, b, " milli-px/tick, height "); b = sdec(heap, b, rp.dw * 1000.0); b = text(heap, b, " milli-pm/tick, loop lag ");
+                    b = sdec(heap, b, rp.dshift); b = text(heap, b, " px; image "); if rp.corrected == 1 { b = text(heap, b, "drift-corrected"); } else { if rp.corrected == 2 { b = text(heap, b, "trace only (loop lag over a pixel: drift cannot be told from it)"); } else { b = text(heap, b, "trace only (drift under the 5 milli-px/tick floor)"); } }
+                    b = text(heap, b, "\",\"z_min_pm\":"); b = sdec(heap, b, rp.lo); b = text(heap, b, ",\"z_max_pm\":"); b = sdec(heap, b, rp.hi); b = text(heap, b, "}\n");
+                } else {
+                    // the levelled image through a 256-entry palette (dark purple, blue, teal, green, yellow: five stops), lowest to highest height
+                    let pal = alloc_slice[r3](768, byte_of(0));
+                    let pix = alloc_slice[r3](4096, byte_of(0));
+                    var i = 0;
+                    while i < 256 {
+                        let f = float_of(i) / 255.0 * 4.0;
+                        var seg = truncate(f);
+                        if seg > 3 { seg = 3; }
+                        let u = f - float_of(seg);
+                        var c = 0;
+                        while c < 3 {
+                            var a0 = 0.0; var a1 = 0.0;
+                            if c == 0 { if seg == 0 { a0 = 68.0; a1 = 59.0; } if seg == 1 { a0 = 59.0; a1 = 33.0; } if seg == 2 { a0 = 33.0; a1 = 94.0; } if seg == 3 { a0 = 94.0; a1 = 253.0; } }
+                            if c == 1 { if seg == 0 { a0 = 1.0; a1 = 82.0; } if seg == 1 { a0 = 82.0; a1 = 145.0; } if seg == 2 { a0 = 145.0; a1 = 201.0; } if seg == 3 { a0 = 201.0; a1 = 231.0; } }
+                            if c == 2 { if seg == 0 { a0 = 84.0; a1 = 139.0; } if seg == 1 { a0 = 139.0; a1 = 140.0; } if seg == 2 { a0 = 140.0; a1 = 98.0; } if seg == 3 { a0 = 98.0; a1 = 37.0; } }
+                            pal[3 * i + c] = byte_of(truncate(a0 + (a1 - a0) * u + 0.5));
+                            c = c + 1;
+                        }
+                        i = i + 1;
+                    }
+                    var span = rp.hi - rp.lo;
+                    if span < 1.0 { span = 1.0; }
+                    k = 0;
+                    while k < 4096 {
+                        var q = truncate((lev[k] - rp.lo) / span * 255.0 + 0.5);
+                        if q < 0 { q = 0; }
+                        if q > 255 { q = 255; }
+                        pix[k] = byte_of(q);
+                        k = k + 1;
+                    }
+                    b = png.indexed(heap, b, 64, 64, pix, pal);
+                }
+            }
+        }
+    }
+    return b;
+}
+
+// the profile: argument 1 (the scanner, argument 2, and for the high-speed profile the cantilever's resonance in kHz, argument 3, the same way; default 500; argument 4 = 1 prints the levelling check, 2 the metrics check, 5 the console's scan.json, 6 its levelled image as a PNG, 4 the drift check (arguments 5 and 6: the sample's drift along x in milli-pixels per tick and in height in milli-pm per tick), of docs/image-processing.md instead of the pixels), `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md)
 fn number_of[&t](text: &t [byte]) -> [] int {
     var n = 0;
     var i = 0;
@@ -269,7 +353,7 @@ fn main(world: World) -> [] int {
                 session.consume(ss, sf, out, img);
                 guard = guard + 1;
             }
-            if lv != 3 {
+            if lv != 3 && lv != 5 && lv != 6 {
             o = text(h, o, "twin scan; failure code "); o = num(h, o, ss[2]); o = text(h, o, ", refused writes "); o = num(h, o, failures);
             o = text(h, o, ", contact Z "); o = num(h, o, ss[9]); o = text(h, o, " pm; f0 "); o = num(h, o, truncate(sf[0])); o = text(h, o, " Hz, Q "); o = num(h, o, truncate(sf[1])); o = text(h, o, ", free figure "); o = num(h, o, ss[10]);
             o = text(h, o, ", window "); o = num(h, o, ss[15]); o = text(h, o, ", shift "); o = num(h, o, ss[11]); o = text(h, o, ", setpoint "); o = num(h, o, ss[12]); o = text(h, o, ", motor steps "); o = num(h, o, ss[21]); o = text(h, o, ", settled Z "); o = num(h, o, ss[22]); o = text(h, o, " pm\n");
@@ -312,8 +396,9 @@ fn main(world: World) -> [] int {
             if lv == 1 { o = analyse(h, o, pic); }
             if lv == 2 { o = metrics_check(h, o, pic, rf, st, fl); }
             if lv == 3 { o = particles_csv(h, o, pic); }
+            if lv == 5 || lv == 6 { o = scan_out(h, o, pic, lv, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27, prof); }
             if lv == 4 { o = drift_check(h, o, pic, rf, st, fl, session.pixdiv(prof), xd, zd); }
-            if lv != 3 { o = text(h, o, "frame_us "); o = num(h, o, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27); o = text(h, o, "\n"); }
+            if lv != 3 && lv != 5 && lv != 6 { o = text(h, o, "frame_us "); o = num(h, o, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27); o = text(h, o, "\n"); }
         }
         var code = 0;
         borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }

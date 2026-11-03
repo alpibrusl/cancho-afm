@@ -1,0 +1,91 @@
+edition 7;
+
+module png;
+
+import std.buffer;
+import std.crc;
+
+// `png` -- a PNG encoder for the small palette images the console shows (docs/image-processing.md, I5): 8-bit indexed colour, no filtering, and the pixel data in *stored* deflate blocks (no compression),
+// so a 64 x 64 image is about 4.5 KB and the encoder is a few dozen lines with no dependency beyond `std.crc` (the PNG chunk checksum is CRC-32/IEEE). A browser reads it as any PNG; checked by decoding
+// it with another implementation (zlib), not only by a test here.
+
+// The Adler-32 checksum (RFC 1950) of `data`: the zlib stream ends with it.
+pub fn adler32[&a](data: &a [byte]) -> [] int {
+    var s1 = 1;
+    var s2 = 0;
+    var i = 0;
+    while i < len(data) {
+        s1 = (s1 + int_of(data[i])) % 65521;
+        s2 = (s2 + s1) % 65521;
+        i = i + 1;
+    }
+    return s2 * 65536 + s1;
+}
+
+fn be32[&h](heap: &!h Heap, b: buffer.Buffer, v: int) -> [heap] buffer.Buffer {
+    var o = buffer.push(heap, b, byte_of(v / 16777216 % 256));
+    o = buffer.push(heap, o, byte_of(v / 65536 % 256));
+    o = buffer.push(heap, o, byte_of(v / 256 % 256));
+    return buffer.push(heap, o, byte_of(v % 256));
+}
+
+// One chunk: length, the 4-byte type and the data (as `body`, the type already in its first four bytes), and the CRC of type and data.
+fn chunk[&h, &a](heap: &!h Heap, b: buffer.Buffer, body: &a [byte]) -> [heap] buffer.Buffer {
+    var o = be32(heap, b, len(body) - 4);
+    o = buffer.append(heap, o, body);
+    return be32(heap, o, crc.crc32_of(body));
+}
+
+fn type_of[&a](body: &!a [byte], t: int) -> [] int {
+    // the four letters of a chunk type as a number: 73 72 68 82 = IHDR and so on, passed as 4 bytes packed big-endian
+    body[0] = byte_of(t / 16777216 % 256); body[1] = byte_of(t / 65536 % 256); body[2] = byte_of(t / 256 % 256); body[3] = byte_of(t % 256);
+    return 0;
+}
+
+// Append the PNG of a `w` x `h` image of palette indexes `pix` (row-major) with the palette `pal` (3 bytes per entry, up to 256 entries) to `b`. The pixel data must fit one stored block: w * (h) + h <= 65535.
+pub fn indexed[&hp, &a, &p](heap: &!hp Heap, b: buffer.Buffer, w: int, h: int, pix: &a [byte], pal: &p [byte]) -> [heap] buffer.Buffer {
+    var o = b;
+    // signature 89 50 4E 47 0D 0A 1A 0A
+    o = buffer.push(heap, o, byte_of(137)); o = buffer.push(heap, o, byte_of(80)); o = buffer.push(heap, o, byte_of(78)); o = buffer.push(heap, o, byte_of(71));
+    o = buffer.push(heap, o, byte_of(13)); o = buffer.push(heap, o, byte_of(10)); o = buffer.push(heap, o, byte_of(26)); o = buffer.push(heap, o, byte_of(10));
+    region r {
+        // IHDR: width, height, bit depth 8, colour type 3 (palette), compression 0, filter 0, interlace 0
+        let ih = alloc_slice[r](4 + 13, byte_of(0));
+        type_of(ih, 1229472850);
+        ih[4] = byte_of(w / 16777216 % 256); ih[5] = byte_of(w / 65536 % 256); ih[6] = byte_of(w / 256 % 256); ih[7] = byte_of(w % 256);
+        ih[8] = byte_of(h / 16777216 % 256); ih[9] = byte_of(h / 65536 % 256); ih[10] = byte_of(h / 256 % 256); ih[11] = byte_of(h % 256);
+        ih[12] = byte_of(8); ih[13] = byte_of(3);
+        o = chunk(heap, o, ih);
+        // PLTE
+        let pl = alloc_slice[r](4 + len(pal), byte_of(0));
+        type_of(pl, 1347179589);
+        var k = 0;
+        while k < len(pal) { pl[4 + k] = pal[k]; k = k + 1; }
+        o = chunk(heap, o, pl);
+        // IDAT: zlib header 78 01, one stored final block (01, LEN and NLEN little-endian), each row led by the filter byte 0, then the Adler-32 of the rows
+        let raw = alloc_slice[r](h * (w + 1), byte_of(0));
+        var y = 0;
+        while y < h {
+            var x = 0;
+            while x < w { raw[y * (w + 1) + 1 + x] = pix[y * w + x]; x = x + 1; }
+            y = y + 1;
+        }
+        let n = len(raw);
+        let id = alloc_slice[r](4 + 2 + 5 + n + 4, byte_of(0));
+        type_of(id, 1229209940);
+        id[4] = byte_of(120); id[5] = byte_of(1);
+        id[6] = byte_of(1);
+        id[7] = byte_of(n % 256); id[8] = byte_of(n / 256 % 256);
+        id[9] = byte_of((65535 - n) % 256); id[10] = byte_of((65535 - n) / 256 % 256);
+        k = 0;
+        while k < n { id[11 + k] = raw[k]; k = k + 1; }
+        let ad = adler32(raw);
+        id[11 + n] = byte_of(ad / 16777216 % 256); id[12 + n] = byte_of(ad / 65536 % 256); id[13 + n] = byte_of(ad / 256 % 256); id[14 + n] = byte_of(ad % 256);
+        o = chunk(heap, o, id);
+        // IEND
+        let en = alloc_slice[r](4, byte_of(0));
+        type_of(en, 1229278788);
+        o = chunk(heap, o, en);
+    }
+    return o;
+}
