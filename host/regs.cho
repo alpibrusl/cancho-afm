@@ -1,0 +1,275 @@
+edition 5;
+
+module regs;
+
+// `regs` -- the register map of `afm_top` as data: the ONE place the indexes, names, access kinds, reset values and bit fields are written. The twin
+// (sim/board.cho) and the host (host/session.cho, host/bringup.cho) use these names; gen/regs_chw.cho prints the cancho-hdl contract (hw/afm.chw, checked by `chw check`,
+// which also gives a C header), gen/regs_doc.cho the table of docs/registers.md, and gen/regs_tb.cho a Verilog check of the real register file; tests/contract_test.cho
+// checks the twin against this table. A register's address is 0x40000000 + 4 * index. Kinds: 0 RW, 1 RO, 2 WO.
+
+pub fn count() -> [] int { return 50; }
+
+// the name of the register at index k
+pub fn name_at(k: int) -> [] &static [byte] {
+    if k == 0 { return "ID"; }
+    if k == 1 { return "CTRL"; }
+    if k == 2 { return "STATUS"; }
+    if k == 3 { return "SAMPLE_DIV"; }
+    if k == 4 { return "TUNING"; }
+    if k == 5 { return "WINDOW"; }
+    if k == 6 { return "HALF"; }
+    if k == 7 { return "SHIFT"; }
+    if k == 8 { return "SETPOINT"; }
+    if k == 9 { return "KP"; }
+    if k == 10 { return "KI"; }
+    if k == 11 { return "KD"; }
+    if k == 12 { return "ILIM"; }
+    if k == 13 { return "ZMIN"; }
+    if k == 14 { return "ZMAX"; }
+    if k == 15 { return "ZINIT"; }
+    if k == 16 { return "ZRETRACT"; }
+    if k == 17 { return "TIMEOUT"; }
+    if k == 18 { return "KICK"; }
+    if k == 19 { return "DRIVE_AMP"; }
+    if k == 20 { return "DRIVE_OFFS"; }
+    if k == 21 { return "NPIX"; }
+    if k == 22 { return "NLINES"; }
+    if k == 23 { return "X0"; }
+    if k == 24 { return "Y0"; }
+    if k == 25 { return "DX"; }
+    if k == 26 { return "DY"; }
+    if k == 27 { return "PIXDIV"; }
+    if k == 28 { return "MAN_Z"; }
+    if k == 29 { return "MAN_X"; }
+    if k == 30 { return "MAN_Y"; }
+    if k == 31 { return "MAN_D"; }
+    if k == 32 { return "AMP"; }
+    if k == 33 { return "ZOUT"; }
+    if k == 34 { return "XOUT"; }
+    if k == 35 { return "YOUT"; }
+    if k == 36 { return "I"; }
+    if k == 37 { return "Q"; }
+    if k == 38 { return "ADC0"; }
+    if k == 39 { return "ADC1"; }
+    if k == 40 { return "NSAMP"; }
+    if k == 41 { return "NWIN"; }
+    if k == 42 { return "PIXLINE"; }
+    if k == 43 { return "MOTOR_CMD"; }
+    if k == 44 { return "MOTOR_RATE"; }
+    if k == 45 { return "MOTOR_STATUS"; }
+    if k == 46 { return "MOTOR_POS"; }
+    if k == 47 { return "MOTOR_MAX"; }
+    if k == 48 { return "SINE_AMP"; }
+    if k == 49 { return "SINE_STEP"; }
+    return "";
+}
+
+pub fn kind_at(k: int) -> [] int {
+    if k == 0 { return 1; }
+    if k == 2 { return 1; }
+    if k == 18 { return 2; }
+    if k == 32 { return 1; }
+    if k == 33 { return 1; }
+    if k == 34 { return 1; }
+    if k == 35 { return 1; }
+    if k == 36 { return 1; }
+    if k == 37 { return 1; }
+    if k == 38 { return 1; }
+    if k == 39 { return 1; }
+    if k == 40 { return 1; }
+    if k == 41 { return 1; }
+    if k == 42 { return 1; }
+    if k == 43 { return 2; }
+    if k == 45 { return 1; }
+    if k == 46 { return 1; }
+    return 0;
+}
+
+pub fn reset_at(k: int) -> [] int {
+    if k == 0 { return 2941255681; }
+    if k == 3 { return 103; }
+    if k == 4 { return 536870912; }
+    if k == 5 { return 256; }
+    if k == 6 { return 2; }
+    if k == 20 { return 32768; }
+    if k == 21 { return 2; }
+    if k == 22 { return 1; }
+    if k == 27 { return 1; }
+    if k == 31 { return 32768; }
+    if k == 44 { return 27000; }
+    return 0;
+}
+
+pub fn doc_at(k: int) -> [] &static [byte] {
+    if k == 0 { return "identifier and version"; }
+    if k == 1 { return "run bits"; }
+    if k == 2 { return "status bits"; }
+    if k == 3 { return "FPGA clocks between ADC conversions"; }
+    if k == 4 { return "reference phase step per sample: 2^32 f / fs"; }
+    if k == 5 { return "samples per detector window"; }
+    if k == 6 { return "SPI clocks per half SCK period"; }
+    if k == 7 { return "right shift of the detector figure before the loop"; }
+    if k == 8 { return "the loop's target for the shifted figure (signed)"; }
+    if k == 9 { return "proportional gain, Q16"; }
+    if k == 10 { return "integral gain, Q16"; }
+    if k == 11 { return "derivative gain, Q16"; }
+    if k == 12 { return "integral limit"; }
+    if k == 13 { return "hardware limit on Z, low (pm)"; }
+    if k == 14 { return "hardware limit on Z, high (pm)"; }
+    if k == 15 { return "Z at rest (pm)"; }
+    if k == 16 { return "Z after a fault (pm)"; }
+    if k == 17 { return "deadman, FPGA clocks without a KICK (0 = off)"; }
+    if k == 18 { return "any write restarts the deadman"; }
+    if k == 19 { return "fork drive amplitude, DAC codes"; }
+    if k == 20 { return "fork drive mid-scale, DAC codes"; }
+    if k == 21 { return "raster pixels per line"; }
+    if k == 22 { return "raster lines"; }
+    if k == 23 { return "raster start X, DAC code"; }
+    if k == 24 { return "raster start Y, DAC code"; }
+    if k == 25 { return "raster step X, DAC codes"; }
+    if k == 26 { return "raster step Y, DAC codes"; }
+    if k == 27 { return "loop steps per raster pixel"; }
+    if k == 28 { return "Z DAC code in manual mode"; }
+    if k == 29 { return "X DAC code in manual mode"; }
+    if k == 30 { return "Y DAC code in manual mode"; }
+    if k == 31 { return "drive DAC code in manual mode"; }
+    if k == 32 { return "latest detector figure"; }
+    if k == 33 { return "the Z the DAC is told (pm)"; }
+    if k == 34 { return "raster X, DAC code"; }
+    if k == 35 { return "raster Y, DAC code"; }
+    if k == 36 { return "latest window's I sum"; }
+    if k == 37 { return "latest window's Q sum"; }
+    if k == 38 { return "latest raw conversion, channel 0"; }
+    if k == 39 { return "latest raw conversion, channel 1"; }
+    if k == 40 { return "conversions since ADC run was set"; }
+    if k == 41 { return "windows since ADC run was set"; }
+    if k == 42 { return "raster line and pixel"; }
+    if k == 43 { return "signed microsteps for the coarse motor"; }
+    if k == 44 { return "FPGA clocks per microstep"; }
+    if k == 45 { return "motor status bits"; }
+    if k == 46 { return "microsteps since power-on (signed)"; }
+    if k == 47 { return "most microsteps one command may ask for; 0 = none"; }
+    if k == 48 { return "sinusoidal fast axis: amplitude, X DAC codes"; }
+    if k == 49 { return "sinusoidal fast axis: phase step per raster tick (65536 = one line)"; }
+    return "";
+}
+
+// bit fields: how many a register has (0 = one field spanning all 32 bits, named VALUE), and the j-th one
+pub fn nfields(k: int) -> [] int {
+    if k == 1 { return 7; }
+    if k == 2 { return 5; }
+    if k == 42 { return 2; }
+    if k == 45 { return 3; }
+    return 0;
+}
+
+pub fn field_name(k: int, j: int) -> [] &static [byte] {
+    if k == 1 && j == 0 { return "RUN"; }
+    if k == 1 && j == 1 { return "DRIVE_EN"; }
+    if k == 1 && j == 2 { return "SCAN"; }
+    if k == 1 && j == 3 { return "MANUAL"; }
+    if k == 1 && j == 4 { return "ADC_RUN"; }
+    if k == 1 && j == 5 { return "MOTOR_EN"; }
+    if k == 1 && j == 6 { return "SINE"; }
+    if k == 2 && j == 0 { return "FAULT"; }
+    if k == 2 && j == 1 { return "LOOP_BUSY"; }
+    if k == 2 && j == 2 { return "OVERFLOW"; }
+    if k == 2 && j == 3 { return "SCAN_DONE"; }
+    if k == 2 && j == 4 { return "ADC_BUSY"; }
+    if k == 42 && j == 0 { return "LINE"; }
+    if k == 42 && j == 1 { return "PIX"; }
+    if k == 45 && j == 0 { return "BUSY"; }
+    if k == 45 && j == 1 { return "ENABLED"; }
+    if k == 45 && j == 2 { return "REFUSED"; }
+    return "VALUE";
+}
+
+pub fn field_lsb(k: int, j: int) -> [] int {
+    if k == 1 && j == 1 { return 1; }
+    if k == 1 && j == 2 { return 2; }
+    if k == 1 && j == 3 { return 3; }
+    if k == 1 && j == 4 { return 4; }
+    if k == 1 && j == 5 { return 5; }
+    if k == 1 && j == 6 { return 6; }
+    if k == 2 && j == 1 { return 1; }
+    if k == 2 && j == 2 { return 2; }
+    if k == 2 && j == 3 { return 3; }
+    if k == 2 && j == 4 { return 4; }
+    if k == 42 && j == 1 { return 16; }
+    if k == 45 && j == 1 { return 1; }
+    if k == 45 && j == 2 { return 2; }
+    return 0;
+}
+
+pub fn field_msb(k: int, j: int) -> [] int {
+    if k == 1 && j == 0 { return 0; }
+    if k == 1 && j == 1 { return 1; }
+    if k == 1 && j == 2 { return 2; }
+    if k == 1 && j == 3 { return 3; }
+    if k == 1 && j == 4 { return 4; }
+    if k == 1 && j == 5 { return 5; }
+    if k == 1 && j == 6 { return 6; }
+    if k == 2 && j == 0 { return 0; }
+    if k == 2 && j == 1 { return 1; }
+    if k == 2 && j == 2 { return 2; }
+    if k == 2 && j == 3 { return 3; }
+    if k == 2 && j == 4 { return 4; }
+    if k == 42 && j == 0 { return 15; }
+    if k == 42 && j == 1 { return 31; }
+    if k == 45 && j == 0 { return 0; }
+    if k == 45 && j == 1 { return 1; }
+    if k == 45 && j == 2 { return 2; }
+    return 31;
+}
+
+// the indexes by name, for the host and the twin
+pub fn id() -> [] int { return 0; }
+pub fn ctrl() -> [] int { return 1; }
+pub fn status() -> [] int { return 2; }
+pub fn sample_div() -> [] int { return 3; }
+pub fn tuning() -> [] int { return 4; }
+pub fn window() -> [] int { return 5; }
+pub fn half() -> [] int { return 6; }
+pub fn shift() -> [] int { return 7; }
+pub fn setpoint() -> [] int { return 8; }
+pub fn kp() -> [] int { return 9; }
+pub fn ki() -> [] int { return 10; }
+pub fn kd() -> [] int { return 11; }
+pub fn ilim() -> [] int { return 12; }
+pub fn zmin() -> [] int { return 13; }
+pub fn zmax() -> [] int { return 14; }
+pub fn zinit() -> [] int { return 15; }
+pub fn zretract() -> [] int { return 16; }
+pub fn timeout() -> [] int { return 17; }
+pub fn kick() -> [] int { return 18; }
+pub fn drive_amp() -> [] int { return 19; }
+pub fn drive_offs() -> [] int { return 20; }
+pub fn npix() -> [] int { return 21; }
+pub fn nlines() -> [] int { return 22; }
+pub fn x0() -> [] int { return 23; }
+pub fn y0() -> [] int { return 24; }
+pub fn dx() -> [] int { return 25; }
+pub fn dy() -> [] int { return 26; }
+pub fn pixdiv() -> [] int { return 27; }
+pub fn man_z() -> [] int { return 28; }
+pub fn man_x() -> [] int { return 29; }
+pub fn man_y() -> [] int { return 30; }
+pub fn man_d() -> [] int { return 31; }
+pub fn amp() -> [] int { return 32; }
+pub fn zout() -> [] int { return 33; }
+pub fn xout() -> [] int { return 34; }
+pub fn yout() -> [] int { return 35; }
+pub fn i() -> [] int { return 36; }
+pub fn q() -> [] int { return 37; }
+pub fn adc0() -> [] int { return 38; }
+pub fn adc1() -> [] int { return 39; }
+pub fn nsamp() -> [] int { return 40; }
+pub fn nwin() -> [] int { return 41; }
+pub fn pixline() -> [] int { return 42; }
+pub fn motor_cmd() -> [] int { return 43; }
+pub fn motor_rate() -> [] int { return 44; }
+pub fn motor_status() -> [] int { return 45; }
+pub fn motor_pos() -> [] int { return 46; }
+pub fn motor_max() -> [] int { return 47; }
+pub fn sine_amp() -> [] int { return 48; }
+pub fn sine_step() -> [] int { return 49; }

@@ -1,0 +1,50 @@
+edition 5;
+
+module motor;
+
+// `motor` -- the coarse-approach stepper driver (for an A4988-style STEP/DIR/EN module), one FPGA clock per call, written as the reference the generated
+// SystemVerilog (gen/glue.cho) must equal on every clock. NOT TESTED WITH ANY MOTOR.
+//
+//   A command is a signed number of microsteps: positive moves the tip TOWARD the sample (DIR high), negative away. It starts only when the driver is
+//   enabled, is not held (the board holds it on a fault) and is idle; a command while busy is ignored. Each step is one period of `rate` clocks (at least 4):
+//   STEP low for the first half (the direction is set up), high for the second half; the position counter moves on the rising edge.
+//   The period is read when the command starts and held for the move. Disabling or holding aborts at once: STEP low, no more steps, the position kept.
+
+pub struct Mo { busy: int, step: int, dir: int, pos: int, remaining: int, cnt: int, per: int }
+
+pub fn reset() -> [] Mo {
+    return Mo { busy: 0, step: 0, dir: 0, pos: 0, remaining: 0, cnt: 0, per: 4 };
+}
+
+fn period_of(rate: int) -> [] int {
+    if rate < 4 { return 4; }
+    return rate;
+}
+
+pub fn step(s: Mo, enable: int, hold: int, go: int, steps: int, rate: int) -> [] Mo {
+    if enable == 0 || hold == 1 {
+        return Mo { busy: 0, step: 0, dir: s.dir, pos: s.pos, remaining: 0, cnt: 0, per: s.per };
+    }
+    if s.busy == 0 {
+        if go == 1 && steps != 0 {
+            var d = 0;
+            var n = 0 - steps;
+            if steps > 0 { d = 1; n = steps; }
+            return Mo { busy: 1, step: 0, dir: d, pos: s.pos, remaining: n, cnt: 0, per: period_of(rate) };
+        }
+        return Mo { busy: 0, step: 0, dir: s.dir, pos: s.pos, remaining: s.remaining, cnt: s.cnt, per: s.per };
+    }
+    let half = s.per / 2;
+    if s.cnt == s.per - 1 {
+        var busy = 1;
+        if s.remaining == 1 { busy = 0; }
+        return Mo { busy: busy, step: 0, dir: s.dir, pos: s.pos, remaining: s.remaining - 1, cnt: 0, per: s.per };
+    }
+    var st = 0;
+    if s.cnt + 1 >= half { st = 1; }
+    var pos = s.pos;
+    if s.cnt + 1 == half {
+        if s.dir == 1 { pos = pos + 1; } else { pos = pos - 1; }
+    }
+    return Mo { busy: 1, step: st, dir: s.dir, pos: pos, remaining: s.remaining, cnt: s.cnt + 1, per: s.per };
+}

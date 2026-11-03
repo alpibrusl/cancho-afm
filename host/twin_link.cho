@@ -1,0 +1,45 @@
+edition 5;
+
+module twin_link;
+
+import board;
+
+// `twin_link` -- the serial bridge of the real board, in software, in front of the twin (sim/board.cho): bytes in, bytes out. It decodes the
+// request exactly as the Verilog bridge does (only 0x400000XX, word-aligned, is an address; anything else is SLVERR) and answers with the
+// bridge's response bytes. A host program that builds its requests with host/proto.cho and reads the answers the same way cannot tell it
+// from the board, so the same program (and the same bytes) can be tried here first.
+
+// Handle one request in `req`; write the answer into `resp`; returns the number of answer bytes (1 for a write, 5 for a read, 0 for a byte that is not a command).
+pub fn exchange[&a, &b, &c, &d, &e, &f](rf: &!a [int], st: &!b [int], req: &c [byte], resp: &!d [byte], fl: &e [float]) -> [] int {
+    let cmd = int_of(req[0]);
+    if cmd != 87 && cmd != 82 { return 0; }
+    let a3 = int_of(req[1]);
+    let a2 = int_of(req[2]);
+    let a1 = int_of(req[3]);
+    let a0 = int_of(req[4]);
+    let addr = a3 * 16777216 + a2 * 65536 + a1 * 256 + a0;
+    let mapped = a3 == 64 && a2 == 0 && a1 == 0 && a0 % 4 == 0;
+    let idx = a0 / 4;
+    if cmd == 87 {
+        var code = 2;
+        if mapped {
+            let value = int_of(req[5]) * 16777216 + int_of(req[6]) * 65536 + int_of(req[7]) * 256 + int_of(req[8]);
+            code = board.write(rf, st, idx, value);
+        }
+        resp[0] = byte_of(code);
+        return 1;
+    }
+    var code = 2;
+    var value = 0;
+    if mapped {
+        let (v, c) = board.read(rf, st, idx);
+        value = v;
+        code = c;
+    }
+    resp[0] = byte_of(code);
+    resp[1] = byte_of(value / 16777216 % 256);
+    resp[2] = byte_of(value / 65536 % 256);
+    resp[3] = byte_of(value / 256 % 256);
+    resp[4] = byte_of(value % 256);
+    return 5;
+}

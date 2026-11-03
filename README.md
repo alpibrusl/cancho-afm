@@ -26,5 +26,11 @@ behind a limit and a deadman that live in hardware, so a software fault cannot d
 | `docs/open-hardware-policy.md` | what "open hardware only" means for this project and what it excludes |
 | `docs/references.md` | the open AFM/SPM projects this builds on, read from search results, not verified |
 | `docs/manual/` | how to build the device (draft) |
+| `docs/index.html` | the project page and the step-by-step tutorial |
+| `docs/simulator.md`, `docs/host.md`, `docs/registers.md` | the software twin, the host program, the board's register map |
+| `docs/amplifier.md`, `hw/amp/` | the amplifier design and its ngspice simulations |
+| `docs/first-hardware.md`, `bench/` | the first run on the real board |
+| `docs/cost.md`, `docs/buy-now.md` | what build one costs for France and Spain, and what to order now |
+| `gen/`, `sim/`, `host/`, `tests/` | the generated hardware, the models, the host program and their tests; `sh test_all.sh` runs all of it |
 
 Open questions are issues in this repository.

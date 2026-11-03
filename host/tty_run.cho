@@ -1,0 +1,135 @@
+edition 8;
+
+import std.io;
+import std.buffer;
+import proto;
+import regs;
+import script;
+import session;
+
+// tty_run.cho -- the automatic run (host/session.cho) against the REAL board over its serial port. NOT YET RUN ON A BOARD: it has only been
+// compile-checked. It needs the edition-8 compiler (the Tty capability), which is newer than the one the rest of this repository is tested with.
+//
+// SAFETY, before you run it: it WRITES registers (limits, loop settings, the DACs). Run it only on a board loaded with afm_top (gen/build_fpga.sh)
+// and wired as gen/afm_top.cst says. The first thing it does is READ the identifier register and give up, writing nothing, if it is not afm_top's
+// (0xAF500001), so pointing it at some other design on the same serial port (the robot project's, for one) changes nothing. The first run belongs
+// on the bench with no tip, no scanner and the amplifier unpowered (tutorial Parts 5 and 10), where the DA3 outputs can be read on a meter.
+//
+//   cancho run host/tty_run.cho host/session.cho host/script.cho host/proto.cho tune.cho approach.cho ... --std     (see docs/host.md)
+
+fn port_path() -> [] int { return 0; }
+
+// One request, one answer: write `n` bytes from `req`, wait for `want` bytes into `rsp`. Returns how many arrived.
+fn exchange[&q, &p, &a, &b, &c, &d](port: &!q Port, pw: &!p Poller, req: &a [byte], n: int, rsp: &!b [byte], want: int, chunk: &!c [byte], ev: &!d [int]) -> [poll, tty_read, tty_write] int {
+    tty_flush_input(port);
+    tty_write(port, req[0..n]);
+    var got = 0;
+    var tries = 0;
+    while got < want && tries < 60 {
+        let k = tty_read(port, chunk);
+        if k > 0 {
+            var i = 0;
+            while i < k && got < want {
+                rsp[got] = chunk[i];
+                got = got + 1;
+                i = i + 1;
+            }
+        } else {
+            poller_wait(pw, ev, 20);
+            tries = tries + 1;
+        }
+    }
+    return got;
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec, tty } = split(world);
+    release(ffi); release(fs); release(args); release(net); release(signals); release(exec); release(clock);
+    var status = 3;
+    let device = narrow(tty, "/dev");
+    match poller_new() {
+        Polling::Failed(e) => { release(device); release(io); release(heap); return 1; }
+        Polling::Ok(open) => {
+            var p = open;
+            borrow device as &t in {
+                match tty_open(t, "/dev/ttyUSB1") {
+                    TtyOpened::Failed(errno) => { status = 4; }
+                    TtyOpened::Ok(port) => {
+                        borrow mut port as &!q in {
+                            if tty_configure(q, 115200) != 0 { status = 5; }
+                            else {
+                                borrow mut p as &!pw in { poller_add_tty(pw, q, 1, 1); }
+                                region r {
+                                    let req = alloc_slice[r](16, byte_of(0));
+                                    let rsp = alloc_slice[r](16, byte_of(0));
+                                    let chunk = alloc_slice[r](16, byte_of(0));
+                                    let ev = alloc_slice[r](2, 0);
+                                    // 1. who is there? Read the identifier before writing anything.
+                                    proto.read_req(req, regs.id());
+                                    var got = 0;
+                                    borrow mut p as &!pw in { got = exchange(q, pw, req, 5, rsp, 5, chunk, ev); }
+                                    if got == 5 && proto.resp_code(rsp) == 0 && proto.resp_value(rsp) == 0xAF500001 {
+                                        let ss = alloc_slice[r](32, 0);
+                                        let sf = alloc_slice[r](8, 0.0);
+                                        let sc = alloc_slice[r](4 * 200, 0);
+                                        let out = alloc_slice[r](128, 0);
+                                        let img = alloc_slice[r](64, 0 - 1);
+                                        var guard = 0;
+                                        while ss[0] != 99 && ss[0] != 98 && guard < 40000 {
+                                            let nops = session.build(ss, sf, sc);
+                                            var reads = 0;
+                                            var i = 0;
+                                            while i < nops {
+                                                let op = sc[4 * i];
+                                                let idx = sc[4 * i + 1];
+                                                let x = sc[4 * i + 2];
+                                                if op == 1 {
+                                                    proto.write_req(req, idx, x);
+                                                    var g = 0;
+                                                    borrow mut p as &!pw in { g = exchange(q, pw, req, 9, rsp, 1, chunk, ev); }
+                                                    if g != 1 || proto.resp_code(rsp) != 0 { ss[2] = 7; ss[0] = 98; }
+                                                }
+                                                if op == 2 {
+                                                    proto.read_req(req, idx);
+                                                    var g = 0;
+                                                    borrow mut p as &!pw in { g = exchange(q, pw, req, 5, rsp, 5, chunk, ev); }
+                                                    if g != 5 || proto.resp_code(rsp) != 0 { ss[2] = 7; ss[0] = 98; }
+                                                    reads = reads + 1;
+                                                    out[reads] = proto.resp_value(rsp);
+                                                }
+                                                if op == 3 {
+                                                    // a wait of x FPGA clocks (27 MHz): the poller sleeps it, in steps of at most 50 ms
+                                                    var ms = x / 27000;
+                                                    while ms > 0 {
+                                                        var step = ms;
+                                                        if step > 50 { step = 50; }
+                                                        borrow mut p as &!pw in { poller_wait(pw, ev, step); }
+                                                        ms = ms - step;
+                                                    }
+                                                }
+                                                i = i + 1;
+                                            }
+                                            out[0] = reads;
+                                            if ss[0] != 98 { session.consume(ss, sf, out, img); }
+                                            guard = guard + 1;
+                                        }
+                                        status = 0;
+                                        if ss[0] != 99 { status = 6; }
+                                    } else {
+                                        status = 2;
+                                    }
+                                }
+                            }
+                        }
+                        tty_close(port);
+                    }
+                }
+            }
+            release(device);
+            poller_close(p);
+        }
+    }
+    release(io);
+    release(heap);
+    return status;
+}

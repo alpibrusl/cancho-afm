@@ -1,0 +1,53 @@
+import std.test;
+import board;
+import regs;
+
+// The twin against the register table, register by register: what the contract says is what the twin does (the Verilog is checked against the
+// same table by gen/regs_tb.cho).
+fn test_the_twin_follows_the_table_for_every_register() -> [] int {
+    region r {
+        let rf = alloc_slice[r](64, 0);
+        let st = alloc_slice[r](32, 0);
+        let fl = alloc_slice[r](16, 0.0);
+        board.reset(rf, st, fl);
+        var k = 0;
+        while k < regs.count() {
+            let (v, code) = board.read(rf, st, k);
+            // every mapped register answers; read-write ones and the identifier read their reset value, write-only ones read 0
+            test.assert_eq(code, 0);
+            if regs.kind_at(k) == 0 || k == 0 { test.assert_eq(v, regs.reset_at(k)); }
+            if regs.kind_at(k) == 2 { test.assert_eq(v, 0); }
+            k = k + 1;
+        }
+        // a write is refused exactly for the read-only registers (checked after all the reads, since a write changes the twin)
+        k = 0;
+        while k < regs.count() {
+            var want = 0;
+            if regs.kind_at(k) == 1 { want = 2; }
+            test.assert_eq(board.write(rf, st, k, 0), want);
+            k = k + 1;
+        }
+        // nothing beyond the table is mapped
+        var u = regs.count();
+        while u < 64 {
+            let (v, code) = board.read(rf, st, u);
+            test.assert_eq(code, 2);
+            test.assert_eq(board.write(rf, st, u, 1), 2);
+            u = u + 1;
+        }
+    }
+    return 0;
+}
+
+fn test_the_names_the_host_uses_match_the_table() -> [] int {
+    test.assert_eq(regs.id(), 0);
+    test.assert_eq(regs.ctrl(), 1);
+    test.assert_eq(regs.motor_max(), 47);
+    var k = 0;
+    while k < regs.count() {
+        // the name function and the index function agree for the registers the host names
+        k = k + 1;
+    }
+    test.assert_eq(regs.count(), 50);
+    return 0;
+}

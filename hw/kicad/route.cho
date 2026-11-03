@@ -1,0 +1,459 @@
+edition 7;
+
+import std.io;
+import std.buffer;
+
+// route.cho -- a grid router for the piezo driver board, in cancho. It reads /tmp/amprouter/pads.txt (written by gen_pcb.py) and prints the tracks and vias that join each net's pads:
+//   input   line 1: "W H" the board in micrometres; then one line per pad: "net x y radius layers route width guard"  (layers 0 = through-hole, 1 = front copper only; route 0 = an obstacle only, as the GND pad
+//           of a poured net; width the net's track width in um; guard 0, or the clearance in um that other copper must keep from this net, for a high-impedance node)
+//   output  "S layer net x1 y1 x2 y2 width" a track segment (layer 0 front, 1 back), "V net x y" a via; "F net" on stderr for a net it could not finish.
+// How: a grid of 127 um, two layers; a net grows as a tree, one pad at a time, by a shortest-path search (Dijkstra, uniform steps, a penalty for a track against the layer's preferred direction
+// and for a via) from every cell of the tree to the nearest pad of the net not yet joined. A routed track and each pad are written into the grid as keep-out disks for the other nets: radius of a
+// track 0.25 mm wide with 0.2 mm clearance, of a via 0.8 mm; a second grid with the larger disks decides where a via may go. No rip-up: a net that is blocked is reported and left, so the answer
+// is a partial routing, never a short. KiCad's DRC is the judge of the result (hw/kicad/check.sh); this program's own geometry is a model of the rules, not the rules.
+
+fn gridum() -> [] int { return 127; }
+fn track_w() -> [] int { return 250; }
+fn clearance() -> [] int { return 200; }
+fn via_um() -> [] int { return 800; }
+fn edge_um() -> [] int { return 500; }
+fn via_cost() -> [] int { return 60; }
+fn big() -> [] int { return 1099511627776; }
+
+fn text[&h, &r](heap: &!h Heap, b: buffer.Buffer, s: &r [byte]) -> [heap] buffer.Buffer { return buffer.append(heap, b, s); }
+fn nat[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer { return buffer.push_nat(heap, b, n); }
+
+// the next unsigned integer of `buf` from `pos[0]` on (skipping anything else); -1 at the end
+fn next_int[&a, &p](buf: &a [byte], n: int, pos: &!p [int]) -> [] int {
+    var i = pos[0];
+    while i < n && (int_of(buf[i]) < 48 || int_of(buf[i]) > 57) { i = i + 1; }
+    if i >= n { pos[0] = i; return 0 - 1; }
+    var v = 0;
+    while i < n && int_of(buf[i]) >= 48 && int_of(buf[i]) <= 57 {
+        v = v * 10 + (int_of(buf[i]) - 48);
+        i = i + 1;
+    }
+    pos[0] = i;
+    return v;
+}
+
+// cell index: (layer * ny + y) * nx + x
+fn cell(l: int, x: int, y: int, nx: int, ny: int) -> [] int { return (l * ny + y) * nx + x; }
+
+// write a keep-out disk of `rc` cells around (cx, cy) into array `which` of `bm` (0 occ, 1 occ2) on the given layers (0, 1, or 2 = both): free cells take `net`, cells of another net become 255
+fn mark[&b](bm: &!b [byte], which: int, layers: int, cx: int, cy: int, rc: int, net: int, nx: int, ny: int) -> [] int {
+    let total = nx * ny * 2;
+    var l = 0;
+    while l < 2 {
+        if layers == 2 || layers == l {
+            var dy = 0 - rc;
+            while dy <= rc {
+                var dx = 0 - rc;
+                while dx <= rc {
+                    let x = cx + dx;
+                    let y = cy + dy;
+                    if dx * dx + dy * dy <= rc * rc && x >= 0 && x < nx && y >= 0 && y < ny {
+                        let c = which * total + cell(l, x, y, nx, ny);
+                        let o = int_of(bm[c]);
+                        if o == 0 { bm[c] = byte_of(net); }
+                        else if o != net { bm[c] = byte_of(255); }
+                    }
+                    dx = dx + 1;
+                }
+                dy = dy + 1;
+            }
+        }
+        l = l + 1;
+    }
+    return 0;
+}
+
+// binary min-heap on (key, value) in hk, hv; the size in st[0]
+fn push[&k, &v, &s](hk: &!k [int], hv: &!v [int], st: &!s [int], cap: int, key: int, val_: int) -> [] int {
+    if st[0] >= cap { return 0 - 1; }
+    var i = st[0];
+    st[0] = i + 1;
+    hk[i] = key;
+    hv[i] = val_;
+    while i > 0 {
+        let p = (i - 1) / 2;
+        if hk[p] <= hk[i] { return 0; }
+        let tk = hk[p]; let tv = hv[p];
+        hk[p] = hk[i]; hv[p] = hv[i];
+        hk[i] = tk; hv[i] = tv;
+        i = p;
+    }
+    return 0;
+}
+
+// remove the smallest; its value is returned, its key left in st[1]
+fn pop[&k, &v, &s](hk: &!k [int], hv: &!v [int], st: &!s [int]) -> [] int {
+    let top = hv[0];
+    st[1] = hk[0];
+    let n = st[0] - 1;
+    st[0] = n;
+    if n > 0 {
+        hk[0] = hk[n]; hv[0] = hv[n];
+        var i = 0;
+        var go = true;
+        while go {
+            let l = 2 * i + 1;
+            let r = l + 1;
+            var m = i;
+            if l < n && hk[l] < hk[m] { m = l; }
+            if r < n && hk[r] < hk[m] { m = r; }
+            if m == i { go = false; }
+            else {
+                let tk = hk[m]; let tv = hv[m];
+                hk[m] = hk[i]; hv[m] = hv[i];
+                hk[i] = tk; hv[i] = tv;
+                i = m;
+            }
+        }
+    }
+    return top;
+}
+
+// may net `n` stand on cell c (a track), and may it put a via there (both layers, the larger disks)
+fn free_for(o: int, n: int) -> [] bool { return o == 0 || o == n; }
+
+// shortest path from the tree cells in `tl` (count tn) to a cell with bm[tgt] != 0; the end cell, or -1. The path is left in par.
+fn search[&b, &d, &k, &v, &s, &t](bm: &!b [byte], dist: &!d [int], hk: &!k [int], hv: &!v [int], st: &!s [int], cap: int, tl: &t [int], tn: int, net: int, nx: int, ny: int) -> [] int {
+    let total = nx * ny * 2;
+    var i = 0;
+    while i < total { dist[i] = big(); bm[4 * total + i] = byte_of(0); i = i + 1; }
+    st[0] = 0;
+    i = 0;
+    while i < tn {
+        dist[tl[i]] = 0;
+        push(hk, hv, st, cap, 0, tl[i]);
+        i = i + 1;
+    }
+    while st[0] > 0 {
+        let c = pop(hk, hv, st);
+        let d = st[1];
+        if d <= dist[c] {
+            if int_of(bm[2 * total + c]) != 0 { return c; }
+            let l = c / (nx * ny);
+            let y = c / nx % ny;
+            let x = c % nx;
+            var dir = 1;
+            while dir <= 5 {
+                var nc = 0 - 1;
+                var step = 1;
+                if dir == 1 && x > 0 { nc = c - 1; if l == 1 { step = 3; } }
+                if dir == 2 && x + 1 < nx { nc = c + 1; if l == 1 { step = 3; } }
+                if dir == 3 && y > 0 { nc = c - nx; if l == 0 { step = 3; } }
+                if dir == 4 && y + 1 < ny { nc = c + nx; if l == 0 { step = 3; } }
+                if dir == 5 {
+                    // a via: the same (x, y) on the other layer; both cells free for this net, and the via disks free on both layers
+                    let oc = c + (1 - 2 * l) * nx * ny;
+                    let base = (c % (nx * ny));
+                    if free_for(int_of(bm[total + base]), net) && free_for(int_of(bm[total + nx * ny + base]), net) { nc = oc; step = via_cost(); }
+                }
+                if nc >= 0 && free_for(int_of(bm[nc]), net) {
+                    let nd = d + step;
+                    if nd < dist[nc] {
+                        dist[nc] = nd;
+                        bm[4 * total + nc] = byte_of(dir);
+                        push(hk, hv, st, cap, nd, nc);
+                    }
+                }
+                dir = dir + 1;
+            }
+        }
+    }
+    return 0 - 1;
+}
+
+// the cells tl[from..to) are one path from the end back to the source: write its straight runs as tracks and its layer changes as vias
+fn emit_path[&h, &t](heap: &!h Heap, out: buffer.Buffer, tl: &t [int], from: int, to: int, nt: int, wn: int, nx: int, ny: int) -> [heap] buffer.Buffer {
+    let g = gridum();
+    var o = out;
+    var j = from;
+    while j + 1 < to {
+        let a = tl[j];
+        let b = tl[j + 1];
+        let la = a / (nx * ny);
+        let lb = b / (nx * ny);
+        let xa = a % nx; let ya = a / nx % ny;
+        let xb = b % nx; let yb = b / nx % ny;
+        if la != lb {
+            o = text(heap, o, "V "); o = nat(heap, o, nt); o = text(heap, o, " "); o = nat(heap, o, xa * g); o = text(heap, o, " "); o = nat(heap, o, ya * g); o = text(heap, o, "\n");
+            j = j + 1;
+        } else {
+            // extend the run while the direction stays and the layer stays
+            var k = j + 1;
+            var go = true;
+            while go && k + 1 < to {
+                let c = tl[k];
+                let d = tl[k + 1];
+                let same_layer = (c / (nx * ny)) == (d / (nx * ny));
+                let dx1 = (d % nx) - (c % nx);
+                let dy1 = (d / nx % ny) - (c / nx % ny);
+                if same_layer && dx1 == xb - xa && dy1 == yb - ya { k = k + 1; } else { go = false; }
+            }
+            let e = tl[k];
+            o = text(heap, o, "S "); o = nat(heap, o, la); o = text(heap, o, " "); o = nat(heap, o, nt);
+            o = text(heap, o, " "); o = nat(heap, o, xa * g); o = text(heap, o, " "); o = nat(heap, o, ya * g);
+            o = text(heap, o, " "); o = nat(heap, o, (e % nx) * g); o = text(heap, o, " "); o = nat(heap, o, (e / nx % ny) * g); o = text(heap, o, " "); o = nat(heap, o, wn); o = text(heap, o, "\n");
+            j = k;
+        }
+    }
+    return o;
+}
+
+fn route_all[&h, &b, &d, &k, &v, &s, &t, &p, &o](heap: &!h Heap, bm: &!b [byte], dist: &!d [int], hk: &!k [int], hv: &!v [int], st: &!s [int], tl: &!t [int], pr: &p [int], np: int, ow: &o [int], nx: int, ny: int, cap: int, out: buffer.Buffer) -> [heap] buffer.Buffer {
+    let g = gridum();
+    let total = nx * ny * 2;
+    var o2 = out;
+    var q = 0;
+    while ow[q] > 0 {
+        let nt = ow[q];
+        q = q + 1;
+        var wnet = track_w();
+        var gnet = 0;
+        var pi = 0;
+        while pi < np {
+            if pr[pi * 8] == nt { wnet = pr[pi * 8 + 6]; gnet = pr[pi * 8 + 7]; pi = np; } else { pi = pi + 1; }
+        }
+        var clr = clearance();
+        if gnet > 0 { clr = gnet; }
+        let rtrack = (wnet / 2 + track_w() / 2 + clr + 2 * g - 1) / g;
+        let rtvia = (wnet / 2 + clr + via_um() / 2 + 2 * g - 1) / g;
+        let rvia = (via_um() / 2 + clr + track_w() / 2 + 2 * g - 1) / g;
+        let rviav = (via_um() + clr + 2 * g - 1) / g;
+        var i = 0;
+        var c0 = 0;
+        while c0 < total { bm[2 * total + c0] = byte_of(0); bm[3 * total + c0] = byte_of(0); c0 = c0 + 1; }
+        var tn = 0;
+        var first = true;
+        var left = 0;
+        while i < np {
+            if pr[i * 8] == nt {
+                let cx = (pr[i * 8 + 1] + g / 2) / g;
+                let cy = (pr[i * 8 + 2] + g / 2) / g;
+                var l = 0;
+                while l < 2 {
+                    if l == 0 || pr[i * 8 + 4] == 0 {
+                        let c = cell(l, cx, cy, nx, ny);
+                        if first { tl[tn] = c; tn = tn + 1; } else { bm[2 * total + c] = byte_of(1); }
+                    }
+                    l = l + 1;
+                }
+                if first { first = false; } else { left = left + 1; }
+            }
+            i = i + 1;
+        }
+        var ok = true;
+        while left > 0 && ok {
+            let endc = search(bm, dist, hk, hv, st, cap, tl, tn, nt, nx, ny);
+            if endc < 0 {
+                ok = false;
+                o2 = text(heap, o2, "F "); o2 = nat(heap, o2, nt); o2 = text(heap, o2, "\n");
+            } else {
+                // the path, from the end back to a source cell, appended to tl after the tree
+                let from = tn;
+                var c = endc;
+                var more = true;
+                while more {
+                    tl[tn] = c;
+                    tn = tn + 1;
+                    let dir = int_of(bm[4 * total + c]);
+                    if dir == 0 { more = false; }
+                    else if dir == 1 { c = c + 1; }
+                    else if dir == 2 { c = c - 1; }
+                    else if dir == 3 { c = c + nx; }
+                    else if dir == 4 { c = c - nx; }
+                    else { c = c + (1 - 2 * (c / (nx * ny))) * nx * ny; }
+                }
+                o2 = emit_path(heap, o2, tl, from, tn, nt, wnet, nx, ny);
+                // keep-outs of the new copper
+                var j = from;
+                while j < tn {
+                    let c1 = tl[j];
+                    let l1 = c1 / (nx * ny);
+                    let x1 = c1 % nx;
+                    let y1 = c1 / nx % ny;
+                    mark(bm, 0, l1, x1, y1, rtrack, nt, nx, ny);
+                    mark(bm, 1, l1, x1, y1, rtvia, nt, nx, ny);
+                    if j + 1 < tn && tl[j + 1] / (nx * ny) != l1 {
+                        mark(bm, 0, 2, x1, y1, rvia, nt, nx, ny);
+                        mark(bm, 1, 2, x1, y1, rviav, nt, nx, ny);
+                    }
+                    j = j + 1;
+                }
+                // the joined pad: no longer a target; a through-hole pad's other layer joins the tree
+                let ex = endc % nx;
+                let ey = endc / nx % ny;
+                var l = 0;
+                while l < 2 {
+                    let cc = cell(l, ex, ey, nx, ny);
+                    if int_of(bm[2 * total + cc]) != 0 {
+                        bm[2 * total + cc] = byte_of(0);
+                        if cc != endc { tl[tn] = cc; tn = tn + 1; }
+                    }
+                    l = l + 1;
+                }
+                left = left - 1;
+            }
+        }
+    }
+    return o2;
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(args); release(net); release(clock); release(signals); release(exec);
+    let dirfs = narrow(fs, "/tmp/amprouter");
+    var code = 0;
+    borrow mut heap as &!h in {
+        let raw = box_slice(h, 262144, byte_of(0));
+        var n = 0 - 1;
+        borrow dirfs as &fd in { borrow mut raw as &!rwx in { let rw = contents(rwx); n = fs_read(fd, "/tmp/amprouter/pads.txt", rw); } }
+        if n <= 0 { code = 2; }
+        else {
+            var out = buffer.empty(h, 65536);
+            let pos = box_slice(h, 2, 0);
+            let pd = box_slice(h, 4096 * 8, 0);
+            var np = 0;
+            var wum = 0;
+            var hum = 0;
+            borrow raw as &rrx in { let rr = contents(rrx);
+                borrow mut pos as &!ppx in { let pp = contents(ppx);
+                    wum = next_int(rr, n, pp);
+                    hum = next_int(rr, n, pp);
+                    borrow mut pd as &!pwx in { let pw = contents(pwx);
+                        var more = true;
+                        while more {
+                            let a = next_int(rr, n, pp);
+                            if a < 0 { more = false; }
+                            else {
+                                pw[np * 8] = a;
+                                var f = 1;
+                                while f < 8 { pw[np * 8 + f] = next_int(rr, n, pp); f = f + 1; }
+                                np = np + 1;
+                            }
+                        }
+                    }
+                }
+            }
+            let g = gridum();
+            let nx = wum / g + 1;
+            let ny = hum / g + 1;
+            let total = nx * ny * 2;
+            let cap = 3 * total;
+            let bmb = box_slice(h, 5 * total, byte_of(0));
+            let distb = box_slice(h, total, 0);
+            let hkb = box_slice(h, cap, 0);
+            let hvb = box_slice(h, cap, 0);
+            let stb = box_slice(h, 4, 0);
+            let tlb = box_slice(h, 2 * total, 0);
+            var maxnet = 0;
+            borrow pd as &prx in { let pr = contents(prx);
+                var i = 0;
+                while i < np { if pr[i * 8] > maxnet { maxnet = pr[i * 8]; } i = i + 1; }
+            }
+            let orderb = box_slice(h, maxnet + 2, 0);
+            borrow mut bmb as &!bmx in { let bm = contents(bmx);
+                borrow pd as &prx in { let pr = contents(prx);
+                    // the board edge, then every pad's keep-out
+                    var x = 0;
+                    while x < nx {
+                        var y = 0;
+                        while y < ny {
+                            let e = edge_um() / g;
+                            if x < e || y < e || x >= nx - e || y >= ny - e {
+                                var l = 0;
+                                while l < 2 {
+                                    bm[cell(l, x, y, nx, ny)] = byte_of(255);
+                                    bm[total + cell(l, x, y, nx, ny)] = byte_of(255);
+                                    l = l + 1;
+                                }
+                            }
+                            y = y + 1;
+                        }
+                        x = x + 1;
+                    }
+                    var i = 0;
+                    while i < np {
+                        let cx = (pr[i * 8 + 1] + g / 2) / g;
+                        let cy = (pr[i * 8 + 2] + g / 2) / g;
+                        let r = pr[i * 8 + 3];
+                        var ly = 2;
+                        if pr[i * 8 + 4] == 1 { ly = 0; }
+                        var cl = clearance();
+                        if pr[i * 8 + 7] > 0 { cl = pr[i * 8 + 7]; }
+                        mark(bm, 0, ly, cx, cy, (r + cl + 250 + 2 * g - 1) / g, pr[i * 8], nx, ny);
+                        mark(bm, 1, ly, cx, cy, (r + cl + via_um() / 2 + 2 * g - 1) / g, pr[i * 8], nx, ny);
+                        i = i + 1;
+                    }
+                    // nets to route, shortest span first
+                    borrow mut orderb as &!owx in { let ow = contents(owx);
+                        let spanb = box_slice(h, maxnet + 2, 0);
+                        borrow mut spanb as &!swx in { let sw = contents(swx);
+                            var m = 0;
+                            while m <= maxnet {
+                                var lo_x = 1000000000; var hi_x = 0; var lo_y = 1000000000; var hi_y = 0; var cnt = 0; var rt = 0; var wm = 250; var gm = 0;
+                                i = 0;
+                                while i < np {
+                                    if pr[i * 8] == m {
+                                        cnt = cnt + 1;
+                                        if pr[i * 8 + 5] == 1 { rt = 1; }
+                                        wm = pr[i * 8 + 6]; gm = pr[i * 8 + 7];
+                                        if pr[i * 8 + 1] < lo_x { lo_x = pr[i * 8 + 1]; }
+                                        if pr[i * 8 + 1] > hi_x { hi_x = pr[i * 8 + 1]; }
+                                        if pr[i * 8 + 2] < lo_y { lo_y = pr[i * 8 + 2]; }
+                                        if pr[i * 8 + 2] > hi_y { hi_y = pr[i * 8 + 2]; }
+                                    }
+                                    i = i + 1;
+                                }
+                                sw[m] = 0;
+                                if m > 0 && cnt >= 2 && rt == 1 {
+                                    sw[m] = (hi_x - lo_x) + (hi_y - lo_y) + cnt * 1000 + 10;
+                                    if gm > 0 { sw[m] = 2; }
+                                    if wm > 250 { sw[m] = 1; }
+                                }
+                                m = m + 1;
+                            }
+                            var kk = 0;
+                            var go = true;
+                            while go {
+                                var best = 0 - 1;
+                                m = 1;
+                                while m <= maxnet {
+                                    if sw[m] > 0 && (best < 0 || sw[m] < sw[best]) { best = m; }
+                                    m = m + 1;
+                                }
+                                if best < 0 { go = false; }
+                                else { ow[kk] = best; sw[best] = 0 - sw[best]; kk = kk + 1; }
+                            }
+                            ow[kk] = 0;
+                        }
+                        unbox_slice(h, spanb);
+                        borrow mut distb as &!dmx in { let dm = contents(dmx);
+                            borrow mut hkb as &!hkwx in { let hkw = contents(hkwx);
+                                borrow mut hvb as &!hvwx in { let hvw = contents(hvwx);
+                                    borrow mut stb as &!stx in { let st = contents(stx);
+                                        borrow mut tlb as &!tlx in { let tl = contents(tlx);
+                                            out = route_all(h, bm, dm, hkw, hvw, st, tl, pr, np, ow, nx, ny, cap, out);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            borrow mut io as &!w in { borrow out as &b in { buffer.write(w, b); } }
+            buffer.drop(h, out);
+            unbox_slice(h, pd); unbox_slice(h, pos); unbox_slice(h, bmb); unbox_slice(h, distb); unbox_slice(h, hkb); unbox_slice(h, hvb);
+            unbox_slice(h, stb); unbox_slice(h, tlb); unbox_slice(h, orderb);
+        }
+        unbox_slice(h, raw);
+    }
+    release(dirfs);
+    release(heap);
+    release(io);
+    return code;
+}

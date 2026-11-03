@@ -1,0 +1,33 @@
+edition 5;
+
+module pid;
+
+// `pid` -- a fixed-point PID step with anti-windup and the hardware Z limit, S1 of docs/design.md (issue #2).
+// Integer only, in picometres, so Verilog can be compared with it byte for byte. Gains are Q16: 65536 means 1.0 (they were Q8: too coarse for a slow integral term, see docs/tune-approach.md).
+// NOT A MEASUREMENT OF A REAL INSTRUMENT.
+
+pub struct State { integ: int, prev: int, z: int }
+
+pub fn start(z: int) -> [] State {
+    return State { integ: 0, prev: 0, z: z };
+}
+
+fn clamp(v: int, lo: int, hi: int) -> [] int {
+    if v < lo {
+        return lo;
+    }
+    if v > hi {
+        return hi;
+    }
+    return v;
+}
+
+// One step. `err` = amplitude - setpoint (pm). The integral is clamped to +-`ilim` (anti-windup), the output z is
+// clamped to [zmin, zmax] -- the limit that lives in hardware. Division is by 65536 and truncates toward zero.
+pub fn step(s: State, err: int, kp: int, ki: int, kd: int, ilim: int, zmin: int, zmax: int) -> [] State {
+    let integ = clamp(s.integ + err, 0 - ilim, ilim);
+    let d = err - s.prev;
+    let u = (kp * err + ki * integ + kd * d) / 65536;
+    let z = clamp(s.z - u, zmin, zmax);
+    return State { integ: integ, prev: err, z: z };
+}

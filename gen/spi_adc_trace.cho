@@ -1,0 +1,58 @@
+edition 7;
+
+import std.buffer;
+import spi;
+
+// Lockstep trace for the AD1 master: one row per clock, the inputs (half start d0 d1) then the state the model reaches after that clock
+// (busy cs sck done s0 s1). Inputs are a deterministic spread: starts at random moments (also while busy, which must be ignored),
+// random data lines (from a high bit of the generator: its low bits have a short period and would hand the master the same bit every time), and `half` changing every 3,000 clocks.
+fn num[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer {
+    return buffer.push_nat(heap, buffer.append(heap, b, " "), n);
+}
+
+fn mix(x: int) -> [] int {
+    let a = (x * 2654435761 + 12345) % 4294967296;
+    return (a * 1103515245 + 12345) % 2147483648;
+}
+
+fn half_at(t: int) -> [] int {
+    let k = t / 3000 % 7;
+    if k == 0 { return 2; }
+    if k == 1 { return 1; }
+    if k == 2 { return 3; }
+    if k == 3 { return 5; }
+    if k == 4 { return 2; }
+    if k == 5 { return 4; }
+    return 1;
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(args); release(net); release(clock); release(signals); release(exec);
+    var code = 0;
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 1048576);
+        var s = spi.ad_reset();
+        var t = 0;
+        while t < 21000 {
+            var start = 0;
+            if mix(t) % 29 == 0 { start = 1; }
+            let d0 = mix(t * 3 + 1) / 4096 % 2;
+            let d1 = mix(t * 5 + 2) / 4096 % 2;
+            let hf = half_at(t);
+            s = spi.ad_step(s, start, d0, d1, hf);
+            o = num(h, o, hf); o = num(h, o, start); o = num(h, o, d0); o = num(h, o, d1);
+            o = num(h, o, s.busy); o = num(h, o, s.cs); o = num(h, o, s.sck); o = num(h, o, s.done); o = num(h, o, s.s0); o = num(h, o, s.s1);
+            o = buffer.append(h, o, "\n");
+            t = t + 1;
+        }
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(heap);
+    release(io);
+    if code < 0 {
+        return 1;
+    }
+    return 0;
+}

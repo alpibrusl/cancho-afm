@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cancho-afm: an automatic atomic force microscope from cheap parts and open designs</title>
+<meta name="description" content="A design, a simulated controller and a step-by-step tutorial for an atomic force microscope that approaches, tunes, scans and reports by itself. Design stage: nothing is built yet.">
+<meta name="color-scheme" content="light dark">
+<style>
+:root {
+  --bg: #fbfcfd; --fg: #14181a; --muted: #55606a; --line: #dfe5e7; --surface: #ffffff; --soft: #eff4f4;
+  --accent: #1f5fa6; --accent-fg: #ffffff; --good: #0f7b5f; --bad: #b42d27; --warn-bg: #fff4dc; --warn-fg: #6b3d05; --warn-line: #e8c777;
+  --code-bg: #0f1519; --code-fg: #d6e2e6;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0b0f14; --fg: #e7ebec; --muted: #9aa8ae; --line: #212a2d; --surface: #131a1c; --soft: #172022;
+    --accent: #7fb2ff; --accent-fg: #07162c; --good: #4fd1a5; --bad: #ff7b73; --warn-bg: #2b2210; --warn-fg: #f3d08a; --warn-line: #5a4519; --code-bg: #0a1013; }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; scroll-padding-top: 4rem; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 1rem/1.65 var(--font); }
+a { color: var(--accent); text-underline-offset: .15em; }
+.wrap { width: 100%; max-width: 62rem; margin: 0 auto; padding: 0 16px; }
+header.top { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 90%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+header.top .wrap { display: flex; align-items: center; gap: 1.2rem; height: 3.3rem; }
+.brand { font: 700 1rem var(--mono); color: var(--fg); text-decoration: none; white-space: nowrap; }
+nav { display: flex; gap: 1.1rem; margin-left: auto; overflow-x: auto; }
+nav a { color: var(--muted); text-decoration: none; font-size: .92rem; white-space: nowrap; }
+nav a:hover { color: var(--fg); }
+@media (max-width: 44rem) { nav a.opt { display: none; } }
+.hero { padding: 3rem 0 1.5rem; }
+.hero h1 { font-size: clamp(1.9rem, 5.5vw, 3.1rem); line-height: 1.12; margin: 0 0 1rem; letter-spacing: -.03em; max-width: 20ch; }
+.hero .sub { font-size: 1.15rem; color: var(--muted); max-width: 42rem; margin: 0 0 1.4rem; }
+.cta { display: flex; gap: .7rem; flex-wrap: wrap; }
+.btn { display: inline-block; padding: .6rem 1.1rem; border-radius: 8px; font-weight: 600; text-decoration: none; border: 1px solid var(--line); color: var(--fg); background: var(--surface); }
+.btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.status { margin: 1.4rem 0 0; padding: .9rem 1.1rem; border: 1px solid var(--warn-line); background: var(--warn-bg); color: var(--warn-fg); border-radius: 10px; }
+.status strong { color: inherit; }
+section { padding: 2.4rem 0; border-top: 1px solid var(--line); }
+section h2 { font-size: 1.65rem; letter-spacing: -.02em; margin: 0 0 .6rem; line-height: 1.2; }
+section h3 { font-size: 1.15rem; margin: 1.6rem 0 .4rem; }
+p { margin: .6rem 0; }
+.lead { color: var(--muted); max-width: 46rem; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 1rem; margin-top: 1rem; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 1rem 1.1rem; }
+.card h3 { margin: 0 0 .3rem; font-size: 1.02rem; }
+.card p { margin: .3rem 0; color: var(--muted); font-size: .96rem; }
+table { width: 100%; border-collapse: collapse; margin: .8rem 0; font-size: .95rem; }
+th, td { text-align: left; padding: .5rem .7rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: .85rem; text-transform: uppercase; letter-spacing: .03em; }
+.tablewrap { overflow-x: auto; }
+code { font: .9em var(--mono); background: var(--soft); padding: .1em .35em; border-radius: 4px; }
+pre { background: var(--code-bg); color: var(--code-fg); padding: .9rem 1rem; border-radius: 8px; overflow-x: auto; font: .88rem/1.5 var(--mono); }
+pre code { background: none; padding: 0; color: inherit; }
+.part { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 1.1rem 1.3rem; margin: 1.1rem 0; }
+.part h3 { margin-top: 0; }
+.part .num { font: 700 .8rem var(--mono); color: var(--accent); letter-spacing: .05em; }
+.check { border-left: 3px solid var(--good); padding: .1rem .9rem; margin: .8rem 0; background: var(--soft); border-radius: 0 6px 6px 0; }
+.check b { color: var(--good); }
+.fail { border-left: 3px solid var(--bad); padding: .1rem .9rem; margin: .8rem 0; background: var(--soft); border-radius: 0 6px 6px 0; }
+.fail b { color: var(--bad); }
+.verified { color: var(--muted); font-size: .88rem; margin-top: .6rem; }
+.tag { display: inline-block; font: 600 .72rem var(--mono); padding: .1rem .45rem; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); vertical-align: .1em; }
+.tag.ok { color: var(--good); border-color: var(--good); }
+.tag.plan { color: var(--warn-fg); border-color: var(--warn-line); background: var(--warn-bg); }
+.danger { border: 1px solid var(--bad); border-radius: 8px; padding: .7rem 1rem; margin: .8rem 0; }
+.danger b { color: var(--bad); }
+figure { margin: 1.2rem 0; }
+figure svg { width: 100%; height: auto; display: block; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+figcaption { color: var(--muted); font-size: .88rem; margin-top: .4rem; }
+svg text { font-family: var(--mono); fill: var(--fg); }
+svg .box { fill: var(--soft); stroke: var(--line); stroke-width: 1.2; }
+svg .hw { fill: color-mix(in srgb, var(--accent) 14%, var(--surface)); stroke: var(--accent); stroke-width: 1.2; }
+svg .safe { fill: color-mix(in srgb, var(--bad) 10%, var(--surface)); stroke: var(--bad); stroke-width: 1.2; }
+svg .arrow { stroke: var(--muted); stroke-width: 1.4; fill: none; }
+svg .small { font-size: 11px; fill: var(--muted); }
+footer { border-top: 1px solid var(--line); padding: 2rem 0 3rem; color: var(--muted); font-size: .92rem; }
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <a class="brand" href="#top">cancho-afm</a>
+  <nav>
+    <a href="#what">What</a><a href="#measured" class="opt">Measured</a><a href="#design" class="opt">Design</a>
+    <a href="#tutorial">Tutorial</a><a href="#highspeed">High speed</a><a href="#parts" class="opt">Parts</a><a href="#status">Status</a>
+  </nav>
+</div></header>
+
+<main id="top">
+<div class="wrap">
+<div class="hero">
+  <h1>An atomic force microscope that runs by itself</h1>
+  <p class="sub">A design, a controller proven in simulation, and a step-by-step tutorial for an AFM built from cheap, easy-to-buy parts. The control software is written in cancho; the FPGA logic is generated from it.</p>
+  <div class="cta">
+    <a class="btn primary" href="#tutorial">Read the tutorial</a>
+    <a class="btn" href="#measured">What is measured</a>
+    <a class="btn" href="https://github.com/alpibrusl/cancho-afm">Source</a>
+  </div>
+  <div class="status"><strong>Design stage. Nothing is built, nothing is measured on hardware, no part has been bought.</strong>
+  Every number on this page is either from a simulation in this repository (marked <span class="tag ok">simulated</span>) or a plan (marked <span class="tag plan">plan</span>). The tutorial's steps have not been carried out by anyone yet, and each says so.</div>
+</div>
+</div>
+
+<section id="what"><div class="wrap">
+  <h2>What it is</h2>
+  <p class="lead">An AFM feels a surface with a very sharp tip and draws it. A feedback loop keeps the tip at a fixed distance by moving it up and down; that up-and-down record is the picture. Here the sensor is a quartz tuning fork with a tungsten tip. Nearer the surface the fork vibrates less, and the controller holds that amplitude constant.</p>
+  <div class="grid">
+    <div class="card"><h3>1. Approach</h3><p>Bring the tip to the surface without crashing it, with no one at the knobs. A limit and a deadman in hardware stop the Z drive whatever the software asks.</p></div>
+    <div class="card"><h3>2. Tune</h3><p>Find the fork's resonance, choose drive, setpoint and gains, and print what it chose. <em>The least certain step: how well this works on a real fork is unknown.</em></p></div>
+    <div class="card"><h3>3. Scan</h3><p>Raster the requested area; if the loop saturates, slow down or stop; if Z hits its limit, retract.</p></div>
+    <div class="card"><h3>4. Report</h3><p>Write the image with every setting and every automatic decision, in a plain file, so a run can be repeated.</p></div>
+  </div>
+  <h3>The rules this project follows</h3>
+  <ul>
+    <li><strong>Cheap, easy to buy.</strong> A development board, a tuning fork, tungsten wire, piezo disks, a stepper; AFM cantilevers (about USD 21 each) for the faster second stage. No ready-made AFM, no lab controller.</li>
+    <li><strong>What we make is open.</strong> Software and generated gateware under EUPL-1.2, hardware under CERN-OHL-S-2.0, docs under CC BY 4.0 <span class="tag plan">proposed, to be confirmed</span>.</li>
+    <li><strong>Claims are measured or labelled.</strong> A result that turns out false is corrected where it was made.</li>
+  </ul>
+</div></section>
+
+<section id="measured"><div class="wrap">
+  <h2>What is measured today</h2>
+  <p class="lead">All of it in simulation and place-and-route estimates. <strong>No board has run any of it.</strong> The checks are reproducible with <code>sh gen/check.sh</code> in the repository.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Piece</th><th>What was compared</th><th>Result</th><th>Timing estimate*</th></tr></thead>
+    <tbody>
+    <tr><td>PID step, pipelined <span class="tag ok">simulated</span></td><td>generated Verilog vs the cancho graph, 4,024 cases (every input at its minimum or maximum, plus spread)</td><td>0 mismatches; latency 3 clocks</td><td>70.7 MHz</td></tr>
+    <tr><td>Z loop with limit and deadman <span class="tag ok">simulated</span></td><td>1,500 steps closed around a model of tip and surface, vs an independent cancho PID</td><td>0 mismatches; 4 clocks per sample (6.75 M samples/s at 27 MHz); deadman, limit and reset behave</td><td>87.0 MHz</td></tr>
+    <tr><td>XY raster <span class="tag ok">simulated</span></td><td>16 x 8 frame plus 6 ticks past its end, tick by tick, vs an independent cancho model</td><td>0 mismatches in 246 ticks; hold, done and reset behave</td><td>107.9 MHz</td></tr>
+    <tr><td>Tune and approach <span class="tag ok">simulated</span></td><td>against a model of a resonator, a surface and the amplitude's lag (not a real sensor): sweep, find the fork, choose gains, approach, hold the surface</td><td>f0 within 0.1 Hz and Q within 3% (1.4% low in the end-to-end run); approach never touches the surface; gap held to within about 90 pm of a 1,600 pm target on a moving surface; unsafe parameters refused</td><td>host logic</td></tr>
+    <tr><td>SPI masters for the ADC and DAC modules <span class="tag ok">simulated</span></td><td>both generated masters against a cancho model on every one of 21,000 clocks, and against models of the two chips written from the Digilent manuals</td><td>0 mismatches; 240 conversions read back exactly, 240 words written exactly; one real bug (a frame stranded when the clock divisor changed mid-frame) found and fixed</td><td>155.6 MHz</td></tr>
+    <tr><td>The real board <span class="tag ok">measured</span></td><td>the built controller loaded into a Tang Nano 20K, 19 checks over its serial port from a Raspberry Pi</td><td>19 of 19: identity, fail-closed defaults, read-back, refusals, motor refused at MOTOR_MAX = 0, 50 reads in step. Nothing attached to its other pins yet</td><td>27 MHz clock works</td></tr>
+    <tr><td>Stepper driver <span class="tag ok">simulated</span></td><td>the generated driver against a cancho model on every one of 15,000 clocks; its pulses counted; five deliberate breaks</td><td>0 mismatches; 7 steps forward, 4 back, position 3; fails closed; aborts when disabled</td><td>part of the board</td></tr>
+    <tr><td>Amplifier <span class="tag ok">simulated</span></td><td>ngspice, a behavioural op-amp, the piezo and fork assumed: gain, offset, bandwidth, step response over loads and output resistances; the fork's compensation</td><td>X/Y gain 7.98, Z 4.01; 7 to 9 kHz and no overshoot up to 100 nF; the fork's baseline 84x below the peak when compensated, 6.8x when not</td><td>not built</td></tr>
+    <tr><td>Software twin and host program <span class="tag ok">simulated</span></td><td>the host program talks real serial bytes to a software twin of the board (the same register map), which wraps the validated models and a fork, tip and grating; compared with the Verilog system test</td><td>free figure and settled Z checked against the hardware simulation (to 0.3% and 40 pm); the whole automatic run (check, sweep, approach with the motor, hand-off, scan, measure) passes: f0 32,781.5 Hz (true 32,781.4), Q 495 (500), a 6-pixel grating period read as 5.7 to 6.1</td><td>host logic</td></tr>
+    <tr><td>The whole board <span class="tag ok">simulated</span></td><td>the top level (serial bridge, registers, ADC, detector, loop, raster, four DACs) with its pins wired to models of the ADC and DACs and a simulated fork, driven only through the serial port</td><td>0 failures: registers and refusals, DACs follow, the loop settles Z at 1,599 pm against 1,600, the drive runs at the detector's phase, the limit clamps, the deadman latches and retracts. Built into a real bitstream on a Raspberry Pi (24% of the chip, not flashed)</td><td>74.6 MHz</td></tr>
+    <tr><td>Amplitude detector <span class="tag ok">simulated</span></td><td>3,072 synthetic ADC samples (12 windows, 100 to 30,000 counts, harmonics, noise) vs the cancho model</td><td>0 mismatches; overflow flag raised at full scale</td><td>83.3 MHz</td></tr>
+    </tbody>
+  </table></div>
+  <p class="verified">* nextpnr's estimate for the Tang Nano 20K's chip (GW2AR-18), one run, one seed, on a Raspberry Pi; a timing model, not a measurement on silicon. The board's clock is 27 MHz. For each check, deliberate breaks of the Verilog were made and every one was caught, so the checks can fail.</p>
+  <h3>What the simulation also showed</h3>
+  <ul>
+    <li>The square-wave amplitude detector gives the same figure at every signal phase when the drive and the detector share one oscillator, and noise of about 17% of the signal moves it under 2%.</li>
+    <li><strong>A weakness:</strong> a third harmonic at 20% of the signal raises the figure about 7%. Fix: a band-pass before the ADC, or sine references.</li>
+    <li><strong>Two lessons from tuning:</strong> the loop's first 8-bit gain fraction was too coarse for a slow tuning fork, so the host shifts the detector figure down first; and an integral term made the loop swing between its stops until it was made slower than the plant. With 16-bit gains the integral can be that slow, and the loop now has one.</li>
+    <li>The Z drive needs a 16-bit DAC. The 2025 paper's 12-bit DAC gave 0.24 nm steps and read a 0.34 nm atomic step as 0.48 nm.</li>
+  </ul>
+  <h3>What the simulator showed before any hardware existed</h3>
+  <ul>
+    <li>The reference's 16-bit phase could not resolve a fork's 6.5 Hz-wide resonance (a 4 Hz step): it is 32 bits now.</li>
+    <li>A scan advanced a pixel per loop step, which smears features the loop needs about 20 steps to follow: a pixel divider was added.</li>
+    <li>With the first, coarser gain format the loop could only be proportional, and a 100 pm grating came out at 40 to 60% of its height; with 16-bit gains it can have a slow integral term, and the same scan gives about 89% at 60 loop steps per pixel (and a slight overshoot at 120). The 16 pm DAC step still sets the floor.</li>
+    <li>The board has no coarse-motor interface yet, and a pixel-synchronous read or a small capture memory will be needed on a real board.</li>
+  </ul>
+  <p>These are predictions of this software; details and how far to trust them: <code>docs/simulator.md</code>.</p>
+  <h3>Not done</h3>
+  <p>The converters and Pmods attached to the board, the amplifier built, a motor turning, a run on the instrument, the host program and sweep driver, a register contract for the host code, any real sensor, scanner, amplifier or mechanics, and every step of the hardware tutorial below.</p>
+</div></section>
+
+<section id="design"><div class="wrap">
+  <h2>How it is put together</h2>
+  <p class="lead">Three layers, and one rule: the part that can damage the instrument sits behind a limit and a deadman that live in hardware, so a software fault cannot drive the tip into the sample.</p>
+  <figure>
+  <svg viewBox="0 0 760 330" role="img" aria-label="Block diagram: host program, FPGA with detector, loop, raster, limit and deadman, converters, and the sensor, scanner and approach motor">
+    <rect class="box" x="10" y="20" width="190" height="130" rx="8"/>
+    <text x="24" y="44" font-size="14" font-weight="700">Host (cancho)</text>
+    <text class="small" x="24" y="68">approach, tune, scan</text>
+    <text class="small" x="24" y="86">sequencing, faults</text>
+    <text class="small" x="24" y="104">image + run record</text>
+    <text class="small" x="24" y="128">cancho-ui interface</text>
+    <rect class="hw" x="270" y="20" width="250" height="250" rx="8"/>
+    <text x="284" y="44" font-size="14" font-weight="700">FPGA (generated from cancho)</text>
+    <rect class="box" x="284" y="58" width="222" height="36" rx="5"/><text class="small" x="296" y="80">amplitude detector (I/Q lock-in)</text>
+    <rect class="box" x="284" y="102" width="222" height="36" rx="5"/><text class="small" x="296" y="124">Z loop: PID, 4 clocks per sample</text>
+    <rect class="box" x="284" y="146" width="222" height="36" rx="5"/><text class="small" x="296" y="168">XY raster, triangle fast axis</text>
+    <rect class="safe" x="284" y="190" width="222" height="68" rx="5"/><text class="small" x="296" y="212">hardware limit on Z</text><text class="small" x="296" y="230">deadman: retract if host quiet</text><text class="small" x="296" y="248">set by host, read back</text>
+    <rect class="box" x="590" y="20" width="160" height="60" rx="8"/><text x="604" y="46" font-size="13" font-weight="700">ADC</text><text class="small" x="604" y="64">fork signal, 12-16 bit</text>
+    <rect class="box" x="590" y="100" width="160" height="60" rx="8"/><text x="604" y="126" font-size="13" font-weight="700">DAC x4</text><text class="small" x="604" y="144">X, Y, Z, drive, 16 bit</text>
+    <rect class="box" x="590" y="180" width="160" height="90" rx="8"/><text x="604" y="204" font-size="13" font-weight="700">Instrument</text><text class="small" x="604" y="224">fork + tip, piezo</text><text class="small" x="604" y="240">scanner, amplifier,</text><text class="small" x="604" y="256">approach motor</text>
+    <path class="arrow" d="M200 85 H270"/><path class="arrow" d="M520 50 H590"/><path class="arrow" d="M520 130 H590"/><path class="arrow" d="M670 160 V180"/><path class="arrow" d="M670 80 V100"/>
+    <text class="small" x="10" y="300">Serial link host to FPGA. The three layers are tested against each other, byte for byte, in simulation.</text>
+  </svg>
+  <figcaption>The loop, raster and detector are not written by hand in Verilog: each is one dataflow graph in cancho, from which both the cancho answer and the SystemVerilog are produced, so they cannot drift apart.</figcaption>
+  </figure>
+  <h3>Why generated, and what that buys</h3>
+  <p>One graph per block gives widths from declared input ranges, registers placed automatically, and a test that compares the Verilog (under Icarus) to the cancho evaluation on every corner of the input ranges. A second, hand-written cancho model of each block is kept as an independent cross-check.</p>
+</div></section>
+
+<section id="tutorial"><div class="wrap">
+  <h2>Tutorial: build it</h2>
+  <p class="lead">For someone with basic electronics and no AFM experience. Parts 0 to 2 can be done today and have been. <strong>Parts 3 to 12 are a plan (their control logic is simulated where noted):</strong> each ends with a <em>Check</em> (a measurement and a pass criterion written before the step) and says "not done by anyone yet". If a Check fails, stop and write down what you saw, with numbers.</p>
+  <div class="status"><strong>Read this first.</strong> This is a draft written before anything was built. It is not a safety assessment. Do not build the amplifier from this page: its design is not written. Do not leave an instrument powered and unattended until Part 10's tests have passed.</div>
+
+  <div class="part"><span class="num">PART 0</span><h3>What you are building</h3>
+    <p>A quartz tuning fork (the 32.768 kHz crystal in a watch) has a tungsten tip glued to one prong. A small drive makes it vibrate. As the tip nears a surface the vibration amplitude falls. A controller moves the sample up and down to keep that amplitude at a fixed fraction of its free value; the Z positions it records, point by point as a second motion moves the sample sideways, are the image.</p>
+    <p>The vibration is measured by a lock-in: the ADC signal is multiplied by square waves at the drive frequency, 90 degrees apart, summed over a window, and the amplitude is the square root of the two sums squared. That is what <code>sim/lockin.cho</code> does.</p>
+    <div class="check"><b>Check.</b> You can say in your own words what the loop holds constant, and what the picture is.</div>
+    <p class="verified">Not done by anyone yet.</p></div>
+
+  <div class="part"><span class="num">PART 1</span><h3>Safety and the bench</h3>
+    <div class="danger"><b>Hazards of this kind of instrument, in general.</b>
+      <ul>
+        <li><strong>Chemicals:</strong> tungsten tips are etched in a sodium-hydroxide bath with a small voltage. Eye protection and gloves; follow chemical-safety practice for your jurisdiction.</li>
+        <li><strong>Voltage:</strong> piezo disks driven from a DAC and a current amplifier work at about 10 V in the 2025 paper's build (their figure). Anything higher, such as a piezo tube, needs a fused, enclosed supply and is not covered here.</li>
+        <li><strong>Static:</strong> the FPGA board and converters; use a wrist strap.</li>
+        <li><strong>The tip:</strong> contact at speed destroys it. The hardware limit exists for this and is tested before a tip is mounted.</li>
+      </ul></div>
+    <p>Bench: a multimeter, soldering station, fine tweezers, a 10x to 30x loupe or stereo microscope, and an oscilloscope if you can; a heavy base on soft support for vibration isolation (its design is an open question).</p>
+    <div class="check"><b>Check.</b> You have read the list above and know where the power switch is.</div>
+    <p class="verified">Not done by anyone yet.</p></div>
+
+  <div class="part"><span class="num">PART 2</span><h3>Run the controller in simulation <span class="tag ok">works today</span></h3>
+    <p>No hardware. You need the cancho compiler, Icarus Verilog and Yosys.</p>
+<pre><code>git clone https://github.com/alpibrusl/cancho-afm
+cd cancho-afm
+
+# the model of tip, surface and loop
+cancho test tests/loop_test.cho sim/loop.cho --std
+
+# the PID, the raster and the detector against their generated hardware
+brew install icarus-verilog yosys      # or your package manager
+sh gen/check.sh                        # exits 0 when every comparison passes</code></pre>
+    <ol>
+      <li>Open <code>sim/loop.cho</code>: the tip-and-surface model and the one-line control step.</li>
+      <li>Change the gain shift in a test and watch how capture time and tracking lag change.</li>
+      <li>Run the whole automatic procedure against the software twin, with no hardware: <code>cancho run host/demo_twin.cho ...</code> (the command is in <code>docs/simulator.md</code>). It prints what it found, what it chose and the scanned image. <code>sh test_all.sh</code> runs every test in the project.</li>
+      <li>Open <code>gen/pid_ir.cho</code>: the PID written once as a graph. Change a limit and rerun <code>gen/check.sh</code>.</li>
+    </ol>
+    <div class="check"><b>Check.</b> All the tests pass; you can explain why a stronger gain captures faster but can ring. (The runs made while writing this page, 2026-11-01, passed; the explanation is yours.)</div></div>
+
+  <div class="part"><span class="num">PART 3</span><h3>Buy the parts</h3>
+    <p>Buy only what Parts 4 to 7 need. See <a href="#parts">the parts table</a>. Do not buy the amplifier parts or the motor until their parts exist.</p>
+    <div class="check"><b>Check.</b> Every part has its price and shop written down next to the list.</div>
+    <p class="verified">Prices in the repository are from search results on 2026-11-01 and may be stale. Not done by anyone yet.</p></div>
+
+  <div class="part"><span class="num">PART 4</span><h3>Bring up the FPGA board</h3>
+    <ol>
+      <li>Install the open-source flow: Yosys, nextpnr (the Gowin build, <code>nextpnr-himbaechel</code>), Apycula, openFPGALoader. The YosysHQ OSS CAD Suite ships all four, including for Raspberry Pi (arm64).</li>
+      <li>Build and load cancho-hdl's register-bridge design for the Tang Nano 20K (see that project's <code>boards/tang-nano-20k/</code>). Check each pin in its constraint file against Sipeed's schematic first: the file itself says the numbers are from memory.</li>
+      <li>Read a register from your computer over the board's serial port, with a cancho program.</li>
+    </ol>
+    <div class="danger"><b>If the board is shared</b> with another project, loading a design replaces what is on it. Check first.</div>
+    <div class="check"><b>Check.</b> You write a value to a register and read the same value back, and you keep the bitstream's build log showing the timing it reports against the 27 MHz clock.</div>
+    <p class="verified"><strong>Done once, on 2026-11-02:</strong> the full controller (with the motor driver) was built on a Raspberry Pi and loaded into a Tang Nano 20K, and 19 of 19 checks over its real serial port passed: the identifier reads back, every limit and the motor start closed, read-back works, writes to read-only and unmapped registers are refused, a motor command is refused while MOTOR_MAX is zero, and 50 reads in a row stay in step. This confirms the clock, serial pins and baud rate. <strong>Nothing wired to the other pins (the Pmods, the motor driver) has been tried.</strong> Details: <code>docs/first-hardware.md</code>.</p></div>
+
+  <div class="part"><span class="num">PART 5</span><h3>Converters</h3>
+    <p>The board has no ADC or DAC. The requirements, derived in <code>docs/converters.md</code> from stated assumptions:</p>
+    <ul>
+      <li><strong>ADC:</strong> at least 8 samples per fork period: 262 kS/s for a 32.768 kHz fork. 12 bits is enough (the window averaging adds about 3.5 bits); 16 gives margin. The detector's sums must stay within +-8,388,607, so window x full-scale count must stay below that.</li>
+      <li><strong>DAC:</strong> 16 bits or better, four channels (X, Y, Z, drive).</li>
+    </ul>
+    <p>Candidates: one Pmod AD1 and four Pmod DA3 (Digilent), in stock at DigiKey France at about EUR 189 together with VAT; other European shops show them withdrawn. See <code>docs/converter-candidates.md</code> for what is confirmed and what must be read before buying. Wire them to the FPGA per their datasheets, with no tip and no scanner attached.</p>
+    <div class="check"><b>Check.</b> Write a ramp on the DAC, read it with the ADC, and write down the error between them. It must be within the converters' stated accuracy.</div>
+    <p class="verified">Not done on hardware by anyone. The SPI masters for the two candidate modules are written and pass in simulation; the glue to the detector and loop is not.</p></div>
+
+  <div class="part"><span class="num">PART 6</span><h3>Read the tuning fork</h3>
+    <ol>
+      <li>Mount a fork on a small board (the leads are fragile; open the can with care).</li>
+      <li>Drive it with a small sine from the DAC near 32.768 kHz, and turn its current into a voltage with a transimpedance amplifier into the ADC.</li>
+      <li>Sweep the drive frequency, run the detector at each step, and plot the amplitude figure against frequency.</li>
+    </ol>
+    <p>Drive and detector share one oscillator by design, so the reference always matches the drive. A reference 0.5% off over a 32-period window costs about 7% (simulated).</p>
+    <div class="check"><b>Check.</b> A sharp peak near 32.768 kHz. Write down its frequency and width; the width gives the fork's Q and so how fast the amplitude can respond (about Q divided by pi times f0; for a Q of several thousand that is roughly a tenth of a second or less).</div>
+    <p class="verified">Not done by anyone yet. The sweep and resonance finder are not written.</p></div>
+
+  <div class="part"><span class="num">PART 7</span><h3>Make a tip</h3>
+    <ol>
+      <li>Etch tungsten wire to a point in a sodium-hydroxide bath with a small voltage. The hobbyist build this route follows is described at <a href="https://hackaday.io/project/206429-a-working-diy-quartz-tuning-fork-afm">hackaday.io/project/206429</a>; copy its recipe, and record the values you actually use.</li>
+      <li>Look at the tip under the loupe: a smooth point and no bend.</li>
+      <li>Glue it to one prong. Re-measure the resonance (Part 6).</li>
+    </ol>
+    <div class="check"><b>Check.</b> The resonance is still there; write down by how much its frequency and its width changed.</div>
+    <p class="verified">Not done by anyone yet. That source is a self-reported hobbyist project, not verified here.</p></div>
+
+  <div class="part"><span class="num">PART 8</span><h3>Scanner and its amplifier</h3>
+    <p>The scanner moves the sample in X and Y and the tip relative to it in Z. The plan is piezo disks (the "buzzers" in beepers), which the 2025 paper drove at about +-10 V: five disks, two pairs for X and Y and one for Z, on long legs for range. That removes the high-voltage amplifier. The amplifier between a DAC channel and a disk is then a small current-capable op-amp stage.</p>
+    <p><strong>The amplifier is designed (in a circuit simulator, not built):</strong> a gain of 7.98 with a reference offset for X and Y (DAC 0 to 2.5 V becomes -10 to +10 V), a gain of 4.01 for Z (0 to +10 V), and for the fork a 1/50.9 drive attenuator, a 1 Mohm transimpedance stage with a trimmer that cancels the fork's parallel capacitance, and an AC-coupled gain stage centred on the AD1's 1.65 V. A simulation of the piezo drivers with the load capacitor and the op-amp's output resistance swept forced a change: the isolation resistor alone left a 2.4 V overshoot with a plausible output resistance, so the design takes its DC feedback from the load side and closes the loop at high frequency through a small capacitor from the op-amp's own output. Full design, results, parts and prices (about EUR 55 to 80): <code>docs/amplifier.md</code>.</p>
+    <div class="danger"><b>Still open:</b> the piezo disk's capacitance and voltage rating (assumed 30 nF; the design holds to about 100 nF), the fork's real C0, Q and motional resistance, the op-amp's vendor model, and the supply's current budget. The scanner legs, the frame and the disks' mounting are not designed.</div>
+    <div class="check"><b>Check.</b> With a dummy 30 nF capacitor instead of the piezo: 0 V out at mid-code (after trimming the reference), 9.97 V at full scale on X/Y, 10 V on Z, and a step with no overshoot; then a known DAC step moves the sample by a distance you measure against the grating (Part 11).</div>
+    <p class="verified">Designed and simulated; not built.</p></div>
+
+  <div class="part"><span class="num">PART 9</span><h3>Mechanics and the coarse approach</h3>
+    <ul>
+      <li><strong>Frame:</strong> rigid, symmetric (to cancel drift). The 2025 paper used 11 pieces of circuit-board material and reported 6.2 nm/min drift (their number); our frame is ours to design, and nothing is drawn.</li>
+      <li><strong>Approach:</strong> a stepper and fine-pitch screw bring tip and surface from millimetres to within the Z piezo's range, in small steps with the Z scanner extended and retracted between them. <em>The motor and screw are not chosen.</em> The board now has the interface: STEP, DIR and ENABLE pins for an A4988-style driver, with a command of N signed microsteps, a rate, and a maximum number of steps per command that is zero after power-on, so nothing moves until the host allows it; it stops when disabled or when the deadman latches. Tested in simulation and in the generated hardware's simulation, not yet with a motor.</li>
+      <li><strong>Vibration:</strong> a heavy base on soft support; the design is an open question.</li>
+    </ul>
+    <div class="check"><b>Check.</b> With the tip well away, drive the stepper by the computer through its full travel in both directions and back, with nothing touching.</div>
+    <p class="verified">Not done by anyone yet.</p></div>
+
+  <div class="part"><span class="num">PART 10</span><h3>First power-up: limit and deadman before any tip meets any surface</h3>
+    <div class="danger"><b>Do not skip.</b> These tests are the reason the tip survives.</div>
+    <ol>
+      <li><strong>Limit:</strong> set a Z limit in the FPGA, ask the host for a value past it, read the output on a meter. It must stay at the limit. (Simulated: the output clamps to the host's limit whatever the PID asks.)</li>
+      <li><strong>Deadman:</strong> start the loop, stop the host program, and watch the Z output go to the retract value within the timeout and stay there until reset. (Simulated: fault latches, Z goes to the clamped retract value, new samples are refused.)</li>
+      <li><strong>Host reads back</strong> the limit it set and refuses to run if it does not match.</li>
+    </ol>
+    <div class="check"><b>Check.</b> Both behaviours seen on a meter or scope, each with the number you read written down.</div>
+    <p class="verified">Behaviour simulated; not done on hardware by anyone. The read-back register contract is not written.</p></div>
+
+  <div class="part"><span class="num">PART 11</span><h3>Tune, approach, and the first image</h3>
+    <ol>
+      <li><strong>Tune:</strong> sweep, find the peak, set the drive, take the free amplitude, set the setpoint at a fraction of it, set the gains. The program prints what it chose.</li>
+      <li><strong>Approach:</strong> step the motor, extend Z, look for the amplitude to fall to the setpoint, retract and repeat; stop at the first contact. You watch, a hand on the power switch.</li>
+      <li><strong>Scan</strong> a calibration grating (a stated period, for example a few micrometres), large and slow. The raster is a triangle: <code>npix</code> points out, back, then the next line; the slow axis steps at the end of each line.</li>
+    </ol>
+    <div class="check"><b>Check.</b> The grating's period measured from the image agrees with its stated period; write down the difference and its sign.</div>
+    <p class="verified">Not done on hardware by anyone. The tune and approach logic is written (<code>sim/tune.cho</code>, <code>sim/approach.cho</code>) and passes against a model, including the end-to-end chain; the program that drives the sweep through the FPGA is not written.</p></div>
+
+  <div class="part"><span class="num">PART 12</span><h3>Unattended runs and the record</h3>
+    <p>Start a scan from the interface and leave it to the program: it approaches, tunes, scans, retracts on any fault (lost signal, timeout, limit hit, host quiet) and writes the image with every setting and every automatic decision in a plain file. Repeat a run from its record.</p>
+    <div class="check"><b>Check.</b> A second run made from the first run's record gives an image whose grating period agrees with the first to within the noise you measured in Part 11.</div>
+    <p class="verified">Not done by anyone yet.</p></div>
+
+  <div class="part"><span class="num">WHEN IT GOES WRONG</span>
+    <div class="fail"><b>Retract first</b> (the deadman does it on its own if the host goes quiet). Then write down what you saw, with numbers, in an issue on the repository. Do not push on after a failed Check.</div></div>
+</div></section>
+
+<section id="highspeed"><div class="wrap">
+  <h2>Is a high-speed AFM possible?</h2>
+  <p class="lead">Yes in principle for what the electronics here do, but <strong>not with the tuning fork, and not yet with this parts rule.</strong> This is what the published DIY work says and what our numbers show; none of it is measured by this project.</p>
+  <h3>What limits an AFM's speed</h3>
+  <ol>
+    <li><strong>The cantilever's response.</strong> Roughly tau = Q / (pi f0). A tuning fork (f0 = 32.768 kHz, Q of several thousand in air, an assumption) responds in roughly 0.05 to 0.1 seconds: an amplitude-mode fork AFM is for slow scans, whatever the electronics. A small cantilever (f0 near 1 MHz, Q about 100, an assumption) responds in tens of microseconds.</li>
+    <li><strong>The Z scanner.</strong> A piezo disk or stack responds in the kilohertz range (assumption); a fast scan with feedback needs a small, stiff, fast Z actuator.</li>
+    <li><strong>The XY scanner's resonances.</strong> The 2025 paper's buzzer scanner stayed clean to 40 lines/s with a sinusoidal fast axis; its range grew at 60 and 80 lines/s, which they attribute to resonance (their report).</li>
+    <li><strong>The electronics.</strong> Here: the detector takes one sample per clock, so at 27 MHz it keeps up with any ADC up to that rate; the Z loop does 6.75 M samples/s; the raster is one tick per sample. These are simulation and timing estimates.</li>
+  </ol>
+  <h3>What others have published</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Work</th><th>Speed (self-reported)</th><th>How</th></tr></thead>
+    <tbody>
+    <tr><td>Wang et al., 2025, DIY AFM on PCB frame</td><td>40 lines/s clean; 6.2 nm/min drift</td><td>optical pickup sensor, piezo disk scanner, sine fast axis; the speed test was at constant height, with a soft cantilever and no Z feedback</td></tr>
+    <tr><td>Liao et al., HardwareX 2022, open controller</td><td>55 lines/s; 512 x 512 in 9.3 s</td><td>constant-height mode on a commercial simplified AFM, a closed NI controller</td></tr>
+    </tbody>
+  </table></div>
+  <p>Both fast numbers are <em>constant-height</em> imaging: the Z loop is not running, so the speed is a property of the scanner and the sample being gentle. Feedback imaging at high speed needs small, fast cantilevers and a fast Z actuator.</p>
+  <h3>A staged path</h3>
+  <ol>
+    <li><strong>Slow and automatic, tuning fork.</strong> Parts 0 to 12. The goal is a correct image of a grating.</li>
+    <li><strong>Fast X and Y.</strong> Write the sinusoidal fast axis (not written), measure the scanner's response and the line rate at which the image stays true. Needs only the scanner, no new cantilever.</li>
+    <li><strong>Constant-height fast imaging</strong> of a rough sample such as a disc's tracks: a soft cantilever is needed, which is one purchased part; cantilevers are allowed (the owner, 2026-11-01), together with a deflection sensor: a salvaged DVD optical pickup or a laser and photodiode.</li>
+    <li><strong>Feedback at speed.</strong> A small cantilever (hundreds of kHz to MHz), an ADC of at least 2.4 to 8 MS/s, and a fast Z actuator. The generated detector and loop would be reused unchanged except for the ADC rate and window; the actuator is the open problem. This is slice S8 of the design and has no result.</li>
+  </ol>
+  <p><strong>Honest summary:</strong> the controller is not the obstacle; the sensor and the Z actuator are. Whether an all-cheap, all-open build can go fast is unknown, and S8's acceptance is a measured line rate on a small fast cantilever.</p>
+</div></section>
+
+<section id="parts"><div class="wrap">
+  <h2>Parts</h2>
+  <p class="lead">The first build, from <code>docs/shopping-list.md</code>. <strong>Nothing has been bought.</strong> Prices come from search results of 2026-11-01 and may be stale; shipping and tax are not included.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Part</th><th>For</th><th>Notes</th></tr></thead>
+    <tbody>
+    <tr><td>Sipeed Tang Nano 20K FPGA board (about USD 25 in 2023)</td><td>the controller</td><td>No ADC or DAC on the board. Its design files are published without a licence. Works with the open toolchain.</td></tr>
+    <tr><td>Digilent Pmod AD1 (12-bit, 2 channels, 1 MS/s): EUR 28.41 ex VAT at DigiKey France</td><td>sensor signal in</td><td>Enough for the fork (262 kS/s, 12 bits); too slow for a 300 kHz cantilever. Candidate, not bought: read its anti-alias filter corner first.</td></tr>
+    <tr><td>4 x Digilent Pmod DA3 (16-bit, one output each): EUR 32.36 ex VAT each at DigiKey France</td><td>Z, X, Y and the drive</td><td>Candidate, not bought: whether it updates fast enough for the 32.768 kHz drive is unchecked. Details and alternatives: <code>docs/converter-candidates.md</code>.</td></tr>
+    <tr><td>Quartz tuning forks 32.768 kHz (a bag of ten or more)</td><td>the sensor</td><td>A few USD. The leads break easily.</td></tr>
+    <tr><td>Tungsten wire, about 0.1 to 0.25 mm</td><td>tips</td><td>Etched in a sodium-hydroxide bath.</td></tr>
+    <tr><td>Piezo disks ("buzzers") or a plate</td><td>the scanner</td><td>The plan follows the 2025 paper; the mounting is not designed.</td></tr>
+    <tr><td>Op-amp parts, a small supply, a fuse, an enclosure</td><td>the amplifier</td><td>Our own design, not written. Do not buy yet.</td></tr>
+    <tr><td>Stepper and fine-pitch screw (for example a NEMA 8 with a lead screw)</td><td>coarse approach</td><td>Not chosen.</td></tr>
+    <tr><td>3D printer or printed parts, M2 to M3 hardware</td><td>frame</td><td>The frame is not designed.</td></tr>
+    <tr><td>AFM cantilevers, a handful (about USD 21 each, second stage)</td><td>faster imaging</td><td>Needs a deflection sensor; the tuning fork does not.</td></tr>
+    <tr><td>Deflection sensor: a salvaged DVD optical pickup, or a laser diode and photodiode</td><td>cantilever signal (second stage)</td><td>Its amplifier is not published and would be ours.</td></tr>
+    <tr><td>Calibration grating, a stated period of 1 to 10 micrometres</td><td>checking the image</td><td>The stated period is the reference.</td></tr>
+    <tr><td>Tools: multimeter, soldering station, tweezers, a 10x to 30x loupe</td><td>everything</td><td></td></tr>
+    </tbody>
+  </table></div>
+  <p><strong>What build one costs, priced for France and Spain:</strong> about EUR 430 to 640 including VAT, with a CD or DVD as the first calibration sample; about EUR 690 to 940 with a real calibration grating (a step grating was USD 250 at one US seller; no European price was found). The converters (EUR 189) are priced from DigiKey France's pages; most of the rest from Reichelt and Amazon.fr; the electronics we design are now designed and partly priced (EUR 55 to 80); shipping and the base for the vibration slab are guesses. Where each part comes from, and what was and was not opened: <code>docs/cost.md</code>.</p>
+  <p>Out, for price or availability: a National Instruments myRIO, a Red Pitaya (USD 490 in the results), ready-made AFM kits. Other open-hardware FPGA boards (ULX3S, ULX4M, OrangeCrab) are listed with their licences in <code>docs/fpga-boards.md</code>, as a fallback; the generated Verilog is plain SystemVerilog and does not depend on the board.</p>
+</div></section>
+
+<section id="status"><div class="wrap">
+  <h2>Where the project stands</h2>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Slice</th><th>What</th><th>State</th></tr></thead>
+    <tbody>
+    <tr><td>S0</td><td>repository, policy, references</td><td>policy revised 2026-11-01; licences proposed, awaiting the owner</td></tr>
+    <tr><td>S1</td><td>model, and the loop, raster and detector in generated Verilog</td><td><span class="tag ok">simulated</span> equal to the cancho models; no board; converter spec derived</td></tr>
+    <tr><td>S2</td><td>automatic approach and tune against the model</td><td><span class="tag ok">simulated</span> sweep, tune, gain rule and approach against a model, chained to the loop; see <code>docs/tune-approach.md</code>. No real sensor, and the sweep driver is not written</td></tr>
+    <tr><td>S3</td><td>controller electronics: converters, a first board running</td><td>board running (2026-11-02): the controller is loaded and answers over its serial port; converters and Pmods not yet attached; SPI masters and the motor driver tested in simulation only</td></tr>
+    <tr><td>S4 to S6</td><td>mechanics, amplifier, first image of a grating</td><td>amplifier designed and simulated (<code>docs/amplifier.md</code>); mechanics and the image not started</td></tr>
+    <tr><td>S7</td><td>interface in cancho-ui, an unattended run and its record</td><td>not started</td></tr>
+    <tr><td>S8</td><td>toward high speed: a measured line rate</td><td>not started</td></tr>
+    </tbody>
+  </table></div>
+  <h3>Reading and references</h3>
+  <ul>
+    <li>Wang et al., <em>A do-it-yourself atomic force microscope using printed circuit board framework</em>, Meas. Sci. Technol. 36, 097003 (2025); <a href="https://doi.org/10.1088/1361-6501/ae08d1">doi:10.1088/1361-6501/ae08d1</a>. Our reading and what we take from it: <code>docs/diy-pcb-afm-assessment.md</code>. Its design files are not in the paper.</li>
+    <li>Liao et al., <em>Open-source controller for low-cost and high-speed atomic force microscopy imaging of skin corneocyte nanotextures</em>, HardwareX 12, e00341 (2022); files at <a href="https://osf.io/wgx4p/">osf.io/wgx4p</a> (the paper says CC BY-SA 4.0, OSF's metadata says CC BY 4.0; we copy nothing).</li>
+    <li>The tuning-fork route: <a href="https://hackaday.io/project/206429-a-working-diy-quartz-tuning-fork-afm">hackaday.io/project/206429</a> (self-reported, unverified).</li>
+  </ul>
+  <h3>How to help</h3>
+  <p>Open questions are issues in the repository. The most useful things now: someone who has built a fork or cantilever AFM reading Parts 6 to 11 and saying what is wrong; a converter module with published schematics that fits the numbers above; and anyone with an oscilloscope who will run Part 10 on a bench.</p>
+</div></section>
+</main>
+
+<footer><div class="wrap">
+  <p>cancho-afm. Software and gateware EUPL-1.2, hardware CERN-OHL-S-2.0, documentation CC BY 4.0 <em>(proposed; no licence file has been added yet)</em>. Written 2026-11-01 as a design; every claim is marked simulated, estimated or planned.</p>
+</div></footer>
+</body>
+</html>

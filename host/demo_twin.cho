@@ -1,0 +1,78 @@
+edition 7;
+
+import std.buffer;
+import board;
+import script;
+import run_twin;
+import session;
+
+// Runs the whole automatic procedure against the software twin and prints the run record: what was found, what was chosen, and the image.
+// `cancho run host/demo_twin.cho host/session.cho host/script.cho host/run_twin.cho host/proto.cho host/twin_link.cho sim/board.cho sim/lockin.cho
+//  sim/pid.cho sim/raster.cho sim/plant.cho sim/tune.cho sim/approach.cho --std`
+fn text[&h, &r](heap: &!h Heap, b: buffer.Buffer, s: &r [byte]) -> [heap] buffer.Buffer { return buffer.append(heap, b, s); }
+
+fn num[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer {
+    if n < 0 { return buffer.push_nat(heap, buffer.append(heap, b, "-"), 0 - n); }
+    return buffer.push_nat(heap, b, n);
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(args); release(net); release(clock); release(signals); release(exec);
+    var code = 0;
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 8192);
+        region r {
+            let rf = alloc_slice[r](64, 0);
+            let st = alloc_slice[r](32, 0);
+            let fl = alloc_slice[r](16, 0.0);
+            board.reset(rf, st, fl);
+            board.set_plant(fl, 32781.4, 500.0, 2000.0, 2000.0, 100.0, 600.0, 2.0);
+            board.set_distance(fl, 11000.0, 198.4375);
+            let ss = alloc_slice[r](32, 0);
+            let sf = alloc_slice[r](8, 0.0);
+            let sc = alloc_slice[r](4 * 200, 0);
+            let out = alloc_slice[r](128, 0);
+            let img = alloc_slice[r](64, 0 - 1);
+            let req = alloc_slice[r](16, byte_of(0));
+            let rsp = alloc_slice[r](16, byte_of(0));
+            var guard = 0;
+            var failures = 0;
+            while ss[0] != 99 && ss[0] != 98 && guard < 40000 {
+                let n = session.build(ss, sf, sc);
+                failures = failures + run_twin.run(sc, n, rf, st, fl, out, req, rsp);
+                session.consume(ss, sf, out, img);
+                guard = guard + 1;
+            }
+            o = text(h, o, "run record (software twin; a prediction of this software, not a measurement)\n");
+            o = text(h, o, "stage reached: "); o = num(h, o, ss[0]); o = text(h, o, "   failure code: "); o = num(h, o, ss[2]);
+            o = text(h, o, "   refused writes: "); o = num(h, o, failures); o = text(h, o, "\n");
+            o = text(h, o, "tune: f0 = "); o = num(h, o, truncate(sf[0] * 10.0)); o = text(h, o, " (tenths of Hz; the twin's fork is at 327814), Q = ");
+            o = num(h, o, truncate(sf[1])); o = text(h, o, " (the twin's: 500), peak figure "); o = num(h, o, truncate(sf[2])); o = text(h, o, "\n");
+            o = text(h, o, "chosen: shift "); o = num(h, o, ss[11]); o = text(h, o, ", setpoint "); o = num(h, o, ss[12]); o = text(h, o, ", kp ");
+            o = num(h, o, ss[13]); o = text(h, o, ", ki "); o = num(h, o, ss[14]); o = text(h, o, ", plant response per window ");
+            o = num(h, o, truncate(sf[3] * 1000.0)); o = text(h, o, "/1000\n");
+            o = text(h, o, "approach: coarse motor steps "); o = num(h, o, ss[21]); o = text(h, o, ", contact at Z = "); o = num(h, o, ss[9]);
+            o = text(h, o, " pm, loop settled Z = "); o = num(h, o, ss[22]); o = text(h, o, " pm\n");
+            o = text(h, o, "scan: pixels stored "); o = num(h, o, ss[16]); o = text(h, o, ", measured period "); o = num(h, o, ss[17]);
+            o = text(h, o, "/10 pixels (the grating's: 6)\n");
+            o = text(h, o, "image (Z, pm), 12 pixels per line:\n");
+            var line = 0;
+            while line < 3 {
+                var p = 0;
+                while p < 12 {
+                    o = num(h, o, img[line * 12 + p]); o = text(h, o, " ");
+                    p = p + 1;
+                }
+                o = text(h, o, "\n");
+                line = line + 1;
+            }
+        }
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(heap);
+    release(io);
+    if code < 0 { return 1; }
+    return 0;
+}

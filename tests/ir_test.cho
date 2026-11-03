@@ -1,0 +1,83 @@
+import std.test;
+import ir;
+import pid;
+import pid_ir;
+
+// The graph and sim/pid.cho are two writings of one step; they must agree on every input tried.
+fn test_the_graph_equals_the_hand_written_step() -> [] int {
+    region r {
+        let t = alloc_slice[r](1 + 4 * 64, 0);
+        let outs = alloc_slice[r](3, 0);
+        pid_ir.build(t, outs);
+        let vals = alloc_slice[r](64, 0);
+        let inp = alloc_slice[r](10, 0);
+        var k = 0;
+        while k < 400 {
+            // a deterministic spread of states and errors, including ones that hit every clamp
+            inp[0] = (k * 7919) % 4001 - 2000;
+            inp[1] = (k * 104729) % 20001 - 10000;
+            inp[2] = (k * 31) % 60001;
+            inp[3] = (k * 15485863) % 40001 - 20000;
+            inp[4] = (k * 3) % 400;
+            inp[5] = k % 50;
+            inp[6] = (k * 5) % 100;
+            inp[7] = 1000 + (k % 5) * 500;
+            inp[8] = 0;
+            inp[9] = 30000 + (k % 3) * 10000;
+            ir.eval(t, inp, vals);
+            let s = pid.step(pid.State { integ: inp[0], prev: inp[1], z: inp[2] }, inp[3], inp[4], inp[5], inp[6], inp[7], inp[8], inp[9]);
+            test.assert_eq(vals[outs[0]], s.integ);
+            test.assert_eq(vals[outs[1]], s.prev);
+            test.assert_eq(vals[outs[2]], s.z);
+            k = k + 1;
+        }
+    }
+    return 0;
+}
+
+// Every node's value stays inside the range the analysis gave it, on all corners of the inputs and on random cases;
+// that is what makes the narrow hardware widths safe.
+fn test_values_stay_inside_their_computed_ranges() -> [] int {
+    region r {
+        let t = alloc_slice[r](1 + 4 * 64, 0);
+        let outs = alloc_slice[r](3, 0);
+        pid_ir.build(t, outs);
+        let n = ir.count(t);
+        let inlo = alloc_slice[r](10, 0);
+        let inhi = alloc_slice[r](10, 0);
+        pid_ir.input_ranges(inlo, inhi);
+        let lo = alloc_slice[r](64, 0);
+        let hi = alloc_slice[r](64, 0);
+        ir.ranges(t, inlo, inhi, lo, hi);
+        let vals = alloc_slice[r](64, 0);
+        let inp = alloc_slice[r](10, 0);
+        var k = 0;
+        while k < pid_ir.cases() {
+            pid_ir.sample(k, inlo, inhi, inp);
+            ir.eval(t, inp, vals);
+            var i = 0;
+            while i < n {
+                test.assert(vals[i] >= lo[i]);
+                test.assert(vals[i] <= hi[i]);
+                i = i + 1;
+            }
+            k = k + 1;
+        }
+    }
+    return 0;
+}
+
+// The pipeline: latency 3, and every output is delayed to it.
+fn test_the_pipeline_has_the_expected_shape() -> [] int {
+    region r {
+        let t = alloc_slice[r](1 + 4 * 64, 0);
+        let outs = alloc_slice[r](3, 0);
+        pid_ir.build(t, outs);
+        let stg = alloc_slice[r](64, 0);
+        ir.stages(t, stg);
+        test.assert_eq(ir.latency(stg, outs, 3), 3);
+        test.assert_eq(ir.width(0 - 65535, 65535), 17);
+        test.assert_eq(ir.width(0, 1048575), 21);
+    }
+    return 0;
+}

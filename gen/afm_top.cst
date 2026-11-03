@@ -1,0 +1,73 @@
+// Pin assignments of afm_top for the Sipeed Tang Nano 20K (GW2AR-LV18QN88C8/I7).
+// Verified against Sipeed's own examples (github.com/sipeed/TangNano-20K-example): clk 4, uart_rx 70, uart_tx 69, LEDs 15 to 20.
+// The header pins are read from the board's pin-diagram image (tang_nano_20k_pinlabel.png in github.com/sipeed/sipeed_wiki): every pin
+// below is a numbered position on one of the two 2.54 mm headers, all in 3.3 V banks. Pins 25 to 31, 41, 42 and 48 are also LCD
+// connector lines (nothing is plugged in there); 71 to 76 and 86 have no other function. NOT yet checked on the board.
+// Pmod wiring (each Pmod is 6 pins: 1 CS, 2 data, 3 LDAC or data 2, 4 SCK, 5 GND, 6 3V3):
+//   AD1   pin 1 CS -> 27, pin 2 D0 -> 28, pin 3 D1 -> 25, pin 4 SCK -> 26
+//   DA3 Z pin 1 ~CS -> 29, pin 2 DIN -> 30, pin 4 SCLK -> 31
+//   DA3 X pin 1 ~CS -> 73, pin 2 DIN -> 74, pin 4 SCLK -> 75
+//   DA3 Y pin 1 ~CS -> 42, pin 2 DIN -> 41, pin 4 SCLK -> 48
+//   DA3 D pin 1 ~CS -> 72, pin 2 DIN -> 71, pin 4 SCLK -> 76 (the drive)
+//   every DA3 pin 3 ~LDAC -> 86 (held low by the design), or each tied to GND
+//   all Pmods: pin 5 -> GND, pin 6 -> 3V3 (the board's 3V3 header pin)
+//   stepper driver (A4988-style): STEP -> 77, DIR -> 49, ~ENABLE -> 85 (pin 85 is also the microSD slot's data line 1: leave the slot empty);
+//   the driver's own supply, MS1-MS3 high for 1/16 microstepping, and a common ground are wired by hand
+IO_LOC "clk" 4;
+IO_PORT "clk" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC "uart_rx" 70;
+IO_PORT "uart_rx" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC "uart_tx" 69;
+IO_PORT "uart_tx" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC "led[0]" 15;
+IO_LOC "led[1]" 16;
+IO_LOC "led[2]" 17;
+IO_LOC "led[3]" 18;
+IO_LOC "led[4]" 19;
+IO_LOC "led[5]" 20;
+IO_PORT "led[0]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_PORT "led[1]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_PORT "led[2]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_PORT "led[3]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_PORT "led[4]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_PORT "led[5]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC "adc_cs" 27;
+IO_LOC "adc_d0" 28;
+IO_LOC "adc_d1" 25;
+IO_LOC "adc_sck" 26;
+IO_PORT "adc_cs" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_PORT "adc_sck" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_PORT "adc_d0" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_PORT "adc_d1" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC "dz_cs" 29;
+IO_LOC "dz_din" 30;
+IO_LOC "dz_sclk" 31;
+IO_LOC "dx_cs" 73;
+IO_LOC "dx_din" 74;
+IO_LOC "dx_sclk" 75;
+IO_LOC "dy_cs" 42;
+IO_LOC "dy_din" 41;
+IO_LOC "dy_sclk" 48;
+IO_LOC "dd_cs" 72;
+IO_LOC "dd_din" 71;
+IO_LOC "dd_sclk" 76;
+IO_LOC "ldac" 86;
+IO_PORT "dz_cs" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_PORT "dz_din" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_PORT "dz_sclk" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_PORT "dx_cs" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_PORT "dx_din" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_PORT "dx_sclk" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_PORT "dy_cs" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_PORT "dy_din" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_PORT "dy_sclk" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_PORT "dd_cs" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_PORT "dd_din" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_PORT "dd_sclk" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_PORT "ldac" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC "motor_step" 77;
+IO_LOC "motor_dir" 49;
+IO_LOC "motor_en_n" 85;
+IO_PORT "motor_step" IO_TYPE=LVCMOS33 PULL_MODE=DOWN DRIVE=8;
+IO_PORT "motor_dir" IO_TYPE=LVCMOS33 PULL_MODE=DOWN DRIVE=8;
+IO_PORT "motor_en_n" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;

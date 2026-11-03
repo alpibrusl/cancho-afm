@@ -1,0 +1,61 @@
+edition 7;
+
+import std.buffer;
+import std.math;
+import lockin;
+
+// A synthetic ADC stream for the detector and what sim/lockin.cho says about it. Header: tuning window. Then one row per sample:
+// x done i q amp (done is 1 on the sample that closes a window; i, q, amp are that window's). Twelve windows of 256 samples at
+// 8 per period, the signal's amplitude, third harmonic and noise changing every few windows, one close to full scale.
+fn num[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer {
+    if n < 0 {
+        return buffer.push_nat(heap, buffer.append(heap, b, " -"), 0 - n);
+    }
+    return buffer.push_nat(heap, buffer.append(heap, b, " "), n);
+}
+
+fn amplitude(w: int) -> [] int {
+    if w < 3 { return 1000; }
+    if w < 6 { return 300; }
+    if w < 8 { return 20000; }
+    if w < 10 { return 30000; }
+    return 100;
+}
+
+fn sample(n: int, w: int) -> [] int {
+    var h3 = 0;
+    var nz = 0;
+    if w >= 3 && w < 6 { h3 = 80; }
+    if w >= 6 && w < 9 { nz = 40; }
+    let ang = 6.283185307179586 * float_of(n) / 8.0 + 0.5;
+    let v = float_of(amplitude(w)) * math.sin(ang) + float_of(h3) * math.sin(3.0 * ang);
+    let noise = ((n * 1103515245 + 12345) / 65536) % (2 * nz + 1) - nz;
+    return truncate(math.round(v)) + noise;
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(args); release(net); release(clock); release(signals); release(exec);
+    var code = 0;
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 262144);
+        o = num(h, o, 536870912); o = num(h, o, 256); o = buffer.append(h, o, "\n");
+        var s = lockin.start();
+        var n = 0;
+        while n < 12 * 256 {
+            let x = sample(n, n / 256);
+            s = lockin.step(s, x, 536870912, 256);
+            o = num(h, o, x); o = num(h, o, s.done); o = num(h, o, s.out_i); o = num(h, o, s.out_q); o = num(h, o, s.amp);
+            o = buffer.append(h, o, "\n");
+            n = n + 1;
+        }
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(heap);
+    release(io);
+    if code < 0 {
+        return 1;
+    }
+    return 0;
+}

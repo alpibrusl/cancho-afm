@@ -1,0 +1,48 @@
+* Tuning-fork front end: drive attenuator, the fork, compensation of its parallel capacitance C0, a transimpedance stage, and an AC-coupled gain stage
+* that puts the signal on 1.65 V for the ADC (the Pmod AD1 at 3.3 V).
+* THE FORK MODEL IS A GUESS: a 32.768 kHz watch crystal with Q = 5,000 as the motional branch R1 L1 C1 (C1 = 2 fF -> L1 = 11.79 kH, R1 = 485 kohm) in parallel
+* with C0 = 1.5 pF. The real values of a fork with a tip glued on must be measured (tutorial Part 6); every number below follows from them.
+.include opamp.lib
+.param C0=1.5p CTRIM=1.5p RF=1Meg CFB=1p
+* the DAC's drive output: 1.25 V mid-scale plus the sine; the AC analysis uses 1 V peak at the DAC (the real drive is up to 1.25 V peak)
+Vdac dacout 0 DC 1.25 AC 1
+Cc dacout dd 100n
+Rd1 dd e 49.9k
+Rd2 e 0 1k
+* the fork between the drive electrode e and the transimpedance input
+Cp0 e tin {C0}
+Rm e m1 485k
+Lm m1 m2 11790
+Cm m2 tin 2f
+* compensation: the drive inverted (gain -1, 100k/100k) through a trimmer capacitor into the same input
+Rc1 e ci 100k
+Rc2 ci co 100k
+XU2 0 ci co opamp
+Ctrim co tin {CTRIM}
+* transimpedance stage
+Rf tin tout {RF}
+Cfb tin tout {CFB}
+XU3 0 tin tout opamp
+* AC-coupled non-inverting gain of 11 about Vmid = 1.65 V
+Vmid vmid 0 DC 1.65
+Cc2 tout b 100n
+Rb b vmid 100k
+Rg2 n2 vmid 10k
+Rf2 n2 sout 100k
+Cf2 n2 sout 10p
+XU4 b n2 sout opamp
+Rs sout adc 1k
+Cadc adc 0 20p
+.control
+op
+echo RESULT dc_at_adc_v = $&v(adc)
+ac lin 3001 32500 33100
+meas ac gmax MAX vm(adc)
+meas ac fpeak MAX_AT vm(adc)
+meas ac gmin MIN vm(adc)
+meas ac glow FIND vm(adc) AT=32520
+meas ac ghigh FIND vm(adc) AT=33080
+echo RESULT peak = $&gmax  at_hz = $&fpeak  lowest = $&gmin  at_-250Hz = $&glow  at_+300Hz = $&ghigh
+echo RESULT see_the_peak_and_baseline_above
+.endc
+.end

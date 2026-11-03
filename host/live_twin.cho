@@ -1,0 +1,79 @@
+edition 7;
+
+import std.buffer;
+import board;
+import script;
+import run_twin;
+import session;
+import live_json;
+
+// Runs the whole automatic procedure against the software twin, then keeps scanning and prints one JSON line (host/live_json.cho) per 4 detector windows, for ui/live.cui.
+// Pace it with a shell loop (see ui/README.md); the twin runs far faster than the instrument would. A prediction of this software, not a measurement.
+//   cancho run host/live_twin.cho host/live_json.cho host/session.cho host/script.cho host/run_twin.cho host/proto.cho host/twin_link.cho sim/board.cho sim/lockin.cho
+//    sim/pid.cho sim/raster.cho sim/raster_sine.cho sim/plant.cho sim/tune.cho sim/approach.cho host/regs.cho --std
+fn text[&h, &r](heap: &!h Heap, b: buffer.Buffer, s: &r [byte]) -> [heap] buffer.Buffer { return buffer.append(heap, b, s); }
+
+fn num[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer {
+    if n < 0 { return buffer.push_nat(heap, buffer.append(heap, b, "-"), 0 - n); }
+    return buffer.push_nat(heap, b, n);
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(args); release(net); release(clock); release(signals); release(exec);
+    var code = 0;
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 65536);
+        region r {
+            let rf = alloc_slice[r](64, 0);
+            let st = alloc_slice[r](32, 0);
+            let fl = alloc_slice[r](16, 0.0);
+            board.reset(rf, st, fl);
+            board.set_plant(fl, 32781.4, 500.0, 2000.0, 2000.0, 100.0, 600.0, 2.0);
+            board.set_distance(fl, 11000.0, 198.4375);
+            let ss = alloc_slice[r](32, 0);
+            let sf = alloc_slice[r](8, 0.0);
+            let sc = alloc_slice[r](4 * 200, 0);
+            let out = alloc_slice[r](128, 0);
+            let img = alloc_slice[r](64, 0 - 1);
+            let req = alloc_slice[r](16, byte_of(0));
+            let rsp = alloc_slice[r](16, byte_of(0));
+            var guard = 0;
+            while ss[0] != 99 && ss[0] != 98 && guard < 40000 {
+                let n = session.build(ss, sf, sc);
+                run_twin.run(sc, n, rf, st, fl, out, req, rsp);
+                session.consume(ss, sf, out, img);
+                guard = guard + 1;
+            }
+            board.write(rf, st, 1, 0);
+            board.write(rf, st, 15, ss[22]);
+            board.write(rf, st, 1, 23);
+            var k = 0;
+            while k < 900 {
+                board.write(rf, st, 18, 0);
+                board.advance(rf, st, fl, 64 * 4);
+                let (c, r0) = board.read(rf, st, 1);
+                let (sts, r1) = board.read(rf, st, 2);
+                let (a, r2) = board.read(rf, st, 32);
+                let (z, r3) = board.read(rf, st, 33);
+                let (x, r4) = board.read(rf, st, 34);
+                let (y, r5) = board.read(rf, st, 35);
+                let (a0, r6) = board.read(rf, st, 38);
+                o = live_json.line(h, o, "twin", k, c, sts, a, z, x, y, a0);
+                // a finished scan starts again, so the page has something to show for as long as it is open
+                if sts / 8 % 2 == 1 {
+                    board.write(rf, st, 1, 0);
+                    board.write(rf, st, 15, ss[22]);
+                    board.write(rf, st, 1, 23);
+                }
+                k = k + 1;
+            }
+        }
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(heap);
+    release(io);
+    if code < 0 { return 1; }
+    return 0;
+}

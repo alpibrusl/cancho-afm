@@ -1,0 +1,59 @@
+// ui/live.cui: the cancho-afm live console. Every 500 ms it reads live.json from its own origin (`requires Network;`, nothing else): one line of JSON written by
+// host/live_twin.cho (the software twin: a prediction) or host/live_tty.cho (the real board, read-only), and says which, from the document's own `source` field.
+// The history is kept in the page (the last 600 readings) and drawn as charts.
+
+component Live {
+    requires Network;
+
+    state doc: Result[String, String] = Ok("");
+    state note: String = "waiting for the first reading";
+    state source: String = "-";
+    state t: String = "-";
+    state ctrl: String = "-";
+    state status: String = "-";
+    state n: Int = 0;
+    state amp: List[Float] = [];
+    state zt: List[Float] = [];
+    state xt: List[Float] = [];
+    state last: String = "";
+
+    start Poll;
+    every 500 Poll;
+
+    on Poll {
+        doc = await(net.get("live.json"));
+        note = match doc {
+            Ok(_) => { "reading" }
+            Err(e) => { "no reading: " + e }
+            Cancelled => { "cancelled" }
+        };
+        source = match doc { Ok(d) => { json.get(d, "source", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        t = match doc { Ok(d) => { json.get(d, "t", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        ctrl = match doc { Ok(d) => { json.get(d, "ctrl", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        status = match doc { Ok(d) => { json.get(d, "status", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        // a new reading only when the document's counter moved, so a slow producer does not repeat points
+        if t != last {
+            last = t;
+            n = n + 1;
+            amp = concat(amp, match doc { Ok(d) => { [num(json.get(d, "amp", "0"), 0)] } Err(_) => { [] } Cancelled => { [] } });
+            zt = concat(zt, match doc { Ok(d) => { [num(json.get(d, "z_pm", "0"), 0)] } Err(_) => { [] } Cancelled => { [] } });
+            xt = concat(xt, match doc { Ok(d) => { [num(json.get(d, "x", "0"), 0)] } Err(_) => { [] } Cancelled => { [] } });
+        }
+        if n > 600 {
+            n = 0;
+            amp = [];
+            zt = [];
+            xt = [];
+        }
+    }
+
+    view {
+        Column {
+            Text { role: heading "cancho-afm: live" }
+            Text { role: status "Source: {source}. {note}. Reading {t}, CTRL {ctrl}, STATUS {status}. (source twin = a prediction of this software; board = a read-only measurement.)" }
+            Chart { label: "Amplitude figure" kind: "line" values: amp }
+            Chart { label: "Z" kind: "line" values: zt unit: "pm" }
+            Chart { label: "X DAC code" kind: "line" values: xt }
+        }
+    }
+}

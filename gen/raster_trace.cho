@@ -1,0 +1,44 @@
+edition 7;
+
+import std.buffer;
+import raster;
+
+// The raster in cancho, from sim/raster.cho only: a header line (npix nlines x0 y0 dx dy), then one row per tick, taken before the
+// tick: x y t line trace done. It runs the frame and a few ticks past its end, where nothing may change.
+fn num[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer {
+    return buffer.push_nat(heap, buffer.append(heap, b, " "), n);
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(args); release(net); release(clock); release(signals); release(exec);
+    var code = 0;
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 65536);
+        let npix = 16;
+        let nlines = 8;
+        let x0 = 1000;
+        let y0 = 2000;
+        let dx = 100;
+        let dy = 250;
+        o = num(h, o, npix); o = num(h, o, nlines); o = num(h, o, x0); o = num(h, o, y0); o = num(h, o, dx); o = num(h, o, dy);
+        o = buffer.append(h, o, "\n");
+        var s = raster.start(x0, y0);
+        var t = 0;
+        while t < nlines * (2 * npix - 2) + 6 {
+            o = num(h, o, s.x); o = num(h, o, s.y); o = num(h, o, s.t); o = num(h, o, s.line);
+            o = num(h, o, raster.tracing(s, npix)); o = num(h, o, s.done);
+            o = buffer.append(h, o, "\n");
+            s = raster.step(s, npix, nlines, x0, dx, dy);
+            t = t + 1;
+        }
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(heap);
+    release(io);
+    if code < 0 {
+        return 1;
+    }
+    return 0;
+}

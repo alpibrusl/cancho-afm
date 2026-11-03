@@ -1,0 +1,40 @@
+import std.test;
+import ir;
+import lockin_ir;
+import lockin;
+
+// The unrolled square-root pipeline equals the loop in sim/lockin.cho, on the corners of the input range and on spread cases, and
+// every node stays inside its computed range.
+fn test_the_sqrt_graph_equals_the_reference() -> [] int {
+    region r {
+        let tp = alloc_slice[r](1 + 4 * 512, 0);
+        let outs = alloc_slice[r](1, 0);
+        lockin_ir.build(tp, outs);
+        let n = ir.count(tp);
+        let inlo = alloc_slice[r](2, 0);
+        let inhi = alloc_slice[r](2, 0);
+        lockin_ir.input_ranges(inlo, inhi);
+        let lo = alloc_slice[r](512, 0);
+        let hi = alloc_slice[r](512, 0);
+        ir.ranges(tp, inlo, inhi, lo, hi);
+        let vals = alloc_slice[r](512, 0);
+        let inp = alloc_slice[r](2, 0);
+        var k = 0;
+        while k < 3000 {
+            ir.sample(k, 2, inlo, inhi, inp);
+            ir.eval(tp, inp, vals);
+            test.assert_eq(vals[outs[0]], lockin.isqrt(inp[0] * inp[0] + inp[1] * inp[1]));
+            var i = 0;
+            while i < n {
+                test.assert(vals[i] >= lo[i]);
+                test.assert(vals[i] <= hi[i]);
+                i = i + 1;
+            }
+            k = k + 1;
+        }
+        let stg = alloc_slice[r](512, 0);
+        ir.stages(tp, stg);
+        test.assert_eq(ir.latency(stg, outs, 1), 13);
+    }
+    return 0;
+}

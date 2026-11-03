@@ -1,0 +1,28 @@
+edition 7;
+
+import std.buffer;
+import glue;
+
+// Prints the board-level glue to standard output: the sine function, the serial bridge, the DAC refresh and the top level `afm_top`.
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(args); release(net); release(clock); release(signals); release(exec);
+    var code = 0;
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 32768);
+        o = glue.emit_sine(h, o);
+        o = glue.emit_uart_bridge(h, o);
+        o = glue.emit_dac_refresh(h, o);
+        o = glue.emit_motor(h, o);
+        o = glue.emit_raster_sine(h, o);
+        o = glue.emit_top(h, o);
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(heap);
+    release(io);
+    if code < 0 {
+        return 1;
+    }
+    return 0;
+}

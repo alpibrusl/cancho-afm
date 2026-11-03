@@ -1,0 +1,474 @@
+{
+  "version": "0.1.0",
+  "block": {
+    "name": "Afm",
+    "base_address": "0x40000000",
+    "bus_width": 32,
+    "endianness": "little",
+    "registers": [
+      {
+        "name": "ID",
+        "offset": "0x00",
+        "kind": "RO",
+        "reset": "0xaf500001",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "CTRL",
+        "offset": "0x04",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "RUN", "lsb": 0, "msb": 0 },
+          { "name": "DRIVE_EN", "lsb": 1, "msb": 1 },
+          { "name": "SCAN", "lsb": 2, "msb": 2 },
+          { "name": "MANUAL", "lsb": 3, "msb": 3 },
+          { "name": "ADC_RUN", "lsb": 4, "msb": 4 },
+          { "name": "MOTOR_EN", "lsb": 5, "msb": 5 },
+          { "name": "SINE", "lsb": 6, "msb": 6 }
+        ]
+      },
+      {
+        "name": "STATUS",
+        "offset": "0x08",
+        "kind": "RO",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "FAULT", "lsb": 0, "msb": 0 },
+          { "name": "LOOP_BUSY", "lsb": 1, "msb": 1 },
+          { "name": "OVERFLOW", "lsb": 2, "msb": 2 },
+          { "name": "SCAN_DONE", "lsb": 3, "msb": 3 },
+          { "name": "ADC_BUSY", "lsb": 4, "msb": 4 }
+        ]
+      },
+      {
+        "name": "SAMPLE_DIV",
+        "offset": "0x0c",
+        "kind": "RW",
+        "reset": "0x00000067",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "TUNING",
+        "offset": "0x10",
+        "kind": "RW",
+        "reset": "0x20000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "WINDOW",
+        "offset": "0x14",
+        "kind": "RW",
+        "reset": "0x00000100",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "HALF",
+        "offset": "0x18",
+        "kind": "RW",
+        "reset": "0x00000002",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "SHIFT",
+        "offset": "0x1c",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "SETPOINT",
+        "offset": "0x20",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "KP",
+        "offset": "0x24",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "KI",
+        "offset": "0x28",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "KD",
+        "offset": "0x2c",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "ILIM",
+        "offset": "0x30",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "ZMIN",
+        "offset": "0x34",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "ZMAX",
+        "offset": "0x38",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "ZINIT",
+        "offset": "0x3c",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "ZRETRACT",
+        "offset": "0x40",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "TIMEOUT",
+        "offset": "0x44",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "KICK",
+        "offset": "0x48",
+        "kind": "WO",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "DRIVE_AMP",
+        "offset": "0x4c",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "DRIVE_OFFS",
+        "offset": "0x50",
+        "kind": "RW",
+        "reset": "0x00008000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "NPIX",
+        "offset": "0x54",
+        "kind": "RW",
+        "reset": "0x00000002",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "NLINES",
+        "offset": "0x58",
+        "kind": "RW",
+        "reset": "0x00000001",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "X0",
+        "offset": "0x5c",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "Y0",
+        "offset": "0x60",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "DX",
+        "offset": "0x64",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "DY",
+        "offset": "0x68",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "PIXDIV",
+        "offset": "0x6c",
+        "kind": "RW",
+        "reset": "0x00000001",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "MAN_Z",
+        "offset": "0x70",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "MAN_X",
+        "offset": "0x74",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "MAN_Y",
+        "offset": "0x78",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "MAN_D",
+        "offset": "0x7c",
+        "kind": "RW",
+        "reset": "0x00008000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "AMP",
+        "offset": "0x80",
+        "kind": "RO",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "ZOUT",
+        "offset": "0x84",
+        "kind": "RO",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "XOUT",
+        "offset": "0x88",
+        "kind": "RO",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "YOUT",
+        "offset": "0x8c",
+        "kind": "RO",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "I",
+        "offset": "0x90",
+        "kind": "RO",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "Q",
+        "offset": "0x94",
+        "kind": "RO",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "ADC0",
+        "offset": "0x98",
+        "kind": "RO",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "ADC1",
+        "offset": "0x9c",
+        "kind": "RO",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "NSAMP",
+        "offset": "0xa0",
+        "kind": "RO",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "NWIN",
+        "offset": "0xa4",
+        "kind": "RO",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "PIXLINE",
+        "offset": "0xa8",
+        "kind": "RO",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "LINE", "lsb": 0, "msb": 15 },
+          { "name": "PIX", "lsb": 16, "msb": 31 }
+        ]
+      },
+      {
+        "name": "MOTOR_CMD",
+        "offset": "0xac",
+        "kind": "WO",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "MOTOR_RATE",
+        "offset": "0xb0",
+        "kind": "RW",
+        "reset": "0x00006978",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "MOTOR_STATUS",
+        "offset": "0xb4",
+        "kind": "RO",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "BUSY", "lsb": 0, "msb": 0 },
+          { "name": "ENABLED", "lsb": 1, "msb": 1 },
+          { "name": "REFUSED", "lsb": 2, "msb": 2 }
+        ]
+      },
+      {
+        "name": "MOTOR_POS",
+        "offset": "0xb8",
+        "kind": "RO",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "MOTOR_MAX",
+        "offset": "0xbc",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "SINE_AMP",
+        "offset": "0xc0",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "SINE_STEP",
+        "offset": "0xc4",
+        "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      }
+    ]
+  }
+}

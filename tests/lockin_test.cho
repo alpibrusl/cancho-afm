@@ -1,0 +1,98 @@
+import std.test;
+import std.math;
+import lockin;
+
+// A sampled signal: amplitude `a`, `per` samples per period (the reference is tuned to the same), phase `deg`, plus a third harmonic
+// of `h3` and a deterministic pseudo-noise of +-`nz`.
+fn sample(n: int, a: int, per: float, deg: int, h3: int, nz: int) -> [] int {
+    let w = 6.283185307179586 * float_of(n) / per;
+    let th = 3.141592653589793 * float_of(deg) / 180.0;
+    let v = float_of(a) * math.sin(w + th) + float_of(h3) * math.sin(3.0 * w + th);
+    let noise = ((n * 1103515245 + 12345) / 65536) % (2 * nz + 1) - nz;
+    return truncate(math.round(v)) + noise;
+}
+
+// Run three windows and return the amplitude figure of the last. `per` is a float samples-per-period; tuning is the reference's step.
+fn run(a: int, per: float, deg: int, h3: int, nz: int, tuning: int, window: int) -> [] int {
+    var s = lockin.start();
+    var n = 0;
+    while n < window * 3 {
+        s = lockin.step(s, sample(n, a, per, deg, h3, nz), tuning, window);
+        n = n + 1;
+    }
+    return s.amp;
+}
+
+fn test_isqrt_is_the_floor_of_the_square_root() -> [] int {
+    test.assert_eq(lockin.isqrt(0), 0);
+    test.assert_eq(lockin.isqrt(1), 1);
+    test.assert_eq(lockin.isqrt(15), 3);
+    test.assert_eq(lockin.isqrt(16), 4);
+    test.assert_eq(lockin.isqrt(1000000), 1000);
+    test.assert_eq(lockin.isqrt(999999), 999);
+    test.assert_eq(lockin.isqrt(140737488355327), 11863283);
+    return 0;
+}
+
+fn test_the_reference_signs_make_a_quadrature_pair() -> [] int {
+    test.assert_eq(lockin.sign_cos(0), 1);
+    test.assert_eq(lockin.sign_sin(0), 1);
+    test.assert_eq(lockin.sign_cos(1073741824), 0 - 1);
+    test.assert_eq(lockin.sign_sin(1073741824), 1);
+    test.assert_eq(lockin.sign_cos(2147483648), 0 - 1);
+    test.assert_eq(lockin.sign_sin(2147483648), 0 - 1);
+    test.assert_eq(lockin.sign_cos(3221225472), 1);
+    test.assert_eq(lockin.sign_sin(3221225472), 0 - 1);
+    return 0;
+}
+
+// Within `pct` percent of `want`?
+fn near(got: int, want: int, pct: int) -> [] int {
+    var d = got - want;
+    if d < 0 { d = 0 - d; }
+    if d * 100 <= want * pct { return 1; }
+    return 0;
+}
+
+// Coherent reference (the drive and the detector share one oscillator): the figure does not depend on the signal's phase.
+fn test_the_figure_does_not_depend_on_the_phase() -> [] int {
+    let r0 = run(1000, 8.0, 0, 0, 0, 536870912, 256);
+    var deg = 45;
+    while deg < 360 {
+        test.assert_eq(run(1000, 8.0, deg, 0, 0, 536870912, 256), r0);
+        deg = deg + 45;
+    }
+    // 8 samples per period: 2.6% above the ideal 2/pi * A * window = 162,974 (measured 167,227)
+    test.assert(near(r0, 162974, 3) == 1);
+    return 0;
+}
+
+fn test_the_figure_is_proportional_to_the_amplitude() -> [] int {
+    let r = run(1000, 8.0, 30, 0, 0, 536870912, 256);
+    test.assert(near(run(100, 8.0, 30, 0, 0, 536870912, 256), r / 10, 1) == 1);
+    // and to the window length
+    test.assert(near(run(1000, 8.0, 30, 0, 0, 536870912, 26), r * 26 / 256, 3) == 1);
+    return 0;
+}
+
+fn test_noise_averages_away() -> [] int {
+    let r = run(1000, 8.0, 30, 0, 0, 536870912, 256);
+    // +-300 uniform noise on a 1000 signal: within 2%
+    test.assert(near(run(1000, 8.0, 30, 0, 300, 536870912, 256), r, 2) == 1);
+    // a 10-count signal under +-3 noise: within 6% (measured +4%)
+    test.assert(near(run(10, 8.0, 30, 0, 3, 536870912, 256), r / 100, 6) == 1);
+    return 0;
+}
+
+// The known weaknesses of square-wave mixing, pinned so a change to them is seen: a third harmonic leaks in at one third of its
+// size (200 on 1000 raises the figure by about 7%), and a reference off by 0.5% over 32 periods costs about 7%.
+fn test_the_known_weaknesses() -> [] int {
+    let r = run(1000, 8.0, 30, 0, 0, 536870912, 256);
+    let with_h3 = run(1000, 8.0, 30, 200, 0, 536870912, 256);
+    test.assert(with_h3 > r * 106 / 100);
+    test.assert(with_h3 < r * 109 / 100);
+    let off = run(1000, 8.0, 30, 0, 0, 539557888, 256);
+    test.assert(off < r * 95 / 100);
+    test.assert(off > r * 90 / 100);
+    return 0;
+}

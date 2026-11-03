@@ -1,0 +1,54 @@
+edition 7;
+
+import std.buffer;
+import ir;
+import raster_ir;
+
+// Prints test vectors for the generated module: one line per case, ten inputs then the three outputs ir.eval gives.
+fn num[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer {
+    if n < 0 {
+        return buffer.push_nat(heap, buffer.append(heap, b, " -"), 0 - n);
+    }
+    return buffer.push_nat(heap, buffer.append(heap, b, " "), n);
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(args); release(net); release(clock); release(signals); release(exec);
+    var code = 0;
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 65536);
+        region r {
+            let t = alloc_slice[r](1 + 4 * 96, 0);
+            let outs = alloc_slice[r](5, 0);
+            raster_ir.build(t, outs);
+            let inlo = alloc_slice[r](10, 0);
+            let inhi = alloc_slice[r](10, 0);
+            raster_ir.input_ranges(inlo, inhi);
+            let vals = alloc_slice[r](96, 0);
+            let inp = alloc_slice[r](10, 0);
+            var k = 0;
+            while k < 4024 {
+                ir.sample(k, 10, inlo, inhi, inp);
+                ir.eval(t, inp, vals);
+                var j = 0;
+                while j < 10 { o = num(h, o, inp[j]); j = j + 1; }
+                o = num(h, o, vals[outs[0]]);
+                o = num(h, o, vals[outs[1]]);
+                o = num(h, o, vals[outs[2]]);
+                o = num(h, o, vals[outs[3]]);
+                o = num(h, o, vals[outs[4]]);
+                o = buffer.append(h, o, "\n");
+                k = k + 1;
+            }
+        }
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(heap);
+    release(io);
+    if code < 0 {
+        return 1;
+    }
+    return 0;
+}

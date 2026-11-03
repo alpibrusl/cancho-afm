@@ -1,0 +1,65 @@
+edition 5;
+
+module lockin;
+
+// `lockin` -- the digital amplitude detector, S1 of docs/design.md. A quadrature (I/Q) lock-in on the ADC samples of the sensor
+// signal, in integers so the same arithmetic can be generated as SystemVerilog and compared exactly. NOT A MEASUREMENT OF ANY SENSOR.
+//
+//   * The reference is a 32-bit phase accumulator advanced by `tuning` per sample (tuning = 2^32 * f_ref / f_sample: a step of fs / 2^32,
+//     about 0.00006 Hz at 262 kS/s, where a 16-bit one stepped 4 Hz, wider than a tuning fork's whole 6.5 Hz resonance).
+//   * It is used as two SQUARE waves 90 degrees apart (the signs of sin and cos), so the mixing needs no multiplier:
+//     acc_i += x * sign_cos(phase), acc_q += x * sign_sin(phase), over `window` samples.
+//   * The amplitude figure is R = floor(sqrt(I^2 + Q^2)), by the digit-by-digit square root below.
+//     For a sine of amplitude A the true value is R = A * window * 2/pi (the square wave's fundamental is 4/pi times the sine's),
+//     so A = R * pi / (2 * window): one calibration constant, left to the host.
+
+pub struct L { phase: int, acc_i: int, acc_q: int, cnt: int, done: int, out_i: int, out_q: int, amp: int }
+
+pub fn start() -> [] L {
+    return L { phase: 0, acc_i: 0, acc_q: 0, cnt: 0, done: 0, out_i: 0, out_q: 0, amp: 0 };
+}
+
+// +1 when cos of the 32-bit phase is >= 0 (phase in [270, 90) degrees), else -1: the XOR of the top two bits.
+pub fn sign_cos(phase: int) -> [] int {
+    let b15 = phase / 2147483648 % 2;
+    let b14 = phase / 1073741824 % 2;
+    if (b15 + b14) % 2 == 0 {
+        return 1;
+    }
+    return 0 - 1;
+}
+
+pub fn sign_sin(phase: int) -> [] int {
+    if phase / 2147483648 % 2 == 0 {
+        return 1;
+    }
+    return 0 - 1;
+}
+
+// floor(sqrt(n)) for 0 <= n < 4^24, one bit per step from the top; the same recurrence the hardware unrolls.
+pub fn isqrt(n: int) -> [] int {
+    var x = n;
+    var root = 0;
+    var bit = 70368744177664;
+    while bit > 0 {
+        if x >= root + bit {
+            x = x - (root + bit);
+            root = root / 2 + bit;
+        } else {
+            root = root / 2;
+        }
+        bit = bit / 4;
+    }
+    return root;
+}
+
+// One ADC sample `x` (signed, 16 bits). `done` is 1 on the sample that closes a window, with out_i, out_q and amp for that window.
+pub fn step(s: L, x: int, tuning: int, window: int) -> [] L {
+    let i = s.acc_i + x * sign_cos(s.phase);
+    let q = s.acc_q + x * sign_sin(s.phase);
+    let ph = (s.phase + tuning) % 4294967296;
+    if s.cnt + 1 >= window {
+        return L { phase: ph, acc_i: 0, acc_q: 0, cnt: 0, done: 1, out_i: i, out_q: q, amp: isqrt(i * i + q * q) };
+    }
+    return L { phase: ph, acc_i: i, acc_q: q, cnt: s.cnt + 1, done: 0, out_i: s.out_i, out_q: s.out_q, amp: s.amp };
+}

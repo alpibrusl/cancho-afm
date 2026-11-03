@@ -1,0 +1,55 @@
+edition 5;
+
+module raster_sine;
+
+import std.math;
+
+// `raster_sine` -- the raster with a SINUSOIDAL fast axis, for the fast stage. A triangle's turnarounds are abrupt and excite the scanner's resonance; a sine has no corners.
+// (The 2025 paper used a sine fast axis for its speed tests and still saw the scan range grow at 60 and 80 lines per second, which it attributes to a resonance: their report.)
+// The reference the generated Verilog (gen/glue.cho, `raster_sine`) must equal on every clock. NOT TESTED ON ANY SCANNER.
+//
+//   A line is one period of a 16-bit phase that advances by `pstep` per tick: x = x0 + amp * (1 - cos(phase)) / 2, from x0 out to x0 + amp (about) and back.
+//   The first half-period (phase under 32768) is the trace, the recorded part. When the phase wraps, the slow axis steps by dy and the next line begins;
+//   after `nlines` lines `done` is set and ticks are ignored. The cosine is the same 256-entry table as the drive's sine (gen/glue.cho).
+
+pub struct S { phase: int, line: int, y: int, done: int }
+
+pub fn start(y0: int) -> [] S {
+    return S { phase: 0, line: 0, y: y0, done: 0 };
+}
+
+// 32767 * sin(2 pi i / 256), rounded: the table of the generated hardware
+pub fn sine256(i: int) -> [] int {
+    return truncate(math.round(32767.0 * math.sin(6.283185307179586 * float_of(i) / 256.0)));
+}
+
+// cos of a 16-bit phase on the same table (the sine a quarter turn on)
+pub fn cosine(phase: int) -> [] int {
+    return sine256((phase / 256 + 64) % 256);
+}
+
+// x position, DAC codes: x0 at phase 0, x0 + amp at half a turn
+pub fn x_of(s: S, x0: int, amp: int) -> [] int {
+    return x0 + amp * (32768 - cosine(s.phase)) / 65536;
+}
+
+pub fn step(s: S, pstep: int, nlines: int, dy: int) -> [] S {
+    if s.done == 1 {
+        return s;
+    }
+    let p = s.phase + pstep;
+    if p >= 65536 {
+        if s.line + 1 < nlines {
+            return S { phase: p - 65536, line: s.line + 1, y: s.y + dy, done: 0 };
+        }
+        return S { phase: 0, line: s.line, y: s.y, done: 1 };
+    }
+    return S { phase: p, line: s.line, y: s.y, done: 0 };
+}
+
+pub fn tracing(s: S) -> [] int {
+    if s.done == 0 && s.phase < 32768 {
+        return 1;
+    }
+    return 0;
+}

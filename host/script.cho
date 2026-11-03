@@ -1,0 +1,25 @@
+edition 5;
+
+module script;
+
+// `script` -- a list of register operations, four integers each: (op, index, a, b). The session (host/session.cho) builds one for each stage; a
+// runner executes it, over the serial port or against the twin, and hands back what the reads returned.
+//   1 write  index, value        2 read  index (the value is appended to the results)
+//   3 wait   clocks
+// A write is checked: the board must answer OKAY.
+
+pub fn op_write() -> [] int { return 1; }
+pub fn op_read() -> [] int { return 2; }
+pub fn op_wait() -> [] int { return 3; }
+
+pub fn add[&a](sc: &!a [int], n: int, op: int, idx: int, x: int, y: int) -> [] int {
+    sc[4 * n] = op;
+    sc[4 * n + 1] = idx;
+    sc[4 * n + 2] = x;
+    sc[4 * n + 3] = y;
+    return n + 1;
+}
+
+pub fn write[&a](sc: &!a [int], n: int, idx: int, value: int) -> [] int { return add(sc, n, 1, idx, value, 0); }
+pub fn read[&a](sc: &!a [int], n: int, idx: int) -> [] int { return add(sc, n, 2, idx, 0, 0); }
+pub fn wait[&a](sc: &!a [int], n: int, clocks: int) -> [] int { return add(sc, n, 3, 0, clocks, 0); }

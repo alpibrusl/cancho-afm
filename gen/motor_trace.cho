@@ -1,0 +1,57 @@
+edition 7;
+
+import std.buffer;
+import motor;
+
+// Lockstep trace for the stepper driver: one row per clock, the inputs (enable hold go steps rate) then the state the model reaches after that clock
+// (busy step dir pos). Commands of -6 to 6 microsteps at random moments (also while busy and when disabled or held), the rate changing between 1 and 13.
+fn num[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer {
+    if n < 0 { return buffer.push_nat(heap, buffer.append(heap, b, " -"), 0 - n); }
+    return buffer.push_nat(heap, buffer.append(heap, b, " "), n);
+}
+
+fn mix(x: int) -> [] int {
+    let a = (x * 2654435761 + 12345) % 4294967296;
+    return (a * 1103515245 + 12345) % 2147483648;
+}
+
+fn rate_at(t: int) -> [] int {
+    let k = t / 2500 % 5;
+    if k == 0 { return 8; }
+    if k == 1 { return 4; }
+    if k == 2 { return 13; }
+    if k == 3 { return 1; }
+    return 5;
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(args); release(net); release(clock); release(signals); release(exec);
+    var code = 0;
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 1048576);
+        var s = motor.reset();
+        var t = 0;
+        while t < 15000 {
+            var en = 1;
+            if mix(t * 3 + 1) / 4096 % 40 == 0 { en = 0; }
+            var hold = 0;
+            if mix(t * 5 + 2) / 4096 % 50 == 0 { hold = 1; }
+            var go = 0;
+            if mix(t) / 4096 % 17 == 0 { go = 1; }
+            let steps = mix(t * 7 + 3) / 4096 % 13 - 6;
+            let rate = rate_at(t);
+            s = motor.step(s, en, hold, go, steps, rate);
+            o = num(h, o, en); o = num(h, o, hold); o = num(h, o, go); o = num(h, o, steps); o = num(h, o, rate);
+            o = num(h, o, s.busy); o = num(h, o, s.step); o = num(h, o, s.dir); o = num(h, o, s.pos);
+            o = buffer.append(h, o, "\n");
+            t = t + 1;
+        }
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(heap);
+    release(io);
+    if code < 0 { return 1; }
+    return 0;
+}

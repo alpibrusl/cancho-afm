@@ -1,0 +1,44 @@
+edition 5;
+
+module lockin_ir;
+
+import ir;
+
+// floor(sqrt(I*I + Q*Q)) as a straight-line pipeline: the digit-by-digit square root of sim/lockin.cho unrolled, 24 steps, with a
+// register after every second step. Inputs: 0 I, 1 Q (each within +-8,388,607, so I^2 + Q^2 < 2^48). Output: node returned.
+pub fn build[&a, &b](t: &!a [int], outs: &!b [int]) -> [] int {
+    let i = ir.node(t, 0, 0, 0, 0);
+    let q = ir.node(t, 0, 1, 0, 0);
+    let ii = ir.node(t, 4, i, i, 0);
+    let qq = ir.node(t, 4, q, q, 0);
+    var x = ir.node(t, 2, ii, qq, 0);
+    var root = ir.node(t, 1, 0, 0, 0);
+    var bit = 70368744177664;
+    var k = 0;
+    while k < 24 {
+        let cbit = ir.node(t, 1, bit, 0, 0);
+        let trial = ir.node(t, 2, root, cbit, 0);
+        let lt = ir.node(t, 7, x, trial, 0);
+        let sub = ir.node(t, 3, x, trial, 0);
+        let xn = ir.node(t, 8, lt, x, sub);
+        let half = ir.node(t, 5, root, 2, 0);
+        let radd = ir.node(t, 2, half, cbit, 0);
+        let rn = ir.node(t, 8, lt, half, radd);
+        x = xn;
+        root = rn;
+        if k % 2 == 1 {
+            x = ir.node(t, 9, x, 0, 0);
+            root = ir.node(t, 9, root, 0, 0);
+        }
+        bit = bit / 4;
+        k = k + 1;
+    }
+    outs[0] = root;
+    return root;
+}
+
+pub fn input_ranges[&a, &b](lo: &!a [int], hi: &!b [int]) -> [] int {
+    lo[0] = 0 - 8388607; hi[0] = 8388607;
+    lo[1] = 0 - 8388607; hi[1] = 8388607;
+    return 0;
+}

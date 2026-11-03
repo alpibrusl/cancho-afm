@@ -1,0 +1,67 @@
+edition 5;
+
+module raster_ir;
+
+import ir;
+
+// One tick of the XY raster as a graph. The fast axis is a triangle: npix points out (the trace, x0, x0+dx, ... x0+(npix-1)dx) and
+// npix-2 back, so a line is 2*npix-2 ticks and the next line starts exactly at x0. The slow axis steps by dy at the end of each line;
+// after nlines lines `done` is set. No multiplier: positions are accumulated. Needs npix >= 2.
+// Inputs, in order: 0 t, 1 line, 2 x, 3 y, 4 done (0 or 1), 5 npix, 6 nlines, 7 x0, 8 dx, 9 dy.
+// Outputs (node indices in `outs`): next t, next line, next x, next y, next done.
+pub fn build[&a, &b](t: &!a [int], outs: &!b [int]) -> [] int {
+    let tt = ir.node(t, 0, 0, 0, 0);
+    let line = ir.node(t, 0, 1, 0, 0);
+    let x = ir.node(t, 0, 2, 0, 0);
+    let y = ir.node(t, 0, 3, 0, 0);
+    let done = ir.node(t, 0, 4, 0, 0);
+    let npix = ir.node(t, 0, 5, 0, 0);
+    let nlines = ir.node(t, 0, 6, 0, 0);
+    let x0 = ir.node(t, 0, 7, 0, 0);
+    let dx = ir.node(t, 0, 8, 0, 0);
+    let dy = ir.node(t, 0, 9, 0, 0);
+    let one = ir.node(t, 1, 1, 0, 0);
+    let zero = ir.node(t, 1, 0, 0, 0);
+    let two = ir.node(t, 1, 2, 0, 0);
+    let t1 = ir.node(t, 2, tt, one, 0);
+    let p2 = ir.node(t, 2, npix, npix, 0);
+    let period = ir.node(t, 3, p2, two, 0);
+    let more = ir.node(t, 7, t1, period, 0);
+    let fwd = ir.node(t, 7, t1, npix, 0);
+    let xup = ir.node(t, 2, x, dx, 0);
+    let xdn = ir.node(t, 3, x, dx, 0);
+    let xmove = ir.node(t, 8, fwd, xup, xdn);
+    let xn = ir.node(t, 8, more, xmove, x0);
+    let tn = ir.node(t, 8, more, t1, zero);
+    let l1 = ir.node(t, 2, line, one, 0);
+    let lmore = ir.node(t, 7, l1, nlines, 0);
+    let lsel = ir.node(t, 8, lmore, l1, line);
+    let ln = ir.node(t, 8, more, line, lsel);
+    let yd = ir.node(t, 2, y, dy, 0);
+    let ysel = ir.node(t, 8, lmore, yd, y);
+    let yn = ir.node(t, 8, more, y, ysel);
+    let dsel = ir.node(t, 8, lmore, done, one);
+    let dn = ir.node(t, 8, more, done, dsel);
+    outs[0] = tn;
+    outs[1] = ln;
+    outs[2] = xn;
+    outs[3] = yn;
+    outs[4] = dn;
+    return dn;
+}
+
+// The contract, as ranges: up to 1024 pixels by 1024 lines; positions and steps are 16-bit DAC words. The scan must stay inside
+// the DAC: x0 + (npix-1)*dx and y0 + (nlines-1)*dy at most 65535 (the host's job; the graph does not check it).
+pub fn input_ranges[&a, &b](lo: &!a [int], hi: &!b [int]) -> [] int {
+    lo[0] = 0; hi[0] = 2046;
+    lo[1] = 0; hi[1] = 1023;
+    lo[2] = 0; hi[2] = 65535;
+    lo[3] = 0; hi[3] = 65535;
+    lo[4] = 0; hi[4] = 1;
+    lo[5] = 2; hi[5] = 1024;
+    lo[6] = 1; hi[6] = 1024;
+    lo[7] = 0; hi[7] = 65535;
+    lo[8] = 0; hi[8] = 65535;
+    lo[9] = 0; hi[9] = 65535;
+    return 0;
+}
