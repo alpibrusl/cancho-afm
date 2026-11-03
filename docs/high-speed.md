@@ -1,0 +1,91 @@
+# High-speed AFM (HS-AFM): design note
+
+> Written 2026-11-03, **before anything is built**. Numbers are **computed from stated assumptions [A]**, taken from a search **[search]**, or not known **[unknown]**.
+> Nothing here has run on a cantilever, a photodiode or a fast scanner. The twin results this note asks for are predictions, not measurements.
+> This note grows `docs/design.md` section 6 and slice S7. It is the second stage: the tuning fork route (`docs/first-hardware.md`) comes first.
+
+## What changes, and what does not
+
+The software stays: tune, choose, approach, scan, the register table, the lock-in and PID generated from cancho, the twin. What changes is **hardware and a number of
+constants**. In the order of difficulty:
+
+| Part | Fork stage (now) | HS stage | Status |
+|---|---|---|---|
+| Sensor | quartz fork, current through a 1 MOhm TIA | small cantilever, **laser and quadrant photodiode** (optical beam deflection), bandwidth of several MHz | **[unknown]** which cheap photodiode and TIA; the hardest item |
+| Resonance | 32.768 kHz, Q about 500 | **0.5 to 1.5 MHz**; Q 2 to 10 in liquid, 100 or more in air **[search]** (Ando: small cantilevers, 450 to 650 kHz in 2001; 1.2 MHz in later work; a commercial one is listed at 1.5 MHz in air, 0.5 MHz in liquid, 0.1 N/m) | cantilevers may be bought; **[unverified]** price and stock |
+| ADC | 262 kS/s, 12 bits (Pmod AD1, AD7476A, 1 MS/s) | **4 to 10 MS/s**, 12 bits: at 8 samples per period (what our lock-in needs for a phase-free figure, `docs/converters.md`) 0.5 MHz is 4 MS/s, 1.2 MHz is 9.6 MS/s | AD7476A is too slow (already rejected); AD9226 (12 bits, parallel) is a candidate `docs/converter-candidates.md` **[search]** |
+| Drive | DDS word, DAC about 262 kS/s | the same DDS, a DAC at 8 or more times f0 (4 to 10 MS/s) | **[unknown]** part |
+| Detector window | 64 samples, 0.24 ms | **8 to 16 samples (1 to 2 cycles)**, microseconds | generated lock-in has the window as a parameter; needs a lockstep run at that value |
+| FPGA clock | 27 MHz, timing met at 65.9 MHz estimated | a PLL to 100 MHz or more is wanted for 10 MS/s; Tang Nano 20K has a PLL **[unverified]** | to check |
+| Z scanner | the fork's piezo tube or stack, a 1 MOhm-class amplifier (`docs/amplifier.md`) | **small stack, first resonance above 100 kHz** and an amplifier with the bandwidth and slew rate for it; no ringing at the loop rate | **[unknown]**; the amplifier of `docs/amplifier.md` is far too slow for it |
+| Z and XY DAC | 16 bits, SPI | settling well under the loop period; SPI at 50 MHz sets the update rate | datasheet values **[unknown]** |
+| Sample | any hard sample, air | **a hard sample in air first** (calibration grating); liquid and biological samples are out of scope until air works | scope |
+
+## The bandwidth budget (computed [A], not measured)
+
+A loop update comes from one detector window of `W` samples at the sampling rate `fs` (8 samples per period). The pixel takes `K` updates (the twin's session uses
+**K = 20**, "the loop needs about 20 to follow a feature", `host/session.cho`). The cantilever's own response time is `tau = Q / (pi f0)` (Ando) and an amplitude
+change settles in about 3 tau. So the pixel time is at least `max(K W / fs, 3 tau)` and the frame rate for `N x N` pixels (trace only) is `1 / (N^2 pixel)`:
+
+| Cantilever | fs | window | tau | pixel (K = 20) | 3 tau | 64 x 64 frame rate |
+|---|---|---|---|---|---|---|
+| 0.5 MHz, Q = 2 (liquid) | 4 MS/s | 64 samples, 16 us | 1.3 us | 320 us | 3.8 us | 0.8 /s |
+| the same | 4 MS/s | 16 samples, 4 us | 1.3 us | 80 us | 3.8 us | 3.1 /s |
+| the same | 4 MS/s | 8 samples, 2 us | 1.3 us | 40 us | 3.8 us | 6.1 /s |
+| 1.2 MHz, Q = 100 (air) | 9.6 MS/s | 8 samples, 0.8 us | 26.5 us | 17 us | **80 us** | **3.1 /s** (the cantilever limits, not the detector) |
+
+What this says, plainly:
+
+* **The window is the first lever.** Cutting it from 64 to 8 samples gives 8 times the rate, and costs noise (a lock-in over fewer samples is noisier; see the
+  noise paragraph below). It also makes the "8 samples per period" rule bite: a window under 8 samples is under one cycle, and the figure is no longer phase-free.
+* **In air the cantilever's Q is the limit**, not the electronics: Q = 100 at 1.2 MHz has tau = 26 us. Fast imaging in air needs Q control (active damping) or low-Q
+  cantilevers. Q control is not designed here **[unknown]**.
+* **10 frames per second** (Ando reports 10 to 25 fps for his instrument **[search]**) at 64 x 64 would need a pixel of 24 us: K = 20 updates of 1.2 us, so a window of
+  about 5 samples at 4 MS/s. That is below one cycle and **does not look reachable with a lock-in**. Ando uses an RMS-to-DC converter or peak hold and a
+  fast scanner, and attributes the limits to cantilever frequency, the RMS-DC rate and the Z scanner bandwidth **[search]**. Our honest target is **1 to 5 frames per second at 64 x 64**, not 10.
+* **The one open published controller** reports 55 lines/s, a 512 x 512 image in 9.3 s, for under USD 4,000, on NI hardware (`docs/references.md`). Our cost goal
+  is far below that, and our line rate on this budget is also lower **[A]**; neither is measured here.
+
+Noise, which the table ignores: the lock-in's figure noise falls with window length, roughly as 1/sqrt(samples). A window 8 times shorter is about 2.8 times noisier.
+Whether that leaves a usable setpoint depends on the photodiode's noise, **[unknown]**.
+
+## What the twin can and cannot say
+
+The twin (`sim/board.cho`, `sim/plant.cho`) models the cantilever as a Lorentzian with a first-order lag of `alpha = window time / tau` per window, **clamped at 1**.
+In the HS table the liquid rows give alpha from 1.6 to 12.6: the clamp makes the cantilever follow instantly, **which is optimistic**: the real response is not
+instant. So:
+
+* **Can, with changes of constants only (H1):** f0 0.5 to 1.2 MHz, Q, free amplitude, the sample rate (`rf[3]`, the divider of the 27 MHz clock: 6 gives 4.5 MS/s), the
+  window, pixel divider, a bigger raster; and report the **frame rate the twin predicts**. The tune stage sweeps 32.52 to 33.02 kHz in 8 Hz steps
+  (`host/session.cho`): it must sweep a megahertz-scale range, with a wider step. That is a parameter, not new logic.
+* **Can, with a small model (H2):** a Z scanner as a second-order system (resonance, damping), and an amplifier slew limit, in `sim/plant.cho`: it shows ringing and the
+  line-rate limit **when the loop is faster than the scanner**. The parameters would be guesses until a scanner is measured.
+* **Cannot:** photodiode and laser noise, optical alignment, tip-sample dynamics at speed (tapping with very small amplitudes), liquid damping, the real scanner.
+  The twin must say so on every HS result, as it does now.
+
+## Slices, acceptance written first
+
+| Slice | What | Acceptance |
+|---|---|---|
+| H1 | An `hs` profile in the twin: constants only, a larger raster, the frame rate printed | the full procedure (tune, approach, scan) finds a 0.5 MHz, Q = 5 cantilever and scans 64 x 64; the predicted frame rate is within 10% of the table's formula; existing tests unchanged |
+| H2 | Second-order Z scanner and amplifier slew in the twin | with the loop faster than the scanner's resonance the twin shows ringing; with a slower one it does not; a test for both |
+| H3 | The generated lock-in at 8 to 16 samples per window, and a DAC and ADC rate of 4 to 10 MS/s, in Verilog | lockstep with the cancho model at window 8 and 16; timing at the clock that gives 8 samples per period (**[unknown]** whether a PLL is needed) |
+| H4 | A video of a fast scan, labelled as a prediction | the video states the frame rate, the window and what is not modelled |
+| H5 | Parts: a cantilever, a laser and photodiode, a fast ADC and DAC, a small stack and its amplifier | an order list as in `docs/amp-order.md`, with prices **checked** and sources, and what is still **[unknown]** marked |
+| H6 | A measured line rate on a real small cantilever | the S7 acceptance: measured, not predicted; before this, no claim of speed |
+
+H1 and H2 are cancho and need no hardware. H3 is generated hardware and runs under Icarus. H5 and H6 need money and a bench.
+
+## Risks
+
+1. **Optical detection** is a new subsystem (laser, alignment, quadrant photodiode, a fast TIA); none is designed. It is the schedule risk.
+2. **The cantilever's Q in air** (above) limits the rate whatever we do.
+3. **The Z scanner** decides the line rate; the cheap small stacks with resonances above 100 kHz are **[unverified]**.
+4. **The lock-in under one cycle** is not phase-free; H3 must measure how noisy and how phase-dependent the figure becomes.
+5. **The tune stage is written for a fork**: it sweeps a small range, with a long settle (20 ms), neither valid at 1 MHz.
+
+## Sources
+
+* Ando et al., *A high-speed atomic force microscope for studying biological macromolecules*, PNAS 98, 12468 (2001) (450 to 650 kHz cantilevers, scanner resonance-free to 60 kHz) **[search]**.
+* Ando, overview of HS-AFM (2011) (10 to 25 fps; tau = Q / (pi f0); the three rate limits) **[search]**; `docs/references.md` for the open controller (HardwareX, Mendeley).
+* Olympus ultra-small cantilever listing (1.5 MHz in air, 0.5 MHz in liquid, 0.1 N/m) **[search]**: a listing, not a datasheet read.
