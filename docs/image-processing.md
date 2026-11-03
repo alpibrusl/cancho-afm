@@ -138,3 +138,7 @@ Images up to 256 x 256 (a region holds 64 KiB; the mask is bytes).
 1. **Real data.** Everything above is checked on the twin; the invented sample is not an AFM's. The first real image decides what is wrong.
 2. **Where the image comes from for a fast scan**: the HS profile's image has 28 to 30 pm noise in the twin; with a real photodiode it will be more. Denoising (a median or Gaussian filter) is deliberately not in the list until the noise is seen.
 3. **The tip**: the twin's tip is a point; tip deconvolution needs a tip model in the twin first.
+
+## What the twin's image artifacts showed (2026-11-03)
+
+The twin can now put a tilt, a bow and line offsets into the sample (`sim/board.cho` `artifacts`, `fl[24]` to `fl[27]`; `scan_twin` arguments 7 to 10), and mode 7 writes the raw trace as a PNG, so the picture before and after the pipeline can be set side by side (`docs/img-artifacts.png`). With a tilt of 3 pm per pixel and 4 pm per line, a bow of 60 pm and line offsets of up to 30 pm, on the high-speed profile: roughness and Rz come out at 48.1 / 216 pm against 46.4 / 192 pm for the clean scan, the grating at 98.1 pm (99.0 clean), all three particles found at the same places, and the step at **142.2 pm against 155.5**: the line offsets are the step's noise (the same limit as in the I5 test). The bow is only partly removed: the levelling takes a plane and line offsets, not a curve. A fit of a quadratic along x is the next piece. Twin only.

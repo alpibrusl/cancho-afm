@@ -32,11 +32,14 @@ import plant;
 //       12 Z scanner resonance (Hz; 0 = an ideal scanner that follows the DAC at once), 14 its Q, 15 amplifier slew limit (pm per us; 0 = none),
 //       20 sample drift along x (X DAC codes per detector window while scanning), 22 detector windows since the scan started (the drift's clock;
 //       8 is the same for Z, pm per window), 21 and 23 unused,
+//       24 sample tilt along x (pm per pixel of 100 X codes), 25 tilt along y (pm per scan line), 26 scanner bow (pm at the left and right edges of
+//       the 64 pixel line, quadratic about its middle), 27 line offsets (pm; each scan line gets a fixed pseudo-random offset in +-this value: the
+//       slow vertical wander a real scanner adds between lines); all 0 for none (the image artifacts of docs/image-processing.md, which the pipeline levels out),
 //       16 scanner position (pm), 17 its velocity (pm/s), 18 the slew-limited command (pm), 19 the scanner state has started (1 once it has)
 
 pub fn rf_len() -> [] int { return 64; }
 pub fn st_len() -> [] int { return 32; }
-pub fn fl_len() -> [] int { return 24; }
+pub fn fl_len() -> [] int { return 32; }
 
 fn clampi(v: int, lo: int, hi: int) -> [] int {
     if v < lo { return lo; }
@@ -73,7 +76,7 @@ pub fn reset[&a, &b, &c](rf: &!a [int], st: &!b [int], fl: &!c [float]) -> [] in
     while i < 32 { st[i] = 0; i = i + 1; }
     rf[44] = 27000; rf[3] = 103; rf[4] = 536870912; rf[5] = 256; rf[6] = 2; rf[20] = 32768; rf[21] = 2; rf[22] = 1; rf[27] = 1; rf[31] = 32768;
     fl[0] = 2000.0; fl[1] = 32768.0; fl[2] = 5000.0; fl[3] = 2000.0; fl[4] = 2000.0; fl[5] = 0.0; fl[6] = 0.0; fl[7] = 0.0; fl[8] = 0.0; fl[9] = 0.0; fl[11] = 0.0; fl[13] = 198.4375;
-    fl[20] = 0.0; fl[21] = 0.0; fl[22] = 0.0; fl[23] = 0.0; fl[12] = 0.0; fl[14] = 0.0; fl[15] = 0.0; fl[16] = 0.0; fl[17] = 0.0; fl[18] = 0.0; fl[19] = 0.0;
+    fl[24] = 0.0; fl[25] = 0.0; fl[26] = 0.0; fl[27] = 0.0; fl[20] = 0.0; fl[21] = 0.0; fl[22] = 0.0; fl[23] = 0.0; fl[12] = 0.0; fl[14] = 0.0; fl[15] = 0.0; fl[16] = 0.0; fl[17] = 0.0; fl[18] = 0.0; fl[19] = 0.0;
     return 0;
 }
 
@@ -135,7 +138,15 @@ fn scanner[&c](fl: &!c [float], u: float, dt: float) -> [] float {
 // the surface height under the tip, pm
 fn surface[&a, &b, &c](rf: &a [int], st: &b [int], fl: &c [float]) -> [] float {
     // the sample drifts under the tip: along x by fl[20] codes and in height by fl[8] pm for every detector window since the scan started
-    return surface0(rf, st, fl) + fl[8] * fl[22];
+    return surface0(rf, st, fl) + fl[8] * fl[22] + artifacts(st, fl);
+}
+
+// The image artifacts: a tilt, a bow along the fast axis and an offset of its own for every scan line (a hash of the line number, so the same line always gets the same offset)
+fn artifacts[&b, &c](st: &b [int], fl: &c [float]) -> [] float {
+    let px = float_of(st[19]) / 100.0;
+    let u = (px - 31.5) / 31.5;
+    let k = (st[18] * 37 + 11) % 17;
+    return fl[24] * px + fl[25] * float_of(st[18]) + fl[26] * u * u + fl[27] * float_of(k - 8) / 8.0;
 }
 
 fn surface0[&a, &b, &c](rf: &a [int], st: &b [int], fl: &c [float]) -> [] float {

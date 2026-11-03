@@ -9,7 +9,7 @@ fn test_defaults_and_refusals_match_the_hardware() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](24, 0.0);
+        let fl = alloc_slice[r](32, 0.0);
         board.reset(rf, st, fl);
         let (id, r0) = board.read(rf, st, 0);
         test.assert_eq(id, 0xAF500001);
@@ -50,7 +50,7 @@ fn test_the_free_figure_matches_the_verilog_run() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](24, 0.0);
+        let fl = alloc_slice[r](32, 0.0);
         setup(rf, st, fl);
         board.write(rf, st, 1, 24);        // manual + adc_run
         board.write(rf, st, 28, 2500);     // Z at 40,000 pm: far above the surface
@@ -70,7 +70,7 @@ fn test_the_loop_settles_where_the_verilog_run_does() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](24, 0.0);
+        let fl = alloc_slice[r](32, 0.0);
         setup(rf, st, fl);
         board.write(rf, st, 1, 24); board.write(rf, st, 28, 2500);
         board.advance(rf, st, fl, 2000);
@@ -96,7 +96,7 @@ fn test_the_limit_the_deadman_and_the_reset() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](24, 0.0);
+        let fl = alloc_slice[r](32, 0.0);
         setup(rf, st, fl);
         board.write(rf, st, 7, 4); board.write(rf, st, 8, 2190); board.write(rf, st, 9, 2304);
         board.write(rf, st, 12, 65535); board.write(rf, st, 13, 0); board.write(rf, st, 14, 60000);
@@ -137,7 +137,7 @@ fn test_the_scan_ends_where_the_verilog_scan_does() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](24, 0.0);
+        let fl = alloc_slice[r](32, 0.0);
         setup(rf, st, fl);
         board.write(rf, st, 7, 4); board.write(rf, st, 8, 2190); board.write(rf, st, 9, 2304);
         board.write(rf, st, 12, 65535); board.write(rf, st, 14, 60000); board.write(rf, st, 15, 3000); board.write(rf, st, 16, 60000);
@@ -163,7 +163,7 @@ fn test_the_sine_scan_follows_the_cosine() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](24, 0.0);
+        let fl = alloc_slice[r](32, 0.0);
         setup(rf, st, fl);
         board.write(rf, st, 7, 4); board.write(rf, st, 8, 2190); board.write(rf, st, 9, 2304);
         board.write(rf, st, 12, 65535); board.write(rf, st, 14, 60000); board.write(rf, st, 15, 3000); board.write(rf, st, 16, 60000);
@@ -195,7 +195,7 @@ fn test_the_motor_fails_closed_and_moves_the_tip() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](24, 0.0);
+        let fl = alloc_slice[r](32, 0.0);
         board.reset(rf, st, fl);
         board.set_distance(fl, 10000.0, 198.4375);
         let (mx, r0) = board.read(rf, st, 47);
@@ -251,7 +251,7 @@ fn step_peak(f_res: float, q: float, slew: float, n: int) -> [] float {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](24, 0.0);
+        let fl = alloc_slice[r](32, 0.0);
         board.reset(rf, st, fl);
         board.set_scanner(fl, f_res, q, slew);
         board.write(rf, st, 28, 0);
