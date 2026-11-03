@@ -8,7 +8,7 @@ fn test_the_twin_follows_the_table_for_every_register() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](16, 0.0);
+        let fl = alloc_slice[r](24, 0.0);
         board.reset(rf, st, fl);
         var k = 0;
         while k < regs.count() {

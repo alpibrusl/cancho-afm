@@ -68,7 +68,7 @@ at 4.5 MS/s a 0.5 MHz, Q = 5 cantilever has alpha = 0.07, so the lag is modelled
 | Slice | What | Acceptance |
 |---|---|---|
 | H1 | An `hs` profile in the twin: constants only, a larger raster, the frame rate printed | the full procedure (tune, approach, scan) finds a 0.5 MHz, Q = 5 cantilever and scans 64 x 64; the predicted frame rate is within 10% of the table's formula; existing tests unchanged. **Done 2026-11-03, see "What H1 found"** |
-| H2 | Second-order Z scanner and amplifier slew in the twin | with the loop faster than the scanner's resonance the twin shows ringing; with a slower one it does not; a test for both |
+| H2 | Second-order Z scanner and amplifier slew in the twin | with the loop faster than the scanner's resonance the twin shows ringing; with a slower one it does not; a test for both. **Done 2026-11-03, see "What H2 found"** |
 | H3 | The generated lock-in at 8 to 16 samples per window, and a DAC and ADC rate of 4 to 10 MS/s, in Verilog | lockstep with the cancho model at window 8 and 16; timing at the clock that gives 8 samples per period (**[unknown]** whether a PLL is needed) |
 | H4 | A video of a fast scan, labelled as a prediction | the video states the frame rate, the window and what is not modelled |
 | H5 | Parts: a cantilever, a laser and photodiode, a fast ADC and DAC, a small stack and its amplifier | an order list as in `docs/amp-order.md`, with prices **checked** and sources, and what is still **[unknown]** marked |
@@ -86,6 +86,28 @@ H1 and H2 are cancho and need no hardware. H3 is generated hardware and runs und
 * **Frame rate predicted:** 0.65 s per 64 x 64 frame with trace and retrace, 1.5 frames/s; 3.1 frames/s if only the trace were scanned (the formula's 3.05 to 3.4 /s for a 4 to 4.5 MS/s, 16 to 18 sample window). The twin counts the clocks it simulates, so this agrees with the formula by construction; it is not a check of the formula.
 * **The detector, not the loop, limits the image.** Over the same sample the hs image has a trace-minus-retrace rms of 87 pm against 28 pm for the fork's, a correlation of 0.81 with the fork's image, and the same numbers at 20, 40 and 60 updates per pixel. More loop time does not help; the shorter window's noise does (about 4% of the figure here). 20 updates per pixel is enough in the twin.
 * **Not found, because not modelled:** photodiode noise, the real scanner (H2), liquid damping.
+
+## What H2 found (twin, 2026-11-03; predictions, not measurements)
+
+`sim/board.cho` has a Z scanner between the DAC and the tip: a second-order system (resonance, Q) behind an amplifier slew limit, sub-stepped so it stays stable; resonance 0 is the old ideal scanner (every earlier result is unchanged). Three tests (`tests/board_test.cho`): a step of Z
+rings when the resonance is high-Q (peak over 1.5 times the step), does not when critically damped, and the slew limit bounds the speed. `./scan_twin <profile> <scanner>` scans through it; the figure is `docs/h2-scanner.png`. All of it a guess until a real scanner is measured.
+
+HS profile, 64 x 64, the loop's gains as the session chooses them (it knows nothing of the scanner), one loop update every 4 us (250 kHz):
+
+| Z scanner | trace-minus-retrace rms | image against the ideal scanner's |
+|---|---|---|
+| ideal | 87 pm | |
+| 100 kHz, Q 3 | 88 pm | 0.998 |
+| 70 kHz, Q 3 | 89 pm | 0.996 |
+| 50 kHz, Q 3 | 94 pm | 0.979 |
+| 30 kHz, Q 3 | 544 pm | 0.38: the loop rings, no image |
+| 20 kHz, Q 10 | 896 pm | 0.09: the loop runs away |
+| 100 kHz with a 20 pm/us amplifier | 5766 pm | 0.11: fine on the flat part, then a limit cycle from the terrace step on |
+
+* **The scanner's resonance must be about a fifth of the loop update rate or more** for these gains: 50 kHz works, 30 kHz does not. The fork profile (a 4 kHz loop) is unaffected even by a 20 kHz, Q = 10 scanner. That is the acceptance: ringing when the loop is faster than the scanner, none when slower.
+* **A slew limit breaks the loop at a step**: with 20 pm/us the amplifier cannot follow the 150 pm terrace within a loop update, and the loop oscillates. An amplifier for HS has to be specified in pm per us for the largest step, not only in bandwidth.
+* **The session's gain choice (`tune.choose`) ignores the scanner.** Taking its resonance into account, or a slower loop, would widen what works, at the cost of rate. Not done; the table is for the gains as they are.
+* **Not shown:** a measured scanner, hysteresis and creep, the amplifier of `docs/amplifier.md` (far too slow: its bandwidth is for the fork).
 
 ## Risks
 

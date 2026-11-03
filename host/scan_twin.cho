@@ -21,7 +21,7 @@ fn num[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer {
 
 fn side() -> [] int { return 64; }
 
-// the profile: argument 1, `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md)
+// the profile: argument 1 (and the scanner, argument 2, the same way), `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md)
 fn number_of[&t](text: &t [byte]) -> [] int {
     if len(text) == 1 { return int_of(text[0]) - 48; }
     return 0;
@@ -31,18 +31,29 @@ fn main(world: World) -> [] int {
     let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
     release(ffi); release(fs);
     var prof = 0;
-    borrow args as &g in { if arg_count(g) > 1 { prof = number_of(arg(g, 1)); } }
+    var scn = 0;
+    borrow args as &g in {
+        if arg_count(g) > 1 { prof = number_of(arg(g, 1)); }
+        if arg_count(g) > 2 { scn = number_of(arg(g, 2)); }
+    }
     release(args); release(net); release(clock); release(signals); release(exec);
     borrow mut heap as &!h in {
         var o = buffer.empty(h, 65536);
         region r {
             let rf = alloc_slice[r](64, 0);
             let st = alloc_slice[r](32, 0);
-            let fl = alloc_slice[r](16, 0.0);
+            let fl = alloc_slice[r](24, 0.0);
             board.reset(rf, st, fl);
             if prof == 1 { board.set_plant(fl, 500000.0, 5.0, 2000.0, 2000.0, 100.0, 1200.0, 2.0); }
             else { board.set_plant(fl, 32781.4, 500.0, 2000.0, 2000.0, 100.0, 1200.0, 2.0); }
             fl[10] = 150.0;
+            // argument 2, the Z scanner: 0 ideal, 1 a good small stack (100 kHz, Q 3), 2 a slow one (20 kHz, Q 10), 3 the good one behind a 20 pm/us amplifier, 4 to 6 a Q = 3 stack at 30, 50, 70 kHz (docs/high-speed.md, H2)
+            if scn == 1 { board.set_scanner(fl, 100000.0, 3.0, 0.0); }
+            if scn == 2 { board.set_scanner(fl, 20000.0, 10.0, 0.0); }
+            if scn == 3 { board.set_scanner(fl, 100000.0, 3.0, 20.0); }
+            if scn == 4 { board.set_scanner(fl, 30000.0, 3.0, 0.0); }
+            if scn == 5 { board.set_scanner(fl, 50000.0, 3.0, 0.0); }
+            if scn == 6 { board.set_scanner(fl, 70000.0, 3.0, 0.0); }
             fl[8] = 0.0;
             board.set_distance(fl, 11000.0, 198.4375);
             let ss = alloc_slice[r](32, 0);

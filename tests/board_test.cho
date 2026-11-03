@@ -9,7 +9,7 @@ fn test_defaults_and_refusals_match_the_hardware() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](16, 0.0);
+        let fl = alloc_slice[r](24, 0.0);
         board.reset(rf, st, fl);
         let (id, r0) = board.read(rf, st, 0);
         test.assert_eq(id, 0xAF500001);
@@ -50,7 +50,7 @@ fn test_the_free_figure_matches_the_verilog_run() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](16, 0.0);
+        let fl = alloc_slice[r](24, 0.0);
         setup(rf, st, fl);
         board.write(rf, st, 1, 24);        // manual + adc_run
         board.write(rf, st, 28, 2500);     // Z at 40,000 pm: far above the surface
@@ -70,7 +70,7 @@ fn test_the_loop_settles_where_the_verilog_run_does() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](16, 0.0);
+        let fl = alloc_slice[r](24, 0.0);
         setup(rf, st, fl);
         board.write(rf, st, 1, 24); board.write(rf, st, 28, 2500);
         board.advance(rf, st, fl, 2000);
@@ -96,7 +96,7 @@ fn test_the_limit_the_deadman_and_the_reset() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](16, 0.0);
+        let fl = alloc_slice[r](24, 0.0);
         setup(rf, st, fl);
         board.write(rf, st, 7, 4); board.write(rf, st, 8, 2190); board.write(rf, st, 9, 2304);
         board.write(rf, st, 12, 65535); board.write(rf, st, 13, 0); board.write(rf, st, 14, 60000);
@@ -137,7 +137,7 @@ fn test_the_scan_ends_where_the_verilog_scan_does() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](16, 0.0);
+        let fl = alloc_slice[r](24, 0.0);
         setup(rf, st, fl);
         board.write(rf, st, 7, 4); board.write(rf, st, 8, 2190); board.write(rf, st, 9, 2304);
         board.write(rf, st, 12, 65535); board.write(rf, st, 14, 60000); board.write(rf, st, 15, 3000); board.write(rf, st, 16, 60000);
@@ -163,7 +163,7 @@ fn test_the_sine_scan_follows_the_cosine() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](16, 0.0);
+        let fl = alloc_slice[r](24, 0.0);
         setup(rf, st, fl);
         board.write(rf, st, 7, 4); board.write(rf, st, 8, 2190); board.write(rf, st, 9, 2304);
         board.write(rf, st, 12, 65535); board.write(rf, st, 14, 60000); board.write(rf, st, 15, 3000); board.write(rf, st, 16, 60000);
@@ -195,7 +195,7 @@ fn test_the_motor_fails_closed_and_moves_the_tip() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](16, 0.0);
+        let fl = alloc_slice[r](24, 0.0);
         board.reset(rf, st, fl);
         board.set_distance(fl, 10000.0, 198.4375);
         let (mx, r0) = board.read(rf, st, 47);
@@ -241,5 +241,52 @@ fn test_the_motor_fails_closed_and_moves_the_tip() -> [] int {
         test.assert(p4 >= 3);
         test.assert(p4 < 10);
     }
+    return 0;
+}
+
+// The Z scanner (docs/high-speed.md, H2). A step of the commanded Z (manual mode, 0 to 1600 pm) at 262 kS/s: a scanner with a resonance 100 times under the sample rate
+// and a high Q rings (overshoots by more than half the step); a critically damped one does not; an amplifier slew limit bounds the speed; an ideal one follows at once.
+fn step_peak(f_res: float, q: float, slew: float, n: int) -> [] float {
+    var peak = 0.0;
+    region r {
+        let rf = alloc_slice[r](64, 0);
+        let st = alloc_slice[r](32, 0);
+        let fl = alloc_slice[r](24, 0.0);
+        board.reset(rf, st, fl);
+        board.set_scanner(fl, f_res, q, slew);
+        board.write(rf, st, 28, 0);
+        board.write(rf, st, 1, 25);       // run + manual + adc
+        board.advance(rf, st, fl, 4);
+        board.write(rf, st, 28, 100);     // 1600 pm
+        var k = 0;
+        while k < n {
+            board.advance(rf, st, fl, 1);
+            let z = board.z_actual(rf, st, fl);
+            if z > peak { peak = z; }
+            k = k + 1;
+        }
+    }
+    return peak;
+}
+
+fn above(a: float, b: float) -> [] int { if a > b { return 1; } return 0; }
+fn below(a: float, b: float) -> [] int { if a < b { return 1; } return 0; }
+
+fn test_a_high_q_scanner_rings() -> [] int {
+    test.assert_eq(above(step_peak(2600.0, 10.0, 0.0, 400), 2400.0), 1);
+    return 0;
+}
+
+fn test_a_critically_damped_scanner_does_not_ring() -> [] int {
+    let peak = step_peak(2600.0, 0.5, 0.0, 400);
+    test.assert_eq(below(peak, 1610.0), 1);
+    test.assert_eq(above(peak, 1500.0), 1);
+    return 0;
+}
+
+fn test_the_amplifier_slew_limit_bounds_the_speed() -> [] int {
+    // 5 pm/us over 10 conversions of 3.8 us is at most 190 pm; an ideal scanner is at 1600 at once
+    test.assert_eq(below(step_peak(2600.0, 0.5, 5.0, 10), 200.0), 1);
+    test.assert_eq(above(step_peak(0.0, 0.0, 0.0, 10), 1599.0), 1);
     return 0;
 }
