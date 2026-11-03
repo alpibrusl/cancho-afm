@@ -156,7 +156,7 @@ pub fn doc_at(k: int) -> [] &static [byte] {
 
 // bit fields: how many a register has (0 = one field spanning all 32 bits, named VALUE), and the j-th one
 pub fn nfields(k: int) -> [] int {
-    if k == 1 { return 7; }
+    if k == 1 { return 8; }
     if k == 2 { return 5; }
     if k == 42 { return 2; }
     if k == 45 { return 3; }
@@ -171,6 +171,7 @@ pub fn field_name(k: int, j: int) -> [] &static [byte] {
     if k == 1 && j == 4 { return "ADC_RUN"; }
     if k == 1 && j == 5 { return "MOTOR_EN"; }
     if k == 1 && j == 6 { return "SINE"; }
+    if k == 1 && j == 7 { return "ADC_PAR"; }
     if k == 2 && j == 0 { return "FAULT"; }
     if k == 2 && j == 1 { return "LOOP_BUSY"; }
     if k == 2 && j == 2 { return "OVERFLOW"; }
@@ -191,6 +192,7 @@ pub fn field_lsb(k: int, j: int) -> [] int {
     if k == 1 && j == 4 { return 4; }
     if k == 1 && j == 5 { return 5; }
     if k == 1 && j == 6 { return 6; }
+    if k == 1 && j == 7 { return 7; }
     if k == 2 && j == 1 { return 1; }
     if k == 2 && j == 2 { return 2; }
     if k == 2 && j == 3 { return 3; }
@@ -209,6 +211,7 @@ pub fn field_msb(k: int, j: int) -> [] int {
     if k == 1 && j == 4 { return 4; }
     if k == 1 && j == 5 { return 5; }
     if k == 1 && j == 6 { return 6; }
+    if k == 1 && j == 7 { return 7; }
     if k == 2 && j == 0 { return 0; }
     if k == 2 && j == 1 { return 1; }
     if k == 2 && j == 2 { return 2; }

@@ -21,7 +21,8 @@ typedef struct {
     uint32_t adc_run : 1; /* chw:Afm.register.CTRL.field.ADC_RUN */
     uint32_t motor_en : 1; /* chw:Afm.register.CTRL.field.MOTOR_EN */
     uint32_t sine : 1; /* chw:Afm.register.CTRL.field.SINE */
-    uint32_t _rsvd7 : 25;
+    uint32_t adc_par : 1; /* chw:Afm.register.CTRL.field.ADC_PAR */
+    uint32_t _rsvd8 : 24;
 } ctrl_t;
 
 /* chw:Afm.register.STATUS */

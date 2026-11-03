@@ -168,7 +168,7 @@ pub fn emit_top[&h](heap: &!h Heap, b: buffer.Buffer) -> [heap] buffer.Buffer {
     o = app(heap, o, "  output dy_cs, output dy_din, output dy_sclk,\n");
     o = app(heap, o, "  output dd_cs, output dd_din, output dd_sclk,\n");
     o = app(heap, o, "  output ldac,\n  output motor_step, output motor_dir, output motor_en_n,\n");
-    o = app(heap, o, "  output [5:0] led\n");
+    o = app(heap, o, "  output adc_clk, input [11:0] adc_p, input adc_otr\n");
     o = app(heap, o, ");\n");
     o = app(heap, o, "  // power-on reset\n");
     o = app(heap, o, "  reg [7:0] por = 8'd0;\n");
@@ -186,12 +186,12 @@ pub fn emit_top[&h](heap: &!h Heap, b: buffer.Buffer) -> [heap] buffer.Buffer {
     o = app(heap, o, "  // registers. Safe defaults: running off, every limit zero, so Z sits at 0 until the host sets limits.\n");
     o = app(heap, o, "  reg [31:0] ctrl, sample_div, tuning, window, half, shift, setpoint, kp, ki, kd, ilim, zmin, zmax, zinit, zretract, timeout;\n");
     o = app(heap, o, "  reg [31:0] drive_amp, drive_offs, npix, nlines, x0, y0, dx, dy, pixdiv, man_z, man_x, man_y, man_d, sine_amp, sine_step;\n");
-    o = app(heap, o, "  wire run = ctrl[0], drive_en = ctrl[1], scan_run = ctrl[2], manual = ctrl[3], adc_run = ctrl[4], sine_mode = ctrl[6];\n");
+    o = app(heap, o, "  wire run = ctrl[0], drive_en = ctrl[1], scan_run = ctrl[2], manual = ctrl[3], adc_run = ctrl[4], sine_mode = ctrl[6], adc_par_sel = ctrl[7];\n");
     o = app(heap, o, "  reg kick_pulse;\n  reg [31:0] motor_rate, motor_max; reg motor_refused, motor_go; reg signed [31:0] motor_steps;\n  wire m_busy, m_step, m_dir; wire signed [31:0] m_pos;\n  wire [31:0] w_abs = b_wdata[31] ? -b_wdata : b_wdata;\n");
     o = app(heap, o, "  // live values read back\n");
     o = app(heap, o, "  wire [31:0] amp, i_out, q_out, z_out, x_out, y_out, pix, line_out; wire amp_valid, lockin_ovf, loop_busy, fault, rs_done, trace;\n  wire [31:0] tx_out, ty_out, tline; wire [31:0] tpix; wire ttrace, tdone;\n  wire [31:0] sx_out, sy_out, sline; wire [15:0] sphase; wire strace, sdone;\n");
     o = app(heap, o, "  reg [31:0] adc0, adc1, nsamp, nwin; reg ovf_sticky;\n");
-    o = app(heap, o, "  wire adc_busy;\n");
+    o = app(heap, o, "  wire adc_busy, adc_busy_spi;\n");
     o = app(heap, o, "  wire [31:0] status = {27'b0, adc_busy, rs_done, ovf_sticky, loop_busy, fault};\n");
     o = app(heap, o, "\n");
     o = app(heap, o, "  wire sel = (b_addr[31:8] == 24'h400000) && (b_addr[1:0] == 2'b00);\n");
@@ -249,11 +249,18 @@ pub fn emit_top[&h](heap: &!h Heap, b: buffer.Buffer) -> [heap] buffer.Buffer {
     o = app(heap, o, "  always @(posedge clk) begin\n");
     o = app(heap, o, "    adc_start <= 0;\n");
     o = app(heap, o, "    if (rst || !adc_run) samp_cnt <= 0;\n");
-    o = app(heap, o, "    else if (samp_cnt >= sample_div - 1) begin samp_cnt <= 0; if (!adc_busy) adc_start <= 1; end\n");
+    o = app(heap, o, "    else if (samp_cnt >= sample_div - 1) begin samp_cnt <= 0; if (!adc_busy_spi && !adc_par_sel) adc_start <= 1; end\n");
     o = app(heap, o, "    else samp_cnt <= samp_cnt + 1;\n");
     o = app(heap, o, "  end\n");
-    o = app(heap, o, "  wire adc_done; wire [11:0] s0, s1;\n");
-    o = app(heap, o, "  spi_adc adc(clk, rst, adc_start, half[7:0], adc_d0, adc_d1, adc_cs, adc_sck, adc_busy, adc_done, s0, s1);\n");
+    o = app(heap, o, "  wire adc_done_spi; wire [11:0] s0_spi, s1_spi;\n");
+    o = app(heap, o, "  spi_adc adc(clk, rst, adc_start, half[7:0], adc_d0, adc_d1, adc_cs, adc_sck, adc_busy_spi, adc_done_spi, s0_spi, s1_spi);\n");
+    o = app(heap, o, "  // the parallel ADC (AD9226 module), chosen by CTRL.ADC_PAR: it free-runs while ADC_RUN is set, one sample per 2 * HALF clocks (SAMPLE_DIV is not used), OTR is read back in ADC1\n");
+    o = app(heap, o, "  wire adc_done_par, adc_otr_q; wire [11:0] s0_par;\n");
+    o = app(heap, o, "  adc_par adcp(clk, rst, adc_run && adc_par_sel, half[7:0], adc_p, adc_otr, adc_clk, adc_done_par, s0_par, adc_otr_q);\n");
+    o = app(heap, o, "  wire adc_done = adc_par_sel ? adc_done_par : adc_done_spi;\n");
+    o = app(heap, o, "  wire [11:0] s0 = adc_par_sel ? s0_par : s0_spi;\n");
+    o = app(heap, o, "  wire [11:0] s1 = adc_par_sel ? {11'b0, adc_otr_q} : s1_spi;\n");
+    o = app(heap, o, "  assign adc_busy = adc_par_sel ? (adc_run && adc_par_sel) : adc_busy_spi;\n");
     o = app(heap, o, "  always @(posedge clk) begin\n");
     o = app(heap, o, "    if (rst || !adc_run) begin adc0 <= 0; adc1 <= 0; nsamp <= 0; nwin <= 0; end\n");
     o = app(heap, o, "    else begin\n");
@@ -315,8 +322,8 @@ pub fn emit_top[&h](heap: &!h Heap, b: buffer.Buffer) -> [heap] buffer.Buffer {
     o = app(heap, o, "  dac_refresh u_rd(clk, rst, code_d, dd_busy, dd_write, dd_data);\n");
     o = app(heap, o, "  assign ldac = 1'b0;\n");
     o = app(heap, o, "\n");
-    o = app(heap, o, "  // LEDs, active low: run, fault, overflow, scan done, ADC busy\n");
-    o = app(heap, o, "  motor_drv mot(clk, rst, ctrl[5], fault, motor_go, motor_steps, motor_rate, m_step, m_dir, m_busy, m_pos);\n  assign motor_step = m_step;\n  assign motor_dir = m_dir;\n  assign motor_en_n = !ctrl[5];\n  assign led = ~{1'b0, adc_busy, rs_done, ovf_sticky, fault, run};\n");
+    o = app(heap, o, "  // the motor driver (the six LEDs gave their pins to the parallel ADC)\n");
+    o = app(heap, o, "  motor_drv mot(clk, rst, ctrl[5], fault, motor_go, motor_steps, motor_rate, m_step, m_dir, m_busy, m_pos);\n  assign motor_step = m_step;\n  assign motor_dir = m_dir;\n  assign motor_en_n = !ctrl[5];\n \n");
     o = app(heap, o, "endmodule\n");
     return o;
 }
