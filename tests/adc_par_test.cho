@@ -1,0 +1,92 @@
+import std.test;
+import adc_par;
+
+// A behavioural AD9226, written from the datasheet in cancho: on each rising edge of its clock it samples the analog value now and shifts a 7-deep pipeline; its output after that edge is
+// the sample of 7 edges ago (and OTR with it). The analog input here is a known function of the sample index, so what the interface reports can be checked against it.
+struct Chip { ck: int, pipe0: int, pipe1: int, pipe2: int, pipe3: int, pipe4: int, pipe5: int, pipe6: int, out: int, k: int }
+
+fn analog(k: int) -> [] int { return (k * 37 + 11) % 4096; }
+
+fn chip_step(c: Chip, ck: int) -> [] Chip {
+    if c.ck == 0 && ck == 1 {
+        return Chip { ck: 1, pipe0: analog(c.k), pipe1: c.pipe0, pipe2: c.pipe1, pipe3: c.pipe2, pipe4: c.pipe3, pipe5: c.pipe4, pipe6: c.pipe5, out: c.pipe6, k: c.k + 1 };
+    }
+    return Chip { ck: ck, pipe0: c.pipe0, pipe1: c.pipe1, pipe2: c.pipe2, pipe3: c.pipe3, pipe4: c.pipe4, pipe5: c.pipe5, pipe6: c.pipe6, out: c.out, k: c.k };
+}
+
+fn run(half: int, clocks: int) -> [] int {
+    // returns the number of reports whose code was not the analog value of the sample it should be (sample i for the i-th report), plus 1000 times the number of reports
+    var s = adc_par.reset();
+    var c = Chip { ck: 0, pipe0: 0, pipe1: 0, pipe2: 0, pipe3: 0, pipe4: 0, pipe5: 0, pipe6: 0, out: 0, k: 0 };
+    var bad = 0;
+    var got = 0;
+    var t = 0;
+    while t < clocks {
+        // the chip sees the clock the interface drives now, and its data is what the interface captures on this clock
+        s = adc_par.step(s, 1, half, c.out, 0);
+        c = chip_step(c, s.ck);
+        if s.done == 1 {
+            if s.code != analog(got) { bad = bad + 1; }
+            got = got + 1;
+        }
+        t = t + 1;
+    }
+    return bad + 1000 * got;
+}
+
+fn test_the_first_seven_captures_are_not_reported() -> [] int {
+    var s = adc_par.reset();
+    var c = Chip { ck: 0, pipe0: 0, pipe1: 0, pipe2: 0, pipe3: 0, pipe4: 0, pipe5: 0, pipe6: 0, out: 0, k: 0 };
+    var reports = 0;
+    var t = 0;
+    var first = 0 - 1;
+    while t < 60 {
+        s = adc_par.step(s, 1, 3, c.out, 0);
+        c = chip_step(c, s.ck);
+        if s.done == 1 { reports = reports + 1; if first < 0 { first = t; } }
+        t = t + 1;
+    }
+    // half 3: the first capture at clock 5, then every 6; the 8th (the first to be reported) is at clock 47, and the next at 53 and 59
+    test.assert_eq(first, 47);
+    test.assert_eq(reports, 3);
+    return 0;
+}
+
+fn test_every_report_is_the_sample_seven_edges_before() -> [] int {
+    var half = 1;
+    while half <= 5 {
+        let r = run(half, 6000);
+        test.assert_eq(r % 1000, 0);                 // no wrong code
+        test.assert(r / 1000 > 100);                 // and plenty of reports
+        half = half + 1;
+    }
+    return 0;
+}
+
+fn test_the_clock_stops_when_disabled_and_the_pipeline_refills() -> [] int {
+    var s = adc_par.reset();
+    var t = 0;
+    var ck_high_while_off = 0;
+    while t < 40 { s = adc_par.step(s, 1, 2, 5, 0); t = t + 1; }
+    s = adc_par.step(s, 0, 2, 5, 0);
+    if s.ck == 1 || s.done == 1 || s.n != 0 { ck_high_while_off = 1; }
+    test.assert_eq(ck_high_while_off, 0);
+    // restarting: no report until the 8th capture again (half 2: captures every 4 clocks, the 8th at clock 31)
+    var first = 0 - 1;
+    t = 0;
+    while t < 60 {
+        s = adc_par.step(s, 1, 2, 5, 0);
+        if s.done == 1 && first < 0 { first = t; }
+        t = t + 1;
+    }
+    test.assert_eq(first, 31);
+    return 0;
+}
+
+fn test_half_is_read_when_enabled_and_held() -> [] int {
+    var s = adc_par.reset();
+    s = adc_par.step(s, 1, 4, 0, 0);
+    s = adc_par.step(s, 1, 1, 0, 0);          // a different half mid-run must not change the period
+    test.assert_eq(s.hl, 4);
+    return 0;
+}

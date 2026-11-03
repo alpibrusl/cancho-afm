@@ -69,7 +69,7 @@ at 4.5 MS/s a 0.5 MHz, Q = 5 cantilever has alpha = 0.07, so the lag is modelled
 |---|---|---|
 | H1 | An `hs` profile in the twin: constants only, a larger raster, the frame rate printed | the full procedure (tune, approach, scan) finds a 0.5 MHz, Q = 5 cantilever and scans 64 x 64; the predicted frame rate is within 10% of the table's formula; existing tests unchanged. **Done 2026-11-03, see "What H1 found"** |
 | H2 | Second-order Z scanner and amplifier slew in the twin | with the loop faster than the scanner's resonance the twin shows ringing; with a slower one it does not; a test for both. **Done 2026-11-03, see "What H2 found"** |
-| H3 | The generated lock-in at 16 to 35 samples per window and 4.5 MS/s, in Verilog | lockstep with the cancho model at several windows at 6 clocks per sample; timing at the clock that gives 8 or more samples per period. **Done for the detector 2026-11-03, see "What H3 found"; the parallel ADC and the fast DAC are not designed** |
+| H3 | The generated lock-in at 16 to 35 samples per window and 4.5 MS/s, in Verilog | lockstep with the cancho model at several windows at 6 clocks per sample; timing at the clock that gives 8 or more samples per period. **Done for the detector 2026-11-03, see "What H3 found"; the parallel ADC interface is H3b below (done as a block, not wired into the top); the fast drive DAC is not designed** |
 | H4 | A video of a fast scan, labelled as a prediction | the video states the frame rate, the window and what is not modelled. **Done 2026-11-03: `docs/hs-vs-fork.mp4`** (the fork and the HS profile scan the same invented sample in simulated real time over 12 s: the fork completes 10% of a frame, the HS profile 18 frames; `docs/make_hs_video.py`) |
 | H5 | Parts: a cantilever, a laser and photodiode, a fast ADC and DAC, a small stack and its amplifier | an order list as in `docs/amp-order.md`, with prices **checked** and sources, and what is still **[unknown]** marked. **Done 2026-11-03: `docs/hs-order.md`** (prices read for four lines, snippet-only for the rest, unchecked for the optics and the amplifier) |
 | H6 | A measured line rate on a real small cantilever | the S7 acceptance: measured, not predicted; before this, no claim of speed |
@@ -132,6 +132,11 @@ n = 18, m = 2 at 508 kHz, Q 6 (500 kHz, 9 samples per period exactly, word 47721
 
 * **Limits**: at 4.5 MS/s a cantilever above fs / 8 = 560 kHz has fewer than 8 samples per period (the profile above 600 kHz was not made to work; it needs the divider 3 or 4, 9 or 6.75 MS/s, chosen from the tuned frequency: not done). The snap assumes the drive can be set to the snapped frequency without losing the cantilever, true for a Q of about 5 and to be checked for the 100 or more of air.
 * **Twin, not measured:** the noise numbers are the twin's own (ADC noise of 2 counts, no photodiode), and its sampling is ideal.
+
+## What H3b found (generated Verilog, 2026-11-03)
+
+`adc_par` (`sim/adc_par.cho`, `gen/sv.cho`, details and checks in `gen/README.md`) is the interface to the AD9226 module: it drives the ADC clock, captures 12 bits and OTR, drops the 7 pipeline-filling captures and reports. Lockstep against the cancho model, a protocol test against a datasheet-based chip model with the 10 ns worst-case output delay (data settled 27 ns before capture at 13.5 MS/s), place and route 146 MHz. **The datasheet says the latency is 7 clocks, not the 3 I first assumed**, which the protocol test would have caught as well. The 7-sample delay does not matter to the lock-in (it is phase-blind), but it is a delay in the loop: 7 conversions, 1.6 us at 4.5 MS/s, before the first sample of a window reaches the detector.
+Not done: wiring it into `afm_top` (a register to choose between the SPI and the parallel ADC changes the register table), pin assignments, the module's MODE strap, and a real chip.
 
 Image processing of the result (levelling, roughness, step height, pitch, particles) is designed in `docs/image-processing.md`.
 

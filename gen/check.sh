@@ -51,6 +51,17 @@ cd build
 iverilog -g2012 -o lih.vvp lockin.sv ../gen/lockin_hs_tb.v
 vvp lih.vvp | tee lih.log
 grep -q "lockin hs: 3 sections, 912 samples at 6 clocks each, 36 windows, 0 mismatches, 0 failures" lih.log
+# the interface to a parallel ADC (the AD9226 module, docs/hs-order.md), against the model, and against a model of the chip written from its datasheet
+cd ..
+$CANCHO run gen/main_adc_par.cho gen/ir.cho gen/sv.cho --std > build/adc_par.sv
+$CANCHO run gen/adc_par_trace.cho sim/adc_par.cho --std > build/adc_par_trace.txt
+cd build
+iverilog -g2012 -o ap.vvp adc_par.sv ../gen/adc_par_tb.v
+vvp ap.vvp | tee ap.log
+grep -q " 0 mismatches" ap.log
+iverilog -g2012 -o apx.vvp adc_par.sv ../gen/adc_par_proto_tb.v
+vvp apx.vvp | tee apx.log
+grep -q "0 wrong" apx.log
 # the SPI masters for the Pmod AD1 and DA3
 cd ..
 $CANCHO run gen/main_spi.cho gen/ir.cho gen/sv.cho --std > build/spi.sv
