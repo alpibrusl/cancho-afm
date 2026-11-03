@@ -33,7 +33,7 @@
 | Slice | What | Acceptance |
 |---|---|---|
 | I1 | Levelling: plane and line | a tilt added to a twin image (known to the pm) is recovered and removed to under 35 pm rms; a line offset added to every line is removed; tests, twin fork and HS images. **Done 2026-11-03, see "What I1 found"** |
-| I2 | Metrics: Ra, Rq, Rz, step height, grating pitch and height | terrace within 10%, pitch within 2%, grating height within 20%, on both profiles; Ra and Rq against a direct computation on the truth |
+| I2 | Metrics: Ra, Rq, Rz, step height, grating pitch and height | terrace within 10%, pitch within 2%, grating height within 20%, on both profiles; Ra and Rq against a direct computation on the truth. **Done 2026-11-03, see "What I2 found"** |
 | I3 | Particle finder and its table | the twin's three particles found, heights within 20%, centres within a pixel, no false ones at the twin's noise; `particles.csv` read by `table` in a test of the flow |
 | I4 | Drift: trace against retrace by cross-correlation | a drift set in the twin (`fl[8]`, pm per window) is estimated within 20%; then removed |
 | I5 | A page for it: levelled image, profile, table in `cancho-ui` (an image element is a change in that repo) | the live console shows the levelled image and the metrics of the last scan |
@@ -49,6 +49,29 @@ Images up to 256 x 256 (a region holds 64 KiB; the mask is bytes).
 * **A plane flattens real slopes.** The twin's own sample has a 150 pm terrace across the lines; the robust plane fit reads it as a slope of 3.3 pm per pixel along y (210 pm over the image, more than the step: the particles and the two levels pull it). Levelling a plane **before** measuring a step or a slope **removes it**: I2 must measure heights on the image before the plane is taken out (or take the plane from a region without structure).
 * **Line levelling cannot tell a line offset from a step across the lines.** The version here keeps a step (a test: a 150 pm step at line 16 of 32 stays within 50 pm after levelling while +-40 pm offsets go), but within 4 lines of a step the lines are pulled toward their neighbours'; and a feature spanning fewer than 5 lines is treated as an offset. The 11 to 12 pm residual on the twin is mostly that edge and the particles.
 * **Not done:** a polynomial surface (a bow) beyond the plane; scan lines that are not straight; real data. The twin's image has no bow, creep or drift yet.
+
+## What I2 found (`host/metrics.cho`, `tests/metrics_test.cho`, `./scan_twin <profile> <scanner> <kHz> 2`; twin, 2026-11-03)
+
+**Method, chosen as the best estimator rather than the quickest.** Roughness is the plain sums (nothing better exists). The **step** is an exhaustive search of the edge line with a least-squares fit of two levels *and a common slope along y* to the line medians (exact maximum likelihood once the edge is placed; the median keeps the grating and the particles out, the slope keeps a tilt from being read as part of the step; it is run **before** any plane is taken out, which was I1's finding). The **grating** is a joint least-squares sinusoid over all lines, one frequency, one amplitude and phase, a free offset per line (variable projection: amplitudes and offsets solved exactly for each trial frequency, only the frequency searched, coarse grid then golden section), refitted twice without the pixels beyond 3 residual rms so the particles do not pull it. A Fourier-peak estimate or a zero-crossing count (what `session.period_of` does) is biased by the particles, the line offsets and the finite window; this is not. It is one 2-parameter linear solve per trial frequency, no optimiser library needed, so it is written in `metrics.cho`.
+
+* **Library question, answered.** `cancho-opt` is a separate process and its fits (Nelder-Mead and others) are general; these three are closed-form or one-dimensional, so a subprocess would be slower and less exact. `cancho-stats` (design phase) would be the home of the confidence intervals these lack: today the fits return a residual rms, not an interval. The right extension is **an interval for each metric from `cancho-stats` once it ships**, and `cancho-opt` for the fits that are not like these (tip reconstruction, I6).
+* **Checks with known answers** (tests): a square wave gives Ra = Rq = 30 and Rz = 60 exactly; a sine of amplitude 50 gives Rq 35.36 and Ra 31.42 (16 samples a period; 31.83 for a continuous one); a step of 150 on a tilt of 2 pm per line with noise and two particles: edge line 18, height within 6, slope 2 +- 0.3; a grating of pitch 11.7 pixels and 100 pm peak to peak under +-40 pm line offsets, +-25 pm noise and three particles: pitch within 0.5%, height within 5.
+* **On the twin's 64 x 64 scan, measured against the same numbers read off the sample's true surface at the pixels** (true values: pitch 12 pixels = 11.999 sampled, grating 99.9 pm peak to peak, terrace nominally 150 pm, 155.1 pm as the median fit reads the truth image, because the particles raise the medians of the lines they sit on):
+
+| image | Ra, Rq, Rz (pm) | step line, height (pm) | pitch (pixels) | grating height (pm) |
+|---|---|---|---|---|
+| truth | 72.9, 89.2, 182.5 | 25, 155.1 | 11.999 | 99.9 |
+| fork | 73.8, 92.3, 194.4 | 25, 149.0 | 12.005 | 93.1 (fit rms 10.3) |
+| HS 300 kHz | 72.9, 89.1, 190.3 | 25, 155.5 | 11.998 | 98.3 |
+| HS 500 kHz | 72.9, 89.3, 189.6 | 25, 155.5 | 11.997 | 99.8 |
+| HS 600 kHz | 73.6, 90.0, 189.2 | 25, 155.2 | 11.998 | 100.9 |
+| HS 500 kHz, Z stack 100 kHz | 72.9, 89.3, 190.9 | 25, 153.1 | 11.996 | 100.4 |
+
+  Acceptance (terrace within 10%, pitch within 2%, grating height within 20%) is met by a wide margin on both profiles: the pitch is within 0.05%, the step within 4% of the truth image, the grating height within 7% (fork) and 1 to 2% (HS).
+* **The fork's grating comes out 7% low and its fit residual is 10 pm** against 4 pm for the HS images: a likely cause is that the fork's slow loop does not follow the 12-pixel grating completely (the image is the loop's, not the surface's); I did not test that, for instance by scanning slower. Heights read from a slow scan are lower bounds on a fine grating; that is a property of the scan, not a defect of the fit.
+* **Rz is 4 to 7% above the truth's** (190 against 182 pm): noise raises the extremes of every line (Rz is a peak-to-valley, the most noise-sensitive of the three). Ra and Rq are within 1 to 3% (HS 0.1 to 1%). The excess of Rq^2 over the truth's is far below the 28 to 30 pm noise variance (e.g. 7 pm^2 for HS 500 kHz), so the image's noise does not simply add in quadrature to the structure: most of the structure's variance is the sample and the loop's tracking, which is shared with the truth.
+* **The stepped, particle-covered sample is a bad roughness sample** (Rq 89 pm is the sample's structure, not roughness). The numbers prove the code matches a direct computation; a roughness of a flat region needs a flat sample or a mask, which the caller chooses.
+* **Not done:** areal parameters of ISO 25178 beyond Rq as the areal rms; a cut-off filter (a Gaussian) for waviness; an interval for any metric; grating harmonics (a non-sinusoidal profile: the sine amplitude then understates the height); a step edge that is not straight or not along a scan line; real data.
 
 ## Open questions
 
