@@ -228,6 +228,43 @@ pub fn emit_spi_adc[&h](heap: &!h Heap, b: buffer.Buffer) -> [heap] buffer.Buffe
     return o;
 }
 
+// The interface to a parallel ADC (the AD9226 module), as text; generated: do not edit.
+pub fn emit_adc_par[&h](heap: &!h Heap, b: buffer.Buffer) -> [heap] buffer.Buffer {
+    var o = b;
+    o = app(heap, o, "// Interface to a parallel pipelined ADC (AD9226): see sim/adc_par.cho for the clocking, the 7-clock pipeline and the one-clock-at-a-time reference this must equal.\n");
+    o = app(heap, o, "// `half` (FPGA clocks per half ADC-clock period, 1 to 255) is read when `en` rises and held. The first 7 captures are the pipeline filling and are not reported.\n");
+    o = app(heap, o, "module adc_par(\n");
+    o = app(heap, o, "  input clk, input rst, input en, input [7:0] half, input [11:0] d, input otr_in,\n");
+    o = app(heap, o, "  output reg adc_clk, output reg done, output reg [11:0] code, output reg otr\n");
+    o = app(heap, o, ");\n");
+    o = app(heap, o, "  reg run; reg [7:0] pos; reg [7:0] hl; reg [3:0] n;\n");
+    o = app(heap, o, "  wire [7:0] hin = (half == 8'd0) ? 8'd1 : half;\n");
+    o = app(heap, o, "  wire [7:0] hh = run ? hl : hin;\n");
+    o = app(heap, o, "  wire [7:0] pp = run ? pos : 8'd0;\n");
+    o = app(heap, o, "  wire cc = run ? adc_clk : 1'b0;\n");
+    o = app(heap, o, "  wire [3:0] nn = run ? n : 4'd0;\n");
+    o = app(heap, o, "  always @(posedge clk) begin\n");
+    o = app(heap, o, "    if (rst) begin\n");
+    o = app(heap, o, "      run <= 0; adc_clk <= 0; pos <= 0; hl <= 1; n <= 0; done <= 0; code <= 0; otr <= 0;\n");
+    o = app(heap, o, "    end else begin\n");
+    o = app(heap, o, "      done <= 0;\n");
+    o = app(heap, o, "      if (!en) begin run <= 0; adc_clk <= 0; pos <= 0; n <= 0; end\n");
+    o = app(heap, o, "      else begin\n");
+    o = app(heap, o, "        run <= 1; hl <= hh;\n");
+    o = app(heap, o, "        if (pp == hh - 1) begin\n");
+    o = app(heap, o, "          pos <= 0;\n");
+    o = app(heap, o, "          if (cc) begin\n");
+    o = app(heap, o, "            adc_clk <= 0; code <= d; otr <= otr_in; n <= (nn >= 4'd8) ? nn : nn + 4'd1;\n");
+    o = app(heap, o, "            if (nn >= 4'd7) done <= 1;\n");
+    o = app(heap, o, "          end else begin adc_clk <= 1; n <= nn; end\n");
+    o = app(heap, o, "        end else begin pos <= pp + 8'd1; adc_clk <= cc; n <= nn; end\n");
+    o = app(heap, o, "      end\n");
+    o = app(heap, o, "    end\n");
+    o = app(heap, o, "  end\n");
+    o = app(heap, o, "endmodule\n");
+    return o;
+}
+
 // The SPI master for the Pmod DA3, as text; generated: do not edit.
 pub fn emit_spi_dac[&h](heap: &!h Heap, b: buffer.Buffer) -> [heap] buffer.Buffer {
     var o = b;

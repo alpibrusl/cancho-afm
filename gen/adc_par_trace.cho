@@ -1,0 +1,63 @@
+edition 7;
+
+import std.buffer;
+import adc_par;
+
+// Lockstep trace for the parallel ADC interface: one row per clock, the inputs (half en d otr) then the state the model reaches after that clock
+// (adc_clk done code otr). Inputs are a deterministic spread: starts at random moments (also while busy, which must be ignored),
+// random data lines (from a high bit of the generator: its low bits have a short period and would hand the master the same bit every time), and `half` changing every 3,000 clocks.
+fn num[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer {
+    return buffer.push_nat(heap, buffer.append(heap, b, " "), n);
+}
+
+fn mix(x: int) -> [] int {
+    let a = (x * 2654435761 + 12345) % 4294967296;
+    return (a * 1103515245 + 12345) % 2147483648;
+}
+
+fn half_at(t: int) -> [] int {
+    let k = t / 2500 % 7;
+    if k == 0 { return 3; }
+    if k == 1 { return 1; }
+    if k == 2 { return 2; }
+    if k == 3 { return 5; }
+    if k == 4 { return 3; }
+    if k == 5 { return 4; }
+    return 1;
+}
+
+// enabled in bursts, off for a while now and then (the pipeline must refill), `half` changing while it is on (it must be held)
+fn en_at(t: int) -> [] int {
+    if mix(t / 700) % 6 == 0 { return 0; }
+    return 1;
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(args); release(net); release(clock); release(signals); release(exec);
+    var code = 0;
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 1048576);
+        var s = adc_par.reset();
+        var t = 0;
+        while t < 21000 {
+            let en = en_at(t);
+            let d = mix(t * 7 + 3) / 4096 % 4096;
+            let ot = mix(t * 11 + 5) / 4096 % 2;
+            let hf = half_at(t);
+            s = adc_par.step(s, en, hf, d, ot);
+            o = num(h, o, hf); o = num(h, o, en); o = num(h, o, d); o = num(h, o, ot);
+            o = num(h, o, s.ck); o = num(h, o, s.done); o = num(h, o, s.code); o = num(h, o, s.otr);
+            o = buffer.append(h, o, "\n");
+            t = t + 1;
+        }
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(heap);
+    release(io);
+    if code < 0 {
+        return 1;
+    }
+    return 0;
+}

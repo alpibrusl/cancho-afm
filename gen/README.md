@@ -64,6 +64,20 @@ their datasheets, unchecked.
 * **The chip behaviour is as the Digilent manuals describe it, not from the AD7476A or AD5541A datasheets.** Not checked there: the SCLK limit, the data-valid delay after the SCK edge (the master reads just before the next falling edge, with `half` clocks of margin), the minimum CS-high time, and the DA3's settling and update rate.
 * Not written: the glue that turns an AD1 `done` into the detector's `valid` and `x_in`, and that sends the loop's Z to a DA3 when the loop has a new value; the Tang Nano's pin assignments for the six or so wires per module.
 
+## The interface to a parallel ADC, for the AD9226 module (2026-11-03, H3b of `docs/high-speed.md`)
+
+`sim/adc_par.cho` is a one-clock-at-a-time model; `gen/sv.cho` prints `adc_par` as text (`gen/main_adc_par.cho`). The block drives the ADC's clock itself (low `half` FPGA clocks, high `half`;
+`half` 1 to 255 read when `en` rises: 13.5 MS/s for 1, 4.5 MS/s for 3 at 27 MHz), captures the 12 data bits and OTR on the last clock of the high phase, drops the first **7** captures (the pipeline filling) and then pulses `done`
+with the code of the sample of 7 edges earlier. `en` low holds the clock low.
+
+* **From the datasheet** (Rev. Pr A, 10/22/99, a PDF I could read; a later revision may differ): latency 7 clock cycles; output delay 7 ns typical, 10 ns maximum (a Rev. B table seen in a search says 3.5 to 7 ns); minimum clock period 15.38 ns, pulse widths 3 ns; the input is sampled on the rising edge; straight binary or two's complement by the MODE pin (this block takes straight binary: the module's strap is **unchecked**); the first draft of this design assumed a latency of 3: wrong, caught by reading the sheet.
+* `cancho test` (`tests/adc_par_test.cho`): against a behavioural AD9226 written in cancho (a 7-deep pipeline): every report is the sample of 7 edges earlier for `half` 1 to 5; the first report comes at the 8th capture; the clock stops when disabled and the pipeline refills; `half` is held.
+* Icarus **lockstep** (`gen/adc_par_tb.v`): all outputs equal the model after each of 21,000 clocks (3,033 reports) with `en` in bursts and `half` changing mid-run: **0 mismatches**.
+* Icarus **protocol** (`gen/adc_par_proto_tb.v`): against a Verilog AD9226 with the worst-case 10 ns output delay, at `half` 1 and 3 from a 27 MHz clock: 2,652 reports, **0 wrong**; the ADC clock period is at least 74 ns (the chip needs 15.38), low pulses 37 ns (needs 3); **the data has settled 27 ns before the capture at worst** (37 ns less the 10 ns). That margin leaves out the FPGA's own pin delays, the cable or board and the module's buffers: not measured.
+* Five deliberate breaks: a latency of 6, capture in the low phase and `half` read every clock were caught by the lockstep, and the first two by the protocol test as well; clearing the code on disable was caught by the lockstep; an extra clear of the capture counter on disable changed nothing (an equivalent mutant: the counter is masked by the run flag).
+* Place and route (Pi, harness `gen/timing_adc_par_top.v`, 2026-11-03): **Fmax 145.96 MHz, PASS at 27 MHz** (it fails a 150 MHz target); 169 LUT4, 61 flip-flops, 26 ALU, harness shift register included.
+* **Not done:** the block is not in `afm_top` (that needs a register to choose the SPI or the parallel ADC, so a change to the register table), no pin assignments, no check of the module's MODE strap, and nothing run against a real chip.
+
 ## The whole board: serial bridge, registers and glue, in simulation (2026-11-01)
 
 `gen/glue.cho` prints the board-level parts as text: a UART (115200 baud, 8N1) and a bridge that speaks cancho-hdl's byte protocol, a register file
