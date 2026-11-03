@@ -63,3 +63,31 @@ pub fn step(s: L, x: int, tuning: int, window: int) -> [] L {
     }
     return L { phase: ph, acc_i: i, acc_q: q, cnt: s.cnt + 1, done: 0, out_i: s.out_i, out_q: s.out_q, amp: s.amp };
 }
+
+// The window and the drive that make the figure steady. A square-wave lock-in is phase-free only if the window is exactly m cycles of the reference in n samples: then each window
+// sees the same n phases and the figure is the same every window. So the drive is snapped to f = fs m / n (m whole cycles in n samples, m at least 2, n at least 8 m so the
+// samples per period stay at 8 or more) within an eighth of the cantilever's half-power half-width of the tuned frequency f0 (a fraction 1 / (8 Q) of f0, under 2% of the
+// amplitude lost to being off the peak), and the smallest such n up to `hi` is taken (the shortest window); if none is that close, the nearest. `tuning` is the word for the
+// reference. Not for the fork (8 samples per period exactly, 64 per window). Found by the twin (docs/high-speed.md, H3): a window of about two cycles at the tuned frequency
+// still beat by 6% at 400 kHz; the exact m / n does not.
+pub struct W { n: int, m: int, tuning: int }
+
+pub fn snap(f0: float, q: float, fs: float, hi: int) -> [] W {
+    let tol = 1.0 / (8.0 * q);
+    var best = W { n: 16, m: 2, tuning: 0 };
+    var best_e = 1000.0;
+    var n = 16;
+    while n <= hi {
+        var m = truncate(float_of(n) * f0 / fs + 0.5);
+        if m < 2 { m = 2; }
+        if n >= 8 * m {
+            let f = fs * float_of(m) / float_of(n);
+            var e = (f - f0) / f0;
+            if e < 0.0 { e = 0.0 - e; }
+            if e < best_e { best_e = e; best = W { n: n, m: m, tuning: 0 }; }
+            if e <= tol { n = hi + 1; }
+        }
+        n = n + 1;
+    }
+    return W { n: best.n, m: best.m, tuning: truncate(4294967296.0 * float_of(best.m) / float_of(best.n) + 0.5) };
+}

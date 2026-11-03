@@ -96,3 +96,40 @@ fn test_the_known_weaknesses() -> [] int {
     test.assert(off > r * 90 / 100);
     return 0;
 }
+
+// The snap: at 4.5 MS/s and a tuned 508 kHz, Q 6, the drive goes to 500 kHz, 2 cycles in 18 samples (9 per period); the tuning word is 2^32 / 9.
+fn test_the_drive_snaps_to_whole_cycles() -> [] int {
+    let w = lockin.snap(508285.0, 6.0, 4500000.0, 64);
+    test.assert_eq(w.n, 18);
+    test.assert_eq(w.m, 2);
+    test.assert_eq(w.tuning, 477218588);
+    let v = lockin.snap(395340.0, 6.0, 4500000.0, 64);
+    test.assert_eq(v.n, 23);
+    test.assert_eq(v.m, 2);
+    return 0;
+}
+
+// The point of the snap: a steady sine, 20 windows. At the snapped drive (2 cycles in 18 samples) the figure is the same every window (within 1 count of ~20,000);
+// at a drive of 1.8 cycles in 16 samples with an offset it ripples by over 5%.
+fn spread(tuning: int, window: int, ncyc: float) -> [] int {
+    var s = lockin.start();
+    var lo = 1000000000;
+    var hi = 0;
+    var k = 0;
+    while k < 20 * window {
+        let x = truncate(math.round(1000.0 * math.sin(6.283185307179586 * float_of(k) * ncyc / float_of(window) + 0.5)));
+        s = lockin.step(s, x, tuning, window);
+        if s.done == 1 && k > 2 * window {
+            if s.amp < lo { lo = s.amp; }
+            if s.amp > hi { hi = s.amp; }
+        }
+        k = k + 1;
+    }
+    return hi - lo;
+}
+
+fn test_the_snapped_drive_gives_a_steady_figure() -> [] int {
+    test.assert(spread(477218588, 18, 2.0) <= 1);
+    test.assert(spread(4294967296 * 18 / 160 + 0, 16, 1.8) > 1000);
+    return 0;
+}

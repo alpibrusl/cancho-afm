@@ -1,0 +1,60 @@
+edition 7;
+
+import std.buffer;
+import std.math;
+import lockin;
+
+// The high-speed detector's reference (docs/high-speed.md, H3): the stream and what sim/lockin.cho says about it, at the sample rate and windows of lockin.snap. Three sections, each
+// 12 windows with the drive at fs m / n (m whole cycles in n samples): n = 18, m = 2 (500 kHz at 4.5 MS/s); n = 23, m = 2; n = 35, m = 4. First line: the number of sections.
+// A section starts with `tuning window rows`, then one row per sample: x done i q amp (as gen/lockin_trace.cho). The amplitude, a third harmonic and noise change every few windows.
+fn num[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer {
+    if n < 0 {
+        return buffer.push_nat(heap, buffer.append(heap, b, " -"), 0 - n);
+    }
+    return buffer.push_nat(heap, buffer.append(heap, b, " "), n);
+}
+
+fn section[&h](heap: &!h Heap, o: buffer.Buffer, n: int, m: int) -> [heap] buffer.Buffer {
+    var b = o;
+    let tuning = truncate(4294967296.0 * float_of(m) / float_of(n) + 0.5);
+    b = num(heap, b, tuning); b = num(heap, b, n); b = num(heap, b, 12 * n); b = buffer.append(heap, b, "\n");
+    var s = lockin.start();
+    var k = 0;
+    while k < 12 * n {
+        let w = k / n;
+        var amp = 1000.0;
+        if w >= 4 { amp = 300.0; }
+        if w >= 8 { amp = 6000.0; }
+        var h3 = 0.0;
+        if w >= 3 && w < 6 { h3 = 80.0; }
+        var nz = 0;
+        if w >= 6 && w < 9 { nz = 20; }
+        let ang = 6.283185307179586 * float_of(k) * float_of(m) / float_of(n) + 0.5;
+        let noise = ((k * 1103515245 + 12345) / 65536) % (2 * nz + 1) - nz;
+        let x = truncate(math.round(amp * math.sin(ang) + h3 * math.sin(3.0 * ang))) + noise;
+        s = lockin.step(s, x, tuning, n);
+        b = num(heap, b, x); b = num(heap, b, s.done); b = num(heap, b, s.out_i); b = num(heap, b, s.out_q); b = num(heap, b, s.amp);
+        b = buffer.append(heap, b, "\n");
+        k = k + 1;
+    }
+    return b;
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(args); release(net); release(clock); release(signals); release(exec);
+    var code = 0;
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 262144);
+        o = buffer.append(h, o, "3\n");
+        o = section(h, o, 18, 2);
+        o = section(h, o, 23, 2);
+        o = section(h, o, 35, 4);
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(heap);
+    release(io);
+    if code < 0 { return 1; }
+    return 0;
+}

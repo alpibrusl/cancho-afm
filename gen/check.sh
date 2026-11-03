@@ -44,6 +44,13 @@ iverilog -g2012 -o li.vvp lockin.sv ../gen/lockin_tb.v
 vvp li.vvp | tee li.log
 grep -q "lockin: 3072 samples, 12 windows expected, 12 seen, 0 mismatches" li.log
 grep -q "freeze and overflow: 0 failures" li.log
+# the high-speed detector: the same generated lock-in, one sample every 6 clocks, the windows and drives of lockin.snap (docs/high-speed.md, H3)
+cd ..
+$CANCHO run gen/lockin_hs_trace.cho sim/lockin.cho --std > build/lockin_hs_trace.txt
+cd build
+iverilog -g2012 -o lih.vvp lockin.sv ../gen/lockin_hs_tb.v
+vvp lih.vvp | tee lih.log
+grep -q "lockin hs: 3 sections, 912 samples at 6 clocks each, 36 windows, 0 mismatches, 0 failures" lih.log
 # the SPI masters for the Pmod AD1 and DA3
 cd ..
 $CANCHO run gen/main_spi.cho gen/ir.cho gen/sv.cho --std > build/spi.sv
