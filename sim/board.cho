@@ -27,7 +27,7 @@ import plant;
 //       29 motor step period, 30 last motor command refused
 //   fl: 0 amplitude now (pm), 1 f0 (Hz), 2 Q, 3 free amplitude a0 (pm), 4 contact range (pm), 5 grating height (pm), 6 grating period
 //       (X DAC codes; 0 = flat), 7 ADC noise (counts), 8 surface drift (pm per window), 9 loopback (1.0: ADC channel 0 reads the Z DAC, the
-//       bench wiring of tutorial Part 5), 11 tip-sample distance at Z = 0 (pm; the coarse motor lowers it), 13 pm the tip moves per microstep
+//       bench wiring of tutorial Part 5), 11 tip-sample distance at Z = 0 (pm; the coarse motor lowers it), 13 pm the tip moves per microstep, 10 sample step height (pm; 0 = just the grating, see `surface`)
 
 pub fn rf_len() -> [] int { return 64; }
 pub fn st_len() -> [] int { return 32; }
@@ -101,7 +101,21 @@ fn zout[&a, &b](rf: &a [int], st: &b [int]) -> [] int {
 fn surface[&a, &b, &c](rf: &a [int], st: &b [int], fl: &c [float]) -> [] float {
     if fl[6] <= 0.0 { return 0.0; }
     let x = float_of(st[19]);
-    return fl[5] / 2.0 * (1.0 + math.sin(6.283185307179586 * x / fl[6]));
+    let g = fl[5] / 2.0 * (1.0 + math.sin(6.283185307179586 * x / fl[6]));
+    if fl[10] <= 0.0 { return g; }
+    // a made-up sample when fl[10] > 0 (the step height, pm): the grating, a terrace edge across the scan, and three particles
+    // (raised-cosine bumps, 4 x the step in height, 400 X/Y DAC codes in radius) at fixed places; nothing measured, shapes only
+    let y = float_of(st[20]);
+    var h = g;
+    if y >= 3500.0 { h = h + fl[10]; }
+    h = h + bump(x, y, 2200.0, 2300.0, 4.0 * fl[10]) + bump(x, y, 4200.0, 2800.0, 3.0 * fl[10]) + bump(x, y, 3300.0, 4300.0, 4.0 * fl[10]);
+    return h;
+}
+
+fn bump(x: float, y: float, cx: float, cy: float, h: float) -> [] float {
+    let d2 = ((x - cx) * (x - cx) + (y - cy) * (y - cy)) / 160000.0;
+    if d2 >= 1.0 { return 0.0; }
+    return h * (1.0 - d2) * (1.0 - d2);
 }
 
 // What the host sees when the run bit, the scan bit or the ADC bit is off: the blocks they gate are held in reset.
