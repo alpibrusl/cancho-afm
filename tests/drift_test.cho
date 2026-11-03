@@ -1,0 +1,101 @@
+import std.test;
+import std.math;
+import drift;
+
+// The surface: a grating (period 12), a terrace and three bumps, over x (pixels) and line y.
+fn bump(x: float, y: float, cx: float, cy: float, h: float) -> [] float {
+    let d2 = ((x - cx) * (x - cx) + (y - cy) * (y - cy)) / 16.0;
+    if d2 >= 1.0 { return 0.0; }
+    return h * (1.0 - d2) * (1.0 - d2);
+}
+fn f(x: float, j: int) -> [] float {
+    let y = float_of(j);
+    var terrace = 0.0;
+    if j >= 25 { terrace = 150.0; }
+    return 50.0 * math.sin(6.283185307179586 * x / 12.0) + terrace + bump(x, y, 12.0, 13.0, 600.0) + bump(x, y, 32.0, 18.0, 450.0) + bump(x, y, 23.0, 33.0, 600.0);
+}
+fn noise(k: int) -> [] float { return float_of((k * 1103515245 + 12345) / 65536 % 2001 - 1000) / 1000.0; }
+fn near(a: float, b: float, tol: float) -> [] int {
+    var d = a - b;
+    if d < 0.0 { d = 0.0 - d; }
+    if d <= tol { return 1; }
+    return 0;
+}
+
+// 64 x 32 trace and retrace images of f with the drift (s lag, v px per tick, w pm per tick) and noise; the retrace holds -1000000 where the scan did not visit (x = 0 and 63)
+fn make[&a, &b](t: &!a [float], r: &!b [float], s: float, v: float, w: float, sigma: float) -> [] int {
+    let tm = 63.0;
+    var j = 0;
+    while j < 32 {
+        var i = 0;
+        while i < 64 {
+            let x = float_of(i);
+            t[j * 64 + i] = f(x + v * (x - tm) - s / 2.0, j) + w * (x - tm) + sigma * noise(j * 64 + i);
+            if i == 0 || i == 63 { r[j * 64 + i] = 0.0 - 1000000.0; }
+            else { r[j * 64 + i] = f(x + v * (2.0 * tm - x - tm) + s / 2.0, j) + w * (2.0 * tm - x - tm) + sigma * noise(5000 + j * 64 + i); }
+            i = i + 1;
+        }
+        j = j + 1;
+    }
+    return 0;
+}
+
+fn test_a_known_drift_and_lag_are_recovered() -> [] int {
+    region g {
+        let t = alloc_slice[g](64 * 32, 0.0);
+        let r = alloc_slice[g](64 * 32, 0.0);
+        make(t, r, 0.8, 0.006, 0.5, 20.0);
+        let d = drift.estimate(t, r, 64, 32, 0.0 - 900000.0, 3.0);
+        test.assert_eq(near(d.v, 0.006, 0.0006), 1);
+        test.assert_eq(near(d.shift, 0.8, 0.1), 1);
+        test.assert_eq(near(d.w, 0.5, 0.05), 1);
+    }
+    return 0;
+}
+
+fn test_a_negative_drift_and_no_drift() -> [] int {
+    region g {
+        let t = alloc_slice[g](64 * 32, 0.0);
+        let r = alloc_slice[g](64 * 32, 0.0);
+        make(t, r, 0.0 - 0.5, 0.0 - 0.004, 0.0 - 0.3, 20.0);
+        let d = drift.estimate(t, r, 64, 32, 0.0 - 900000.0, 3.0);
+        test.assert_eq(near(d.v, 0.0 - 0.004, 0.0006), 1);
+        test.assert_eq(near(d.shift, 0.0 - 0.5, 0.1), 1);
+        test.assert_eq(near(d.w, 0.0 - 0.3, 0.05), 1);
+        make(t, r, 0.0, 0.0, 0.0, 20.0);
+        let z = drift.estimate(t, r, 64, 32, 0.0 - 900000.0, 3.0);
+        // nothing to find: the estimates stay under the detection floor (0.0005 px per tick is 0.06 px at the far end of a line)
+        test.assert_eq(near(z.v, 0.0, 0.0005), 1);
+        test.assert_eq(near(z.shift, 0.0, 0.1), 1);
+        test.assert_eq(near(z.w, 0.0, 0.05), 1);
+    }
+    return 0;
+}
+
+fn test_correction_puts_the_lines_back() -> [] int {
+    region g {
+        let t = alloc_slice[g](64 * 32, 0.0);
+        let r = alloc_slice[g](64 * 32, 0.0);
+        let c = alloc_slice[g](64 * 32, 0.0);
+        make(t, r, 0.8, 0.006, 0.5, 0.0);
+        let d = drift.estimate(t, r, 64, 32, 0.0 - 900000.0, 3.0);
+        drift.correct(t, r, 64, 32, 0.0 - 900000.0, d, c);
+        // against the surface at the line's middle time (f at x, no distortion), away from the ends, the corrected image is closer than the raw trace
+        var ec = 0.0; var et = 0.0; var n = 0.0;
+        var j = 0;
+        while j < 32 {
+            var i = 8;
+            while i < 56 {
+                let tru = f(float_of(i), j);
+                ec = ec + (c[j * 64 + i] - tru) * (c[j * 64 + i] - tru);
+                et = et + (t[j * 64 + i] - tru) * (t[j * 64 + i] - tru);
+                n = n + 1.0;
+                i = i + 1;
+            }
+            j = j + 1;
+        }
+        test.assert_eq(near(sqrt(ec / n), 0.0, 10.0), 1);
+        test.assert_eq(near(sqrt(et / n), 0.0, 10.0), 0);
+    }
+    return 0;
+}
