@@ -265,8 +265,7 @@ fn step_one[&a, &b, &c](rf: &!a [int], st: &!b [int], fl: &!c [float]) -> [] int
     if run == 0 || scan == 0 { fl[22] = 0.0; }
     let manual = rf[1] / 8 % 2;
     let adc = rf[1] / 16 % 2;
-    var sdiv = rf[3];
-    if sdiv < 1 { sdiv = 1; }
+    let sdiv = sample_clocks(rf);
     // the deadman counts clocks while the loop is enabled
     if run == 1 {
         st[11] = st[11] + sdiv;
@@ -366,11 +365,21 @@ pub fn advance[&a, &b, &c](rf: &!a [int], st: &!b [int], fl: &!c [float], n: int
     return 0;
 }
 
+// FPGA clocks per ADC sample: SAMPLE_DIV for the Pmod AD1, 2 x HALF for the parallel AD9226 interface (CTRL bit 7, docs/registers.md). The AD9226's 7-sample pipeline delay is NOT modelled
+// (the detector is phase-blind; the delay is 7 samples of loop latency, under 3% of a 256-sample window).
+pub fn sample_clocks[&a](rf: &a [int]) -> [] int {
+    if rf[1] / 128 % 2 == 1 {
+        var h = rf[6] % 256;
+        if h < 1 { h = 1; }
+        return 2 * h;
+    }
+    if rf[3] < 1 { return 1; }
+    return rf[3];
+}
+
 // The same, in FPGA clocks.
 pub fn advance_clocks[&a, &b, &c](rf: &!a [int], st: &!b [int], fl: &!c [float], clocks: int) -> [] int {
-    var sdiv = rf[3];
-    if sdiv < 1 { sdiv = 1; }
-    return advance(rf, st, fl, clocks / sdiv);
+    return advance(rf, st, fl, clocks / sample_clocks(rf));
 }
 
 // The tip's Z now, pm, as the scanner model has it (the DAC's own value when the scanner is ideal), for tests and the host.

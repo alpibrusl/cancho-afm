@@ -27,6 +27,10 @@ import lockin;
 // ---- the program's choices ----
 // The program's choices that differ between the two instruments are functions of the profile p, kept in ss[3]: 0 the tuning fork (default), 1 a small high-speed
 // cantilever in the twin (docs/high-speed.md, H1: 0.5 MHz class; nothing of it is built or measured).
+// The high-speed profile reads the parallel AD9226 interface (CTRL bit 7, 128) and sets HALF so that one sample takes 2 x HALF = 6 clocks, the 4.5 MS/s of `sample_div`; the fork reads the Pmod AD1.
+pub fn adc_bit(p: int) -> [] int { if p == 1 { return 128; } return 0; }
+pub fn half(p: int) -> [] int { if p == 1 { return 3; } return 2; }
+
 pub fn sample_div(p: int) -> [] int { if p == 1 { return 6; } return 103; }       // fork: 262 kS/s at 27 MHz, 8 samples per period of 32.768 kHz; hs: 4.5 MS/s, 8.8 per period of 508 kHz
 pub fn window(p: int) -> [] int { if p == 1 { return 18; } return 64; }          // samples per detector window: fork 0.24 ms, short so a loop step is quick; hs 18 samples = 4.0 us, 2.05 cycles at 508 kHz (a whole number of cycles: 16 gave a 12% ripple, docs/high-speed.md)
 pub fn window_clocks(p: int) -> [] int { return window(p) * sample_div(p); }
@@ -71,7 +75,7 @@ pub fn build[&a, &b, &c](ss: &a [int], sf: &b [float], sc: &!c [int]) -> [] int 
         n = script.read(sc, n, regs.id());
         n = script.write(sc, n, regs.sample_div(), sample_div(p));
         n = script.write(sc, n, regs.window(), window(p));
-        n = script.write(sc, n, regs.half(), 2);
+        n = script.write(sc, n, regs.half(), half(p));
         n = script.write(sc, n, regs.timeout(), 0);
         n = script.write(sc, n, regs.zmin(), 0);
         n = script.write(sc, n, regs.zmax(), zmax());
@@ -85,7 +89,7 @@ pub fn build[&a, &b, &c](ss: &a [int], sf: &b [float], sc: &!c [int]) -> [] int 
         n = script.read(sc, n, regs.zretract());
     }
     if stage == 1 {
-        n = script.write(sc, n, regs.ctrl(), 56);                      // manual + ADC + motor enable: Z held at the manual value, the detector running
+        n = script.write(sc, n, regs.ctrl(), 56 + adc_bit(p));                      // manual + ADC + motor enable: Z held at the manual value, the detector running
         n = script.write(sc, n, regs.man_z(), zmax() / 16);            // fully retracted, far from the surface
         var i = 0;
         while i < sweep_points() {
@@ -121,7 +125,7 @@ pub fn build[&a, &b, &c](ss: &a [int], sf: &b [float], sc: &!c [int]) -> [] int 
         n = script.write(sc, n, regs.kd(), 0);
         n = script.write(sc, n, regs.ilim(), 65535);
         n = script.write(sc, n, regs.timeout(), 4000000);                // the deadman: 150 ms without a heartbeat
-        n = script.write(sc, n, regs.ctrl(), 17);                      // run + ADC, manual off: the loop takes over from the contact height
+        n = script.write(sc, n, regs.ctrl(), 17 + adc_bit(p));                      // run + ADC, manual off: the loop takes over from the contact height
         var k = 0;
         while k < 8 {
             n = script.write(sc, n, regs.kick(), 0);
@@ -139,7 +143,7 @@ pub fn build[&a, &b, &c](ss: &a [int], sf: &b [float], sc: &!c [int]) -> [] int 
         n = script.write(sc, n, regs.dx(), 100);
         n = script.write(sc, n, regs.dy(), 250);
         n = script.write(sc, n, regs.pixdiv(), pixdiv(p));
-        n = script.write(sc, n, regs.ctrl(), 21);                      // run + scan + ADC
+        n = script.write(sc, n, regs.ctrl(), 21 + adc_bit(p));                      // run + scan + ADC
     }
     if stage == 6 {
         n = script.write(sc, n, regs.kick(), 0);
