@@ -27,11 +27,14 @@ import plant;
 //       29 motor step period, 30 last motor command refused
 //   fl: 0 amplitude now (pm), 1 f0 (Hz), 2 Q, 3 free amplitude a0 (pm), 4 contact range (pm), 5 grating height (pm), 6 grating period
 //       (X DAC codes; 0 = flat), 7 ADC noise (counts), 8 surface drift (pm per window), 9 loopback (1.0: ADC channel 0 reads the Z DAC, the
-//       bench wiring of tutorial Part 5), 11 tip-sample distance at Z = 0 (pm; the coarse motor lowers it), 13 pm the tip moves per microstep, 10 sample step height (pm; 0 = just the grating, see `surface`)
+//       bench wiring of tutorial Part 5), 11 tip-sample distance at Z = 0 (pm; the coarse motor lowers it), 13 pm the tip moves per microstep,
+//       10 sample step height (pm; 0 = just the grating, see `surface`),
+//       12 Z scanner resonance (Hz; 0 = an ideal scanner that follows the DAC at once), 14 its Q, 15 amplifier slew limit (pm per us; 0 = none),
+//       16 scanner position (pm), 17 its velocity (pm/s), 18 the slew-limited command (pm), 19 the scanner state has started (1 once it has)
 
 pub fn rf_len() -> [] int { return 64; }
 pub fn st_len() -> [] int { return 32; }
-pub fn fl_len() -> [] int { return 16; }
+pub fn fl_len() -> [] int { return 24; }
 
 fn clampi(v: int, lo: int, hi: int) -> [] int {
     if v < lo { return lo; }
@@ -68,6 +71,7 @@ pub fn reset[&a, &b, &c](rf: &!a [int], st: &!b [int], fl: &!c [float]) -> [] in
     while i < 32 { st[i] = 0; i = i + 1; }
     rf[44] = 27000; rf[3] = 103; rf[4] = 536870912; rf[5] = 256; rf[6] = 2; rf[20] = 32768; rf[21] = 2; rf[22] = 1; rf[27] = 1; rf[31] = 32768;
     fl[0] = 2000.0; fl[1] = 32768.0; fl[2] = 5000.0; fl[3] = 2000.0; fl[4] = 2000.0; fl[5] = 0.0; fl[6] = 0.0; fl[7] = 0.0; fl[8] = 0.0; fl[9] = 0.0; fl[11] = 0.0; fl[13] = 198.4375;
+    fl[12] = 0.0; fl[14] = 0.0; fl[15] = 0.0; fl[16] = 0.0; fl[17] = 0.0; fl[18] = 0.0; fl[19] = 0.0;
     return 0;
 }
 
@@ -95,6 +99,35 @@ pub fn set_distance[&c](fl: &!c [float], distance: float, pm_per_microstep: floa
 fn zout[&a, &b](rf: &a [int], st: &b [int]) -> [] int {
     if st[10] == 1 { return clampi(s32(rf[16]), s32(rf[13]), s32(rf[14])); }
     return clampi(st[9], s32(rf[13]), s32(rf[14]));
+}
+
+// The Z scanner between the DAC and the tip, as a second-order system (resonance fl[12], Q fl[14]) behind an amplifier slew limit (fl[15]); with fl[12] = 0 it is
+// ideal. Sub-stepped so the integration stays stable however fast the resonance is against one conversion. The simplest model with the right shape: a guess
+// until a real scanner is measured (docs/high-speed.md, H2). Returns the tip's Z, pm.
+fn scanner[&c](fl: &!c [float], u: float, dt: float) -> [] float {
+    if fl[12] <= 0.0 { return u; }
+    if fl[19] < 0.5 { fl[16] = u; fl[17] = 0.0; fl[18] = u; fl[19] = 1.0; }
+    var us = u;
+    if fl[15] > 0.0 {
+        let lim = fl[15] * dt * 1000000.0;
+        let d = u - fl[18];
+        if d > lim { us = fl[18] + lim; }
+        else if d < 0.0 - lim { us = fl[18] - lim; }
+    }
+    fl[18] = us;
+    let w = 6.283185307179586 * fl[12];
+    var q = fl[14];
+    if q < 0.01 { q = 0.01; }
+    var ns = truncate(w * dt / 0.1) + 1;
+    if ns > 200 { ns = 200; }
+    let h = dt / float_of(ns);
+    var k = 0;
+    while k < ns {
+        fl[17] = fl[17] + h * (w * w * (us - fl[16]) - w / q * fl[17]);
+        fl[16] = fl[16] + h * fl[17];
+        k = k + 1;
+    }
+    return fl[16];
 }
 
 // the surface height under the tip, pm
@@ -245,7 +278,8 @@ fn step_one[&a, &b, &c](rf: &!a [int], st: &!b [int], fl: &!c [float]) -> [] int
     let fref = float_of(rf[4]) / 4294967296.0 * fs;
     var zc = zout(rf, st) / 16;
     if manual == 1 { zc = rf[28] % 65536; }
-    let gap = float_of(zc * 16) + fl[11] - surface(rf, st, fl);
+    let ztip = scanner(fl, float_of(zc * 16), float_of(sdiv) / 27000000.0);
+    let gap = ztip + fl[11] - surface(rf, st, fl);
     let target = plant.response(fref, fl[1], fl[2], fl[3]) * plant.contact(gap, fl[4]);
     var alpha = 3.141592653589793 * fl[1] / (fl[2] * fs);
     if alpha > 1.0 { alpha = 1.0; }
@@ -317,6 +351,18 @@ pub fn advance_clocks[&a, &b, &c](rf: &!a [int], st: &!b [int], fl: &!c [float],
     var sdiv = rf[3];
     if sdiv < 1 { sdiv = 1; }
     return advance(rf, st, fl, clocks / sdiv);
+}
+
+// The tip's Z now, pm, as the scanner model has it (the DAC's own value when the scanner is ideal), for tests and the host.
+pub fn z_actual[&a, &b, &c](rf: &a [int], st: &b [int], fl: &c [float]) -> [] float {
+    if fl[12] <= 0.0 { return float_of(z_code(rf, st) * 16); }
+    return fl[16];
+}
+
+// A Z scanner: its resonance (Hz), Q, and the amplifier's slew limit (pm per us, 0 for none). Resonance 0 is the ideal scanner.
+pub fn set_scanner[&c](fl: &!c [float], f_res: float, q: float, slew: float) -> [] int {
+    fl[12] = f_res; fl[14] = q; fl[15] = slew; fl[19] = 0.0;
+    return 0;
 }
 
 // The Z DAC code the board would be holding (Z / 16, or the manual register), the X and Y codes, for tests and the host.
