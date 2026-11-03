@@ -8,6 +8,7 @@ import session;
 import regs;
 import image;
 import metrics;
+import features;
 
 // The twin's automatic procedure up to the loop being closed (host/session.cho: tune, choose, approach), then a larger raster (64 x 64) over the made-up sample of sim/board.cho
 // (grating, terrace step, three particles) with noise and slow drift. Prints the image (Z, pm), one `line pixel Z` record per reading (a pixel may be read more than once; the last reading is the one the loop settled to). A prediction of this software, not a measurement.
@@ -116,6 +117,33 @@ fn metrics_check[&h, &a, &b2, &c, &d](heap: &!h Heap, o: buffer.Buffer, pic: &a 
     return b;
 }
 
+// A float as a decimal with two places ("12.34"; negative values are not needed here).
+fn dec[&h](heap: &!h Heap, o: buffer.Buffer, v: float) -> [heap] buffer.Buffer {
+    let c = truncate(v * 100.0 + 0.5);
+    var b = num(heap, o, c / 100);
+    b = text(heap, b, ".");
+    if c % 100 < 10 { b = text(heap, b, "0"); }
+    return num(heap, b, c % 100);
+}
+
+// The particles of the twin's trace as CSV (docs/image-processing.md, I3): `x,y,height_pm,area_px`, centres in pixels, one row per particle. The twin's true particles are at (12, 13), (32, 18) and (23, 33) pixels, 600, 450 and 600 pm.
+fn particles_csv[&h, &a](heap: &!h Heap, o: buffer.Buffer, pic: &a [int]) -> [heap] buffer.Buffer {
+    var b = text(heap, o, "x,y,height_pm,area_px\n");
+    region r {
+        let t = alloc_slice[r](4096, 0.0);
+        let out = alloc_slice[r](4 * 32, 0.0);
+        var k = 0;
+        while k < 4096 { t[k] = float_of(pic[k]); k = k + 1; }
+        let n = features.find_particles(t, 64, 64, 15, 0.0, 4, out, 32);
+        var p = 0;
+        while p < n {
+            b = dec(heap, b, out[4 * p]); b = text(heap, b, ","); b = dec(heap, b, out[4 * p + 1]); b = text(heap, b, ","); b = dec(heap, b, out[4 * p + 2]); b = text(heap, b, ","); b = num(heap, b, truncate(out[4 * p + 3])); b = text(heap, b, "\n");
+            p = p + 1;
+        }
+    }
+    return b;
+}
+
 // the profile: argument 1 (the scanner, argument 2, and for the high-speed profile the cantilever's resonance in kHz, argument 3, the same way; default 500; argument 4 = 1 prints the levelling check, 2 the metrics check, of docs/image-processing.md instead of the pixels), `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md)
 fn number_of[&t](text: &t [byte]) -> [] int {
     var n = 0;
@@ -179,9 +207,11 @@ fn main(world: World) -> [] int {
                 session.consume(ss, sf, out, img);
                 guard = guard + 1;
             }
+            if lv != 3 {
             o = text(h, o, "twin scan; failure code "); o = num(h, o, ss[2]); o = text(h, o, ", refused writes "); o = num(h, o, failures);
             o = text(h, o, ", contact Z "); o = num(h, o, ss[9]); o = text(h, o, " pm; f0 "); o = num(h, o, truncate(sf[0])); o = text(h, o, " Hz, Q "); o = num(h, o, truncate(sf[1])); o = text(h, o, ", free figure "); o = num(h, o, ss[10]);
             o = text(h, o, ", window "); o = num(h, o, ss[15]); o = text(h, o, ", shift "); o = num(h, o, ss[11]); o = text(h, o, ", setpoint "); o = num(h, o, ss[12]); o = text(h, o, ", motor steps "); o = num(h, o, ss[21]); o = text(h, o, ", settled Z "); o = num(h, o, ss[22]); o = text(h, o, " pm\n");
+            }
             var n = 0;
             n = script.write(sc, n, regs.npix(), side());
             n = script.write(sc, n, regs.nlines(), side());
@@ -211,14 +241,15 @@ fn main(world: World) -> [] int {
                 if ln >= side() { done = 1; }
                 else {
                     if pix < 64 && ln < 64 { pic[ln * 64 + pix] = out[2]; }
-                    if lv != 1 && lv != 2 { o = num(h, o, ln); o = text(h, o, " "); o = num(h, o, pix); o = text(h, o, " "); o = num(h, o, out[2]); o = text(h, o, "\n"); }
+                    if lv == 0 { o = num(h, o, ln); o = text(h, o, " "); o = num(h, o, pix); o = text(h, o, " "); o = num(h, o, out[2]); o = text(h, o, "\n"); }
                 }
                 guard2 = guard2 + 1;
                 if ln < side() { calls = calls + 1; }
             }
             if lv == 1 { o = analyse(h, o, pic); }
             if lv == 2 { o = metrics_check(h, o, pic, rf, st, fl); }
-            o = text(h, o, "frame_us "); o = num(h, o, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27); o = text(h, o, "\n");
+            if lv == 3 { o = particles_csv(h, o, pic); }
+            if lv != 3 { o = text(h, o, "frame_us "); o = num(h, o, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27); o = text(h, o, "\n"); }
         }
         var code = 0;
         borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }

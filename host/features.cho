@@ -1,0 +1,141 @@
+edition 7;
+
+module features;
+
+// `features` -- particles in an AFM image (docs/image-processing.md, I3). An image is nx * ny heights (pm) in a float slice, row-major, one scan line per row. The method: the background under every pixel
+// is the median of the square window of side `win` about it (clipped at the image's edges; it follows a tilt, a step and a grating when the window is wider than the grating's pitch and the particles are
+// narrower than half the window), the residual is the pixel minus that background, a pixel is "high" when the residual exceeds max(`min_h`, 5 x the residual's robust noise (1.4826 x the median absolute
+// deviation)), high pixels are grouped by 8-connectivity, and each group of at least `min_area` pixels is a particle: its height is its largest residual, its area the pixels at or above half that height,
+// its centre the residual-weighted centroid of those pixels. Checked on synthetic images and the twin's scan, not on a real image.
+
+// Fields per particle in the output slice: centre x and y (pixels), height (pm), area (pixels).
+pub fn stride() -> [] int { return 4; }
+
+// The median of the first n entries of `v` (sorted in place; n at least 1).
+fn median_of[&a](v: &!a [float], n: int) -> [] float {
+    var i = 1;
+    while i < n {
+        let x = v[i];
+        var j = i - 1;
+        while j >= 0 && v[j] > x {
+            v[j + 1] = v[j];
+            j = j - 1;
+        }
+        v[j + 1] = x;
+        i = i + 1;
+    }
+    if n % 2 == 1 { return v[n / 2]; }
+    return (v[n / 2 - 1] + v[n / 2]) / 2.0;
+}
+
+// The residual of every pixel about its window median into `rs`.
+fn residual[&a, &b](z: &a [float], rs: &!b [float], nx: int, ny: int, win: int) -> [] int {
+    region r {
+        let v = alloc_slice[r](win * win, 0.0);
+        let h = win / 2;
+        var j = 0;
+        while j < ny {
+            var i = 0;
+            while i < nx {
+                var n = 0;
+                var y = j - h;
+                while y <= j + h {
+                    var x = i - h;
+                    while x <= i + h {
+                        if x >= 0 && x < nx && y >= 0 && y < ny { v[n] = z[y * nx + x]; n = n + 1; }
+                        x = x + 1;
+                    }
+                    y = y + 1;
+                }
+                rs[j * nx + i] = z[j * nx + i] - median_of(v, n);
+                i = i + 1;
+            }
+            j = j + 1;
+        }
+    }
+    return 0;
+}
+
+// The detection threshold in pm for the residual image: max(min_h, 5 x robust noise).
+fn threshold[&a](rs: &a [float], nx: int, ny: int, min_h: float) -> [] float {
+    var t = min_h;
+    region r {
+        let c = alloc_slice[r](nx * ny, 0.0);
+        var k = 0;
+        while k < nx * ny { c[k] = rs[k]; k = k + 1; }
+        let m = median_of(c, nx * ny);
+        k = 0;
+        while k < nx * ny { var d = rs[k] - m; if d < 0.0 { d = 0.0 - d; } c[k] = d; k = k + 1; }
+        let s = 1.4826 * median_of(c, nx * ny);
+        if 5.0 * s > t { t = 5.0 * s; }
+    }
+    return t;
+}
+
+// Find the particles of `z`, write up to `cap` of them into `out` (stride() floats each: x, y, height, area; in the order they are met scanning along the lines) and return how many were found.
+// `win` odd, at least twice a particle's diameter and wider than a grating's pitch; `min_h` the lowest height wanted (pm); `min_area` the fewest pixels at or above the threshold.
+pub fn find_particles[&a, &b](z: &a [float], nx: int, ny: int, win: int, min_h: float, min_area: int, out: &!b [float], cap: int) -> [] int {
+    var found = 0;
+    region r1 {
+        let rs = alloc_slice[r1](nx * ny, 0.0);
+        residual(z, rs, nx, ny, win);
+        let t = threshold(rs, nx, ny, min_h);
+        region r2 {
+            let seen = alloc_slice[r2](nx * ny, byte_of(0));
+            let stack = alloc_slice[r2](2048, 0);
+            let comp = alloc_slice[r2](2048, 0);
+            var p = 0;
+            while p < nx * ny {
+                if int_of(seen[p]) == 0 && rs[p] >= t {
+                    // flood fill from p: `comp` collects the group's pixels (at most 2048; a larger group is not a particle but a feature of the surface and is dropped)
+                    var sp = 0;
+                    var n = 0;
+                    var over = 0;
+                    stack[0] = p; sp = 1; seen[p] = byte_of(1);
+                    while sp > 0 {
+                        sp = sp - 1;
+                        let q = stack[sp];
+                        if n < 2048 { comp[n] = q; n = n + 1; } else { over = 1; }
+                        let qx = q % nx;
+                        let qy = q / nx;
+                        var dy = 0 - 1;
+                        while dy <= 1 {
+                            var dx = 0 - 1;
+                            while dx <= 1 {
+                                let x = qx + dx;
+                                let y = qy + dy;
+                                if x >= 0 && x < nx && y >= 0 && y < ny {
+                                    let u = y * nx + x;
+                                    if int_of(seen[u]) == 0 && rs[u] >= t && sp < 2047 { seen[u] = byte_of(1); stack[sp] = u; sp = sp + 1; }
+                                }
+                                dx = dx + 1;
+                            }
+                            dy = dy + 1;
+                        }
+                    }
+                    if over == 0 && n >= min_area {
+                        var top = 0.0;
+                        var k = 0;
+                        while k < n { if rs[comp[k]] > top { top = rs[comp[k]]; } k = k + 1; }
+                        var wsum = 0.0; var wx = 0.0; var wy = 0.0; var area = 0;
+                        k = 0;
+                        while k < n {
+                            let v = rs[comp[k]];
+                            if v >= top / 2.0 {
+                                wsum = wsum + v; wx = wx + v * float_of(comp[k] % nx); wy = wy + v * float_of(comp[k] / nx); area = area + 1;
+                            }
+                            k = k + 1;
+                        }
+                        if found < cap {
+                            out[found * 4] = wx / wsum; out[found * 4 + 1] = wy / wsum; out[found * 4 + 2] = top; out[found * 4 + 3] = float_of(area);
+                        }
+                        found = found + 1;
+                    }
+                }
+                p = p + 1;
+            }
+        }
+    }
+    if found > cap { return cap; }
+    return found;
+}

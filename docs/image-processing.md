@@ -34,7 +34,7 @@
 |---|---|---|
 | I1 | Levelling: plane and line | a tilt added to a twin image (known to the pm) is recovered and removed to under 35 pm rms; a line offset added to every line is removed; tests, twin fork and HS images. **Done 2026-11-03, see "What I1 found"** |
 | I2 | Metrics: Ra, Rq, Rz, step height, grating pitch and height | terrace within 10%, pitch within 2%, grating height within 20%, on both profiles; Ra and Rq against a direct computation on the truth. **Done 2026-11-03, see "What I2 found"** |
-| I3 | Particle finder and its table | the twin's three particles found, heights within 20%, centres within a pixel, no false ones at the twin's noise; `particles.csv` read by `table` in a test of the flow |
+| I3 | Particle finder and its table | the twin's three particles found, heights within 20%, centres within a pixel, no false ones at the twin's noise; `particles.csv` read by `table` in a test of the flow. **Done 2026-11-03, see "What I3 found"** |
 | I4 | Drift: trace against retrace by cross-correlation | a drift set in the twin (`fl[8]`, pm per window) is estimated within 20%; then removed |
 | I5 | A page for it: levelled image, profile, table in `cancho-ui` (an image element is a change in that repo) | the live console shows the levelled image and the metrics of the last scan |
 | I6 | Fits with `cancho-opt` (grating, step, tip) | decided after I2: only if the closed-form metrics are not enough |
@@ -72,6 +72,25 @@ Images up to 256 x 256 (a region holds 64 KiB; the mask is bytes).
 * **Rz is 4 to 7% above the truth's** (190 against 182 pm): noise raises the extremes of every line (Rz is a peak-to-valley, the most noise-sensitive of the three). Ra and Rq are within 1 to 3% (HS 0.1 to 1%). The excess of Rq^2 over the truth's is far below the 28 to 30 pm noise variance (e.g. 7 pm^2 for HS 500 kHz), so the image's noise does not simply add in quadrature to the structure: most of the structure's variance is the sample and the loop's tracking, which is shared with the truth.
 * **The stepped, particle-covered sample is a bad roughness sample** (Rq 89 pm is the sample's structure, not roughness). The numbers prove the code matches a direct computation; a roughness of a flat region needs a flat sample or a mask, which the caller chooses.
 * **Not done:** areal parameters of ISO 25178 beyond Rq as the areal rms; a cut-off filter (a Gaussian) for waviness; an interval for any metric; grating harmonics (a non-sinusoidal profile: the sine amplitude then understates the height); a step edge that is not straight or not along a scan line; real data.
+
+## What I3 found (`host/features.cho`, `tests/features_test.cho`, `./scan_twin <profile> <scanner> <kHz> 3`; twin, 2026-11-03)
+
+**Method.** The background under each pixel is the median of the 15 x 15 window about it (wider than the grating's 12-pixel pitch, more than twice a particle's 8-pixel diameter), so it follows a tilt, a terrace and a grating without a model of any of them. The threshold is the larger of a minimum height the caller gives and 5 x the residual's robust noise (1.4826 x the median absolute deviation). High pixels are grouped by 8-connectivity; a group of at least 4 pixels is a particle (a group over 2,048 pixels is a feature of the surface and is dropped). Height is the group's largest residual; area is the pixels at or above half that height; the centre is the residual-weighted centroid of those pixels (sub-pixel). Output is `x,y,height_pm,area_px` per particle, the CSV that `table` is meant to read.
+
+* **Tests.** A 64 x 64 image with a grating, a 150 pm terrace, a tilt, 30 pm noise and three particles of 600, 450 and 600 pm: all three found, centres within 1 pixel, heights within 20%. Images without particles at 30 and 60 pm noise: none found, **with the minimum height set to 0 so only the automatic 5 sigma threshold is in force**. A mutant with the factor 5 changed to 0.5 fails both tests, so they do discriminate.
+* **On the twin's scan** (true particles at (12, 13), (32, 18), (23, 33) pixels, 600, 450 and 600 pm; minimum height 0):
+
+| profile | centres found (pixels) | heights found (pm) | areas |
+|---|---|---|---|
+| fork | (12.22, 13.00) (31.99, 17.99) (23.18, 33.00) | 594, 508, 599 | 10, 9, 10 |
+| HS 300 kHz | (12.17, 13.00) (31.70, 17.99) (23.00, 33.00) | 523, 429, 509 | 10, 7, 9 |
+| HS 500 kHz | (12.02, 13.00) (31.70, 17.98) (23.00, 33.00) | 516, 428, 510 | 9, 7, 9 |
+| HS 600 kHz | (12.02, 13.00) (31.70, 17.98) (22.99, 33.00) | 526, 434, 518 | 9, 7, 9 |
+
+  Three found, no false ones, centres within 0.3 pixel (acceptance: a pixel), on all four. Heights are within 20% everywhere: the fork's are 1% low, 13% high (the second particle) and 0.2% low; the HS images' 600 pm particles are **12 to 13% low** (509 to 526) and the 450 pm one 4 to 5% low (428 to 434). Why the HS particles are low I did not test; the tracking of a 8-pixel bump by a 250 kHz loop with a Z stack is the suspect, and a guess, not measured.
+* **Heights are above the local median, not above the lowest surface:** a particle on the terrace reads its height above the terrace (the third particle's 600 pm is measured from the 150 pm level, which is what is wanted), and a particle on a grating reads above the grating's median, so it carries up to +-50 pm of the grating's phase (the fork's 508 for 450 is probably that).
+* **The `table` flow** (`tests/particles_flow.sh`, run by `test_all.sh` when `TABLE` names a built `table`; otherwise it prints that it was skipped). It builds `scan_twin`, writes the HS 500 kHz scan's `particles.csv` and has `table` (cancho-table 0.3.0, built here from a clone with the local compiler and `--ignore-compiler-rev`, because it pins a compiler 173 commits older than the one I use) answer: three rows; `--agg count,max:height_pm:dec(2)` gives 3 and a maximum of 505 to 530 pm; `--where "height_pm:dec(2) > 450"` keeps 2 rows (above 550 it keeps none); and a decimal column **not** declared `:dec(2)` is refused with the rule `value.not-integer` rather than read as a number, which is the behaviour I wanted from it. Not run in CI here; I did not run `table`'s own tests under the newer compiler, so "works with a newer compiler" is shown only by this flow.
+* **Not done:** the pixel size is not known to the finder, so the area is in pixels and the heights and centres are not in nm and nm (the caller scales); overlapping particles are one group; touching the image edge is not flagged; a tilt steeper than the window can follow, and a tip of finite radius (the twin's tip is a point), are not handled.
 
 ## Open questions
 

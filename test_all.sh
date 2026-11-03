@@ -5,7 +5,7 @@ set -e
 cd "$(dirname "$0")"
 CANCHO=${CANCHO:-../cancho/target/release/cancho}
 export CANCHO
-MODS="$(ls sim/*.cho) host/regs.cho gen/ir.cho gen/pid_ir.cho gen/raster_ir.cho gen/lockin_ir.cho host/proto.cho host/twin_link.cho host/script.cho host/run_twin.cho host/session.cho host/image.cho host/metrics.cho"
+MODS="$(ls sim/*.cho) host/regs.cho gen/ir.cho gen/pid_ir.cho gen/raster_ir.cho gen/lockin_ir.cho host/proto.cho host/twin_link.cho host/script.cho host/run_twin.cho host/session.cho host/image.cho host/metrics.cho host/features.cho"
 fail=0
 for t in tests/*_test.cho; do
   out=$($CANCHO test "$t" $MODS --std 2>&1) || true
@@ -42,4 +42,10 @@ fi
 if [ -n "${KICAD_CLI:-}" ]; then
   sh hw/kicad/check.sh > /dev/null
   echo "hw/kicad schematic: generator, ERC and nets against the simulation: passed"
+fi
+# the scan -> particles.csv -> cancho-table flow (I3) needs a built `table`; it runs only when TABLE names one
+if [ -n "${TABLE:-}" ]; then
+  sh tests/particles_flow.sh
+else
+  echo "particles flow: skipped (set TABLE to a built cancho-table)"
 fi

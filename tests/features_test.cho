@@ -1,0 +1,71 @@
+import std.test;
+import std.math;
+import features;
+
+// 64 x 64 images (a region holds 64 KiB): a grating, a terrace, line noise and three raised-cosine particles of known place and height.
+fn bump(x: float, y: float, cx: float, cy: float, h: float) -> [] float {
+    let d2 = ((x - cx) * (x - cx) + (y - cy) * (y - cy)) / 16.0;
+    if d2 >= 1.0 { return 0.0; }
+    return h * (1.0 - d2) * (1.0 - d2);
+}
+
+fn noise(k: int) -> [] float { return float_of((k * 1103515245 + 12345) / 65536 % 2001 - 1000) / 1000.0; }
+
+fn near(a: float, b: float, tol: float) -> [] int {
+    var d = a - b;
+    if d < 0.0 { d = 0.0 - d; }
+    if d <= tol { return 1; }
+    return 0;
+}
+
+fn sample[&a](z: &!a [float], with_particles: int, sigma: float) -> [] int {
+    var j = 0;
+    while j < 64 {
+        var i = 0;
+        while i < 64 {
+            let x = float_of(i);
+            let y = float_of(j);
+            var terrace = 0.0;
+            if j >= 25 { terrace = 150.0; }
+            var v = 50.0 + 50.0 * math.sin(6.283185307179586 * x / 12.0) + terrace + 2.0 * (x - 31.5) + sigma * noise(j * 64 + i);
+            if with_particles == 1 { v = v + bump(x, y, 12.0, 13.0, 600.0) + bump(x, y, 32.0, 18.0, 450.0) + bump(x, y, 23.0, 33.0, 600.0); }
+            z[j * 64 + i] = v;
+            i = i + 1;
+        }
+        j = j + 1;
+    }
+    return 0;
+}
+
+fn test_three_particles_on_a_grating_and_a_terrace_are_found() -> [] int {
+    region r {
+        let z = alloc_slice[r](64 * 64, 0.0);
+        let out = alloc_slice[r](64, 0.0);
+        sample(z, 1, 30.0);
+        let n = features.find_particles(z, 64, 64, 15, 200.0, 4, out, 16);
+        test.assert_eq(n, 3);
+        // in scan order: (12, 13), (32, 18), (23, 33); centres within a pixel, heights within 20%
+        test.assert_eq(near(out[0], 12.0, 1.0), 1);
+        test.assert_eq(near(out[1], 13.0, 1.0), 1);
+        test.assert_eq(near(out[2], 600.0, 120.0), 1);
+        test.assert_eq(near(out[4], 32.0, 1.0), 1);
+        test.assert_eq(near(out[5], 18.0, 1.0), 1);
+        test.assert_eq(near(out[6], 450.0, 90.0), 1);
+        test.assert_eq(near(out[8], 23.0, 1.0), 1);
+        test.assert_eq(near(out[9], 33.0, 1.0), 1);
+        test.assert_eq(near(out[10], 600.0, 120.0), 1);
+    }
+    return 0;
+}
+
+fn test_no_particles_none_found_at_several_noise_levels() -> [] int {
+    region r {
+        let z = alloc_slice[r](64 * 64, 0.0);
+        let out = alloc_slice[r](64, 0.0);
+        sample(z, 0, 30.0);
+        test.assert_eq(features.find_particles(z, 64, 64, 15, 0.0, 4, out, 16), 0);
+        sample(z, 0, 60.0);
+        test.assert_eq(features.find_particles(z, 64, 64, 15, 0.0, 4, out, 16), 0);
+    }
+    return 0;
+}
