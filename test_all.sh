@@ -5,7 +5,7 @@ set -e
 cd "$(dirname "$0")"
 CANCHO=${CANCHO:-../cancho/target/release/cancho}
 export CANCHO
-MODS="$(ls sim/*.cho) host/regs.cho gen/ir.cho gen/pid_ir.cho gen/raster_ir.cho gen/lockin_ir.cho host/proto.cho host/twin_link.cho host/script.cho host/run_twin.cho host/session.cho host/image.cho host/metrics.cho"
+MODS="$(ls sim/*.cho) host/regs.cho gen/ir.cho gen/pid_ir.cho gen/raster_ir.cho gen/lockin_ir.cho host/proto.cho host/twin_link.cho host/script.cho host/run_twin.cho host/session.cho host/image.cho host/metrics.cho host/features.cho"
 fail=0
 for t in tests/*_test.cho; do
   out=$($CANCHO test "$t" $MODS --std 2>&1) || true
