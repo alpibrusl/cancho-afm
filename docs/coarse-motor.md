@@ -70,6 +70,25 @@ a printed holder, a dial gauge or calipers, and the head's weight on it.
 The numbers go into the table in section 3 in place of the tags. If the step is over 400 nm the plan switches to option A or to a finer screw (M2, 0.4 mm, gives
 196 nm per full step [derived]).
 
+## 5a. The circuit, and how to build it on the half-size breadboard
+
+Two output pins, a and b, go to IN1 and IN2 of the ULN2003 board. Each also goes through an inverter to IN3 and IN4 (not a, not b). On the bench the pins are Pi 4
+GPIO 17 (pin 11, a) and GPIO 27 (pin 13, b); in the instrument they are two FPGA pins. The kit has no 74HC04, so each inverter is **one MOSFET and one 10 kohm
+pull-up**: the gate takes the signal, the source goes to ground, the drain is the output and is pulled to 5 V through the resistor.
+
+| Breadboard row (columns a to e of a row are one node) | What is in it |
+|---|---|
+| 2 | MOSFET A gate (column c); wire from the Pi pin 11; wire to IN1 |
+| 3 | MOSFET A drain (column c); 10 k resistor (column b, to row 6); wire to IN3 |
+| 4 | MOSFET A source (column c); wire to the ground rail |
+| 6 | the resistor's other leg; wire to the +5 V rail |
+| 9, 10, 11, 13 | the same for MOSFET B, with Pi pin 13, IN2 and IN4 |
+
+Rails: Pi pin 6 (ground) and the ULN2003 board's minus to the ground rail; Pi pin 2 (5 V) and the board's plus to the +5 V rail. **Two things to check before power:** the
+MOSFET's leg order (read its marking and its datasheet; the table assumes gate, drain, source down the rows, and a different order means swapping which row each wire goes to),
+and its gate threshold against 3.3 V (a part that needs more will not switch fully; a 74HC04 powered at 3.3 V is the fallback). The Pi's 5 V pin is fine for the bench test
+(about 240 mA); the instrument uses its own supply (section 4). The Pi and board pins are male, so the wires that meet them need female ends; the kit's solid wires stay on the breadboard.
+
 ## 6. What this does not decide
 
 * The real Z range and free amplitude (the first bench run on the scanner decides them).
