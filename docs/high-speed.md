@@ -51,9 +51,9 @@ Whether that leaves a usable setpoint depends on the photodiode's noise, **[unkn
 
 ## What the twin can and cannot say
 
-The twin (`sim/board.cho`, `sim/plant.cho`) models the cantilever as a Lorentzian with a first-order lag of `alpha = window time / tau` per window, **clamped at 1**.
-In the HS table the liquid rows give alpha from 1.6 to 12.6: the clamp makes the cantilever follow instantly, **which is optimistic**: the real response is not
-instant. So:
+The twin (`sim/board.cho`, `sim/plant.cho`) models the cantilever as a Lorentzian with a first-order lag, applied **per ADC sample** with `alpha = pi f0 / (Q fs)`
+(clamped at 1). An earlier version of this note said the lag was per window and clamped; that was wrong (read from a comment, not the code) and is corrected here:
+at 4.5 MS/s a 0.5 MHz, Q = 5 cantilever has alpha = 0.07, so the lag is modelled, not clamped away. The first-order lag is still the simplest shape: no overshoot.
 
 * **Can, with changes of constants only (H1):** f0 0.5 to 1.2 MHz, Q, free amplitude, the sample rate (`rf[3]`, the divider of the 27 MHz clock: 6 gives 4.5 MS/s), the
   window, pixel divider, a bigger raster; and report the **frame rate the twin predicts**. The tune stage sweeps 32.52 to 33.02 kHz in 8 Hz steps
@@ -67,7 +67,7 @@ instant. So:
 
 | Slice | What | Acceptance |
 |---|---|---|
-| H1 | An `hs` profile in the twin: constants only, a larger raster, the frame rate printed | the full procedure (tune, approach, scan) finds a 0.5 MHz, Q = 5 cantilever and scans 64 x 64; the predicted frame rate is within 10% of the table's formula; existing tests unchanged |
+| H1 | An `hs` profile in the twin: constants only, a larger raster, the frame rate printed | the full procedure (tune, approach, scan) finds a 0.5 MHz, Q = 5 cantilever and scans 64 x 64; the predicted frame rate is within 10% of the table's formula; existing tests unchanged. **Done 2026-11-03, see "What H1 found"** |
 | H2 | Second-order Z scanner and amplifier slew in the twin | with the loop faster than the scanner's resonance the twin shows ringing; with a slower one it does not; a test for both |
 | H3 | The generated lock-in at 8 to 16 samples per window, and a DAC and ADC rate of 4 to 10 MS/s, in Verilog | lockstep with the cancho model at window 8 and 16; timing at the clock that gives 8 samples per period (**[unknown]** whether a PLL is needed) |
 | H4 | A video of a fast scan, labelled as a prediction | the video states the frame rate, the window and what is not modelled |
@@ -75,6 +75,17 @@ instant. So:
 | H6 | A measured line rate on a real small cantilever | the S7 acceptance: measured, not predicted; before this, no claim of speed |
 
 H1 and H2 are cancho and need no hardware. H3 is generated hardware and runs under Icarus. H5 and H6 need money and a bench.
+
+## What H1 found (twin, 2026-11-03; predictions, not measurements)
+
+`host/session.cho` takes a profile (`ss[3]`: 0 fork, 1 hs); `host/scan_twin.cho` scans 64 x 64 over the made-up sample for either (`./scan_twin 1`). Hs profile: 4.5 MS/s
+(divider 6 of the 27 MHz clock), an 18-sample window, 20 loop updates per pixel, a sweep of 100 to 899 kHz. The full procedure ran with no operator input and no refused write.
+
+* **Tune found the cantilever:** f0 = 508.3 kHz against the twin's 500 kHz (1.7% high: the sweep step is 12.7 kHz), Q = 6 against 5. Contact at Z = 2704 pm, as for the fork. A first sweep of 376 to 628 kHz was refused (no resonance well above the floor: the edges were only 2.7 times lower than the peak); the sweep must span several line widths.
+* **The window must be a whole number of cycles.** With 16 samples (1.8 cycles at 4.5 MS/s) the amplitude figure rippled by 12% from window to window and the approach saw a false contact at the top of the Z range: the scan was all zeros. 18 samples (2.05 cycles) works. Among the windows tried (9, 14, 15, 16, 18 at dividers 6 and 7) only 18 at divider 6 completed. With a fixed integer divider of 27 MHz this is luck; **a PLL, or a window chosen from the tuned frequency, is needed (H3)**. This is risk 4 of the list below, now seen.
+* **Frame rate predicted:** 0.65 s per 64 x 64 frame with trace and retrace, 1.5 frames/s; 3.1 frames/s if only the trace were scanned (the formula's 3.05 to 3.4 /s for a 4 to 4.5 MS/s, 16 to 18 sample window). The twin counts the clocks it simulates, so this agrees with the formula by construction; it is not a check of the formula.
+* **The detector, not the loop, limits the image.** Over the same sample the hs image has a trace-minus-retrace rms of 87 pm against 28 pm for the fork's, a correlation of 0.81 with the fork's image, and the same numbers at 20, 40 and 60 updates per pixel. More loop time does not help; the shorter window's noise does (about 4% of the figure here). 20 updates per pixel is enough in the twin.
+* **Not found, because not modelled:** photodiode noise, the real scanner (H2), liquid damping.
 
 ## Risks
 

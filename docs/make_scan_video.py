@@ -1,8 +1,12 @@
-"""Renders docs/scan-twin.mp4 from `cancho run host/scan_twin.cho ...` output (see that file's header); usage: make_scan_video.py scan.txt frames_dir"""
+"""Renders docs/scan-twin.mp4 from `cancho run host/scan_twin.cho ...` output (see that file's header); usage: make_scan_video.py scan.txt frames_dir [label]"""
 import sys, numpy as np
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-rows=[l.split() for l in open(sys.argv[1]).read().splitlines()[1:] if l.strip()]
+lines=open(sys.argv[1]).read().splitlines()[1:]
+rows=[l.split() for l in lines if len(l.split())==3]
+fu=[int(l.split()[1]) for l in lines if l.startswith("frame_us")]
+label=sys.argv[3] if len(sys.argv)>3 else "64 x 64 scan on the software twin"
+fps="  Predicted %.1f frames/s (trace+retrace)."%(1e6/fu[0]) if fu else ""
 N=64
 fwd=np.full((N,N),np.nan); bwd=np.full((N,N),np.nan)
 for ln,px,z in ((int(a),int(b),int(c)) for a,b,c in rows):
@@ -16,8 +20,8 @@ lo,hi=np.nanmin(fwd),np.nanmax(fwd)
 frames=list(range(1,N+1))+[N]*40
 for fi,m in enumerate(frames):
     fig=plt.figure(figsize=(12.8,7.2),dpi=100)
-    fig.text(.05,.93,"cancho-afm - 64 x 64 scan on the software twin",fontsize=20,weight="bold")
-    fig.text(.05,.885,"Made-up sample (grating, terrace, 3 particles), noise on. A prediction of this software, not a measurement; no hardware has run.",color="#ffb74d",fontsize=11)
+    fig.text(.05,.93,"cancho-afm - "+label,fontsize=20,weight="bold")
+    fig.text(.05,.885,"Made-up sample, noise on. Twin prediction, not a measurement."+fps,color="#ffb74d",fontsize=11)
     a=fig.add_axes([.05,.10,.48,.74]); img=fwd.copy(); img[m:,:]=np.nan
     im=a.imshow(img,cmap="magma",vmin=lo,vmax=hi,extent=ext,interpolation="nearest"); a.set_xlabel("x (um)"); a.set_ylabel("y (um)")
     a.set_title("height Z (pm), trace direction",loc="left",fontsize=11)

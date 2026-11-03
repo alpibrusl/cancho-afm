@@ -9,7 +9,8 @@ import regs;
 
 // The twin's automatic procedure up to the loop being closed (host/session.cho: tune, choose, approach), then a larger raster (64 x 64) over the made-up sample of sim/board.cho
 // (grating, terrace step, three particles) with noise and slow drift. Prints the image (Z, pm), one `line pixel Z` record per reading (a pixel may be read more than once; the last reading is the one the loop settled to). A prediction of this software, not a measurement.
-//   cancho run host/scan_twin.cho host/session.cho host/script.cho host/run_twin.cho host/proto.cho host/twin_link.cho sim/board.cho sim/lockin.cho sim/pid.cho sim/raster.cho
+//   cancho build host/scan_twin.cho -o scan_twin ...same files... --std; ./scan_twin [0|1]   (cancho run cannot pass arguments)
+//   files: host/scan_twin.cho host/session.cho host/script.cho host/run_twin.cho host/proto.cho host/twin_link.cho sim/board.cho sim/lockin.cho sim/pid.cho sim/raster.cho
 //    sim/raster_sine.cho sim/plant.cho sim/tune.cho sim/approach.cho host/regs.cho --std
 fn text[&h, &r](heap: &!h Heap, b: buffer.Buffer, s: &r [byte]) -> [heap] buffer.Buffer { return buffer.append(heap, b, s); }
 
@@ -20,9 +21,18 @@ fn num[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer {
 
 fn side() -> [] int { return 64; }
 
+// the profile: argument 1, `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md)
+fn number_of[&t](text: &t [byte]) -> [] int {
+    if len(text) == 1 { return int_of(text[0]) - 48; }
+    return 0;
+}
+
 fn main(world: World) -> [] int {
     let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
-    release(ffi); release(fs); release(args); release(net); release(clock); release(signals); release(exec);
+    release(ffi); release(fs);
+    var prof = 0;
+    borrow args as &g in { if arg_count(g) > 1 { prof = number_of(arg(g, 1)); } }
+    release(args); release(net); release(clock); release(signals); release(exec);
     borrow mut heap as &!h in {
         var o = buffer.empty(h, 65536);
         region r {
@@ -30,11 +40,13 @@ fn main(world: World) -> [] int {
             let st = alloc_slice[r](32, 0);
             let fl = alloc_slice[r](16, 0.0);
             board.reset(rf, st, fl);
-            board.set_plant(fl, 32781.4, 500.0, 2000.0, 2000.0, 100.0, 1200.0, 2.0);
+            if prof == 1 { board.set_plant(fl, 500000.0, 5.0, 2000.0, 2000.0, 100.0, 1200.0, 2.0); }
+            else { board.set_plant(fl, 32781.4, 500.0, 2000.0, 2000.0, 100.0, 1200.0, 2.0); }
             fl[10] = 150.0;
             fl[8] = 0.0;
             board.set_distance(fl, 11000.0, 198.4375);
             let ss = alloc_slice[r](32, 0);
+            ss[3] = prof;
             let sf = alloc_slice[r](8, 0.0);
             let sc = alloc_slice[r](4 * 200, 0);
             let out = alloc_slice[r](128, 0);
@@ -50,7 +62,8 @@ fn main(world: World) -> [] int {
                 guard = guard + 1;
             }
             o = text(h, o, "twin scan; failure code "); o = num(h, o, ss[2]); o = text(h, o, ", refused writes "); o = num(h, o, failures);
-            o = text(h, o, ", contact Z "); o = num(h, o, ss[9]); o = text(h, o, " pm\n");
+            o = text(h, o, ", contact Z "); o = num(h, o, ss[9]); o = text(h, o, " pm; f0 "); o = num(h, o, truncate(sf[0])); o = text(h, o, " Hz, Q "); o = num(h, o, truncate(sf[1])); o = text(h, o, ", free figure "); o = num(h, o, ss[10]);
+            o = text(h, o, ", shift "); o = num(h, o, ss[11]); o = text(h, o, ", setpoint "); o = num(h, o, ss[12]); o = text(h, o, ", motor steps "); o = num(h, o, ss[21]); o = text(h, o, ", settled Z "); o = num(h, o, ss[22]); o = text(h, o, " pm\n");
             var n = 0;
             n = script.write(sc, n, regs.npix(), side());
             n = script.write(sc, n, regs.nlines(), side());
@@ -58,20 +71,21 @@ fn main(world: World) -> [] int {
             n = script.write(sc, n, regs.y0(), 1000);
             n = script.write(sc, n, regs.dx(), 100);
             n = script.write(sc, n, regs.dy(), 100);
-            n = script.write(sc, n, regs.pixdiv(), session.pixdiv());
+            n = script.write(sc, n, regs.pixdiv(), session.pixdiv(prof));
             n = script.write(sc, n, regs.ctrl(), 21);
             failures = failures + run_twin.run(sc, n, rf, st, fl, out, req, rsp);
+            var calls = 0;
             var done = 0;
             var line = 0 - 1;
             var guard2 = 0;
             while done == 0 && guard2 < 400000 {
                 var m = 0;
                 m = script.write(sc, m, regs.kick(), 0);
-                m = script.wait(sc, m, (session.pixdiv() - 1) * session.window_clocks());
+                m = script.wait(sc, m, (session.pixdiv(prof) - 1) * session.window_clocks(prof));
                 m = script.read(sc, m, regs.pixline());
                 m = script.read(sc, m, regs.zout());
                 m = script.read(sc, m, regs.status());
-                m = script.wait(sc, m, session.window_clocks());
+                m = script.wait(sc, m, session.window_clocks(prof));
                 failures = failures + run_twin.run(sc, m, rf, st, fl, out, req, rsp);
                 let pix = out[1] / 65536;
                 let ln = out[1] % 65536;
@@ -81,8 +95,9 @@ fn main(world: World) -> [] int {
                     o = num(h, o, ln); o = text(h, o, " "); o = num(h, o, pix); o = text(h, o, " "); o = num(h, o, out[2]); o = text(h, o, "\n");
                 }
                 guard2 = guard2 + 1;
+                if ln < side() { calls = calls + 1; }
             }
-            o = text(h, o, "\n");
+            o = text(h, o, "frame_us "); o = num(h, o, calls * session.pixdiv(prof) * session.window_clocks(prof) / 27); o = text(h, o, "\n");
         }
         var code = 0;
         borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }

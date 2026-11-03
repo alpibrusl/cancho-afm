@@ -24,23 +24,28 @@ import approach;
 // 9 the coarse motor was still busy or refused a command.
 
 // ---- the program's choices ----
-pub fn sample_div() -> [] int { return 103; }                     // 262 kS/s at 27 MHz: 8 samples per period of a 32.768 kHz fork
-pub fn window() -> [] int { return 64; }                          // samples per detector window (0.24 ms): short, so a loop step is quick
-pub fn window_clocks() -> [] int { return 64 * 103; }
-pub fn window_s() -> [] float { return 64.0 * 103.0 / 27000000.0; }
-pub fn fs() -> [] float { return 27000000.0 / 103.0; }
+// The program's choices that differ between the two instruments are functions of the profile p, kept in ss[3]: 0 the tuning fork (default), 1 a small high-speed
+// cantilever in the twin (docs/high-speed.md, H1: 0.5 MHz class; nothing of it is built or measured).
+pub fn sample_div(p: int) -> [] int { if p == 1 { return 6; } return 103; }       // fork: 262 kS/s at 27 MHz, 8 samples per period of 32.768 kHz; hs: 4.5 MS/s, 8.8 per period of 508 kHz
+pub fn window(p: int) -> [] int { if p == 1 { return 18; } return 64; }          // samples per detector window: fork 0.24 ms, short so a loop step is quick; hs 18 samples = 4.0 us, 2.05 cycles at 508 kHz (a whole number of cycles: 16 gave a 12% ripple, docs/high-speed.md)
+pub fn window_clocks(p: int) -> [] int { return window(p) * sample_div(p); }
+pub fn window_s(p: int) -> [] float { return float_of(window_clocks(p)) / 27000000.0; }
+pub fn fs(p: int) -> [] float { return 27000000.0 / float_of(sample_div(p)); }
 pub fn free_pm() -> [] float { return 2000.0; }                   // the free amplitude the program ASSUMES (no calibration yet), pm
 pub fn zmax() -> [] int { return 10000; }
 pub fn motor_rate() -> [] int { return 27000; }                  // clocks per microstep: 1 kHz, gentle for a driver and a small stepper
 pub fn coarse_steps() -> [] int { return 30; }                   // microsteps per approach "coarse step"
-pub fn pm_per_step() -> [] int { return 198; }                   // ASSUMED: a 0.635 mm lead screw, 1.8 degrees, 1/16 microstepping; calibrate before trusting                         // the Z range, pm: 0 to 10,000
+pub fn pm_per_step() -> [] int { return 198; }                   // ASSUMED: a 0.635 mm lead screw, 1.8 degrees, 1/16 microstepping; calibrate before trusting
 pub fn sweep_points() -> [] int { return 63; }
-pub fn sweep_f(i: int) -> [] float { return 32520.0 + 8.0 * float_of(i); }   // +-250 Hz about 32,768 Hz in 8 Hz steps
-pub fn settle_clocks() -> [] int { return 540000; }                // 20 ms: four time constants of a Q = 500 fork; a Q = 5,000 one needs ten times as long
-pub fn tuning_word(f: float) -> [] int { return truncate(f / fs() * 4294967296.0 + 0.5); }
+pub fn sweep_f(p: int, i: int) -> [] float {
+    if p == 1 { return 100000.0 + 12700.0 * float_of(i); }      // hs: 100 to 899 kHz in 12.7 kHz steps (a Q = 5 line at 500 kHz is 100 kHz wide: eight points; the fork's sweep is about eight line widths too)
+    return 32520.0 + 8.0 * float_of(i);                          // fork: +-250 Hz about 32,768 Hz in 8 Hz steps
+}
+pub fn settle_clocks(p: int) -> [] int { if p == 1 { return 1000; } return 540000; }   // fork: 20 ms, four time constants of a Q = 500 fork (a Q = 5,000 one needs ten times as long); hs: 37 us, eleven of a Q = 5 cantilever at 500 kHz
+pub fn tuning_word(p: int, f: float) -> [] int { return truncate(f / fs(p) * 4294967296.0 + 0.5); }
 pub fn npix() -> [] int { return 12; }
 pub fn nlines() -> [] int { return 3; }
-pub fn pixdiv() -> [] int { return 60; }                          // loop steps per pixel: the loop needs about 20 to follow a feature
+pub fn pixdiv(p: int) -> [] int { if p == 1 { return 20; } return 60; }   // loop steps per pixel: the loop needs about 20 to follow a feature (the fork run keeps three times that)
 
 fn pow2(n: int) -> [] int {
     var r = 1;
@@ -56,11 +61,12 @@ fn params[&a](ss: &a [int]) -> [] approach.P {
 // ---- building the script of a stage; returns the number of operations ----
 pub fn build[&a, &b, &c](ss: &a [int], sf: &b [float], sc: &!c [int]) -> [] int {
     let stage = ss[0];
+    let p = ss[3];
     var n = 0;
     if stage == 0 {
         n = script.read(sc, n, regs.id());
-        n = script.write(sc, n, regs.sample_div(), sample_div());
-        n = script.write(sc, n, regs.window(), window());
+        n = script.write(sc, n, regs.sample_div(), sample_div(p));
+        n = script.write(sc, n, regs.window(), window(p));
         n = script.write(sc, n, regs.half(), 2);
         n = script.write(sc, n, regs.timeout(), 0);
         n = script.write(sc, n, regs.zmin(), 0);
@@ -79,15 +85,15 @@ pub fn build[&a, &b, &c](ss: &a [int], sf: &b [float], sc: &!c [int]) -> [] int 
         n = script.write(sc, n, regs.man_z(), zmax() / 16);            // fully retracted, far from the surface
         var i = 0;
         while i < sweep_points() {
-            n = script.write(sc, n, regs.tuning(), tuning_word(sweep_f(i)));
-            n = script.wait(sc, n, settle_clocks());
+            n = script.write(sc, n, regs.tuning(), tuning_word(p, sweep_f(p, i)));
+            n = script.wait(sc, n, settle_clocks(p));
             n = script.read(sc, n, regs.amp());
             i = i + 1;
         }
     }
     if stage == 2 {
-        n = script.write(sc, n, regs.tuning(), tuning_word(sf[0]));
-        n = script.wait(sc, n, 2 * settle_clocks());
+        n = script.write(sc, n, regs.tuning(), tuning_word(p, sf[0]));
+        n = script.wait(sc, n, 2 * settle_clocks(p));
         n = script.read(sc, n, regs.amp());
     }
     if stage == 3 {
@@ -97,7 +103,7 @@ pub fn build[&a, &b, &c](ss: &a [int], sf: &b [float], sc: &!c [int]) -> [] int 
             n = script.wait(sc, n, ss[20] * coarse_steps() * motor_rate() + 20000);
             n = script.read(sc, n, regs.motor_status());                      // the motor must be idle and must not have refused
         }
-        n = script.wait(sc, n, window_clocks());
+        n = script.wait(sc, n, window_clocks(p));
         n = script.read(sc, n, regs.amp());
     }
     if stage == 4 {
@@ -113,7 +119,7 @@ pub fn build[&a, &b, &c](ss: &a [int], sf: &b [float], sc: &!c [int]) -> [] int 
         var k = 0;
         while k < 8 {
             n = script.write(sc, n, regs.kick(), 0);
-            n = script.wait(sc, n, 20 * window_clocks());
+            n = script.wait(sc, n, 20 * window_clocks(p));
             k = k + 1;
         }
         n = script.read(sc, n, regs.status());
@@ -126,16 +132,16 @@ pub fn build[&a, &b, &c](ss: &a [int], sf: &b [float], sc: &!c [int]) -> [] int 
         n = script.write(sc, n, regs.y0(), 2000);
         n = script.write(sc, n, regs.dx(), 100);
         n = script.write(sc, n, regs.dy(), 250);
-        n = script.write(sc, n, regs.pixdiv(), pixdiv());
+        n = script.write(sc, n, regs.pixdiv(), pixdiv(p));
         n = script.write(sc, n, regs.ctrl(), 21);                      // run + scan + ADC
     }
     if stage == 6 {
         n = script.write(sc, n, regs.kick(), 0);
-        n = script.wait(sc, n, (pixdiv() - 1) * window_clocks());
+        n = script.wait(sc, n, (pixdiv(p) - 1) * window_clocks(p));
         n = script.read(sc, n, regs.pixline());
         n = script.read(sc, n, regs.zout());
         n = script.read(sc, n, regs.status());
-        n = script.wait(sc, n, window_clocks());
+        n = script.wait(sc, n, window_clocks(p));
     }
     if stage == 7 {
         n = script.write(sc, n, regs.ctrl(), 0);
@@ -176,6 +182,7 @@ fn period_of[&a](img: &a [int], line: int) -> [] int {
 // ---- looking at the results of a stage and choosing the next one ----
 pub fn consume[&a, &b, &c, &d](ss: &!a [int], sf: &!b [float], out: &c [int], img: &!d [int]) -> [] int {
     let stage = ss[0];
+    let p = ss[3];
     ss[1] = ss[1] + 1;
     if ss[1] > 40000 { ss[2] = 6; ss[0] = 98; return 0; }
     if stage == 0 {
@@ -192,7 +199,7 @@ pub fn consume[&a, &b, &c, &d](ss: &!a [int], sf: &!b [float], out: &c [int], im
             let d = alloc_slice[r](63, 0.0);
             var i = 0;
             while i < sweep_points() {
-                f[i] = sweep_f(i);
+                f[i] = sweep_f(p, i);
                 d[i] = float_of(out[1 + i]);
                 i = i + 1;
             }
@@ -202,7 +209,7 @@ pub fn consume[&a, &b, &c, &d](ss: &!a [int], sf: &!b [float], out: &c [int], im
             } else {
                 sf[0] = t.f0; sf[1] = t.q; sf[2] = t.peak;
                 // the plant gain k (figure counts per pm) assumes the free amplitude above; with no calibration it is the one number the program takes on trust
-                let g = tune.choose(t, t.peak / free_pm(), window_s(), 0.8);
+                let g = tune.choose(t, t.peak / free_pm(), window_s(p), 0.8);
                 ss[11] = g.shift; ss[13] = g.kp; ss[14] = g.ki; sf[3] = g.alpha;
                 ss[0] = 2;
             }
@@ -214,8 +221,8 @@ pub fn consume[&a, &b, &c, &d](ss: &!a [int], sf: &!b [float], out: &c [int], im
         if approach.check(params(ss), sf[3]) != 0 {
             ss[2] = 3; ss[0] = 98;
         } else {
-            let p = params(ss);
-            let a0 = approach.start(p);
+            let ap = params(ss);
+            let a0 = approach.start(ap);
             ss[4] = a0.phase; ss[5] = a0.z; ss[6] = a0.motor; ss[7] = a0.dwell; ss[8] = a0.fault;
             ss[0] = 3;
         }
@@ -225,8 +232,8 @@ pub fn consume[&a, &b, &c, &d](ss: &!a [int], sf: &!b [float], out: &c [int], im
         if out[0] == 2 && out[1] % 2 == 0 && out[1] / 4 % 2 == 0 { motor_ok = 1; }
         if out[0] == 2 && (out[1] % 2 == 1 || out[1] / 4 % 2 == 1) { motor_ok = 0; }
         ss[20] = 0;
-        let p = params(ss);
-        let a = approach.next(approach.A { phase: ss[4], z: ss[5], motor: ss[6], dwell: ss[7], fault: ss[8] }, out[out[0]], p);
+        let ap = params(ss);
+        let a = approach.next(approach.A { phase: ss[4], z: ss[5], motor: ss[6], dwell: ss[7], fault: ss[8] }, out[out[0]], ap);
         if a.motor > ss[6] { ss[20] = a.motor - ss[6]; ss[21] = ss[21] + (a.motor - ss[6]); }
         ss[4] = a.phase; ss[5] = a.z; ss[6] = a.motor; ss[7] = a.dwell; ss[8] = a.fault;
         if a.phase == 2 { ss[9] = a.z; ss[0] = 4; }
