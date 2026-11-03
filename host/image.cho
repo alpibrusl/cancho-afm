@@ -1,0 +1,165 @@
+edition 7;
+
+module image;
+
+// `image` -- levelling of an AFM image (docs/image-processing.md, I1). An image is nx * ny heights (pm) in a float slice, row-major, one scan line per row: the fast axis is x. Everything here
+// reads or edits the slice it is given and allocates only small scratch in a region, so it runs on the host after a scan. Checked on the twin's ground truth, not on a real image.
+
+// A fitted plane: z = mean + bx (x - xc) + by (y - yc), with xc, yc the image centre, bx and by in pm per pixel.
+pub struct Plane { mean: float, bx: float, by: float }
+
+// Least squares over the pixels whose mask byte `w` is 1 (0 leaves a pixel out). A region holds 64 KiB, so the robust fit's mask limits an image to 256 x 256 pixels and the scratch of `level_lines` is small. The normal equations are solved by Cramer's rule; with every pixel used the cross terms vanish.
+pub fn plane_fit[&a, &b](z: &a [float], w: &b [byte], nx: int, ny: int) -> [] Plane {
+    let xc = float_of(nx - 1) / 2.0;
+    let yc = float_of(ny - 1) / 2.0;
+    var s = 0.0; var sx = 0.0; var sy = 0.0; var sxx = 0.0; var sxy = 0.0; var syy = 0.0;
+    var tz = 0.0; var txz = 0.0; var tyz = 0.0;
+    var j = 0;
+    while j < ny {
+        var i = 0;
+        while i < nx {
+            if int_of(w[j * nx + i]) == 1 {
+                let x = float_of(i) - xc;
+                let y = float_of(j) - yc;
+                let v = z[j * nx + i];
+                s = s + 1.0; sx = sx + x; sy = sy + y; sxx = sxx + x * x; sxy = sxy + x * y; syy = syy + y * y;
+                tz = tz + v; txz = txz + x * v; tyz = tyz + y * v;
+            }
+            i = i + 1;
+        }
+        j = j + 1;
+    }
+    // | s   sx  sy  | |m |   |tz |
+    // | sx  sxx sxy | |bx| = |txz|
+    // | sy  sxy syy | |by|   |tyz|
+    let det = s * (sxx * syy - sxy * sxy) - sx * (sx * syy - sxy * sy) + sy * (sx * sxy - sxx * sy);
+    if det < 0.000001 && det > 0.0 - 0.000001 { return Plane { mean: 0.0, bx: 0.0, by: 0.0 }; }
+    let dm = tz * (sxx * syy - sxy * sxy) - sx * (txz * syy - sxy * tyz) + sy * (txz * sxy - sxx * tyz);
+    let db = s * (txz * syy - sxy * tyz) - tz * (sx * syy - sxy * sy) + sy * (sx * tyz - txz * sy);
+    let dc = s * (sxx * tyz - txz * sxy) - sx * (sx * tyz - txz * sy) + tz * (sx * sxy - sxx * sy);
+    return Plane { mean: dm / det, bx: db / det, by: dc / det };
+}
+
+// Subtract the plane's tilt (bx, by) and keep the image's level (the plane's mean stays in the heights).
+pub fn subtract_tilt[&a](z: &!a [float], nx: int, ny: int, p: Plane) -> [] int {
+    let xc = float_of(nx - 1) / 2.0;
+    let yc = float_of(ny - 1) / 2.0;
+    var j = 0;
+    while j < ny {
+        var i = 0;
+        while i < nx {
+            z[j * nx + i] = z[j * nx + i] - p.bx * (float_of(i) - xc) - p.by * (float_of(j) - yc);
+            i = i + 1;
+        }
+        j = j + 1;
+    }
+    return 0;
+}
+
+// The rms of the residual of the pixels in the mask about the plane.
+fn residual_rms[&a, &b](z: &a [float], w: &b [byte], nx: int, ny: int, p: Plane) -> [] float {
+    let xc = float_of(nx - 1) / 2.0;
+    let yc = float_of(ny - 1) / 2.0;
+    var sum = 0.0;
+    var n = 0.0;
+    var j = 0;
+    while j < ny {
+        var i = 0;
+        while i < nx {
+            if int_of(w[j * nx + i]) == 1 {
+                let r = z[j * nx + i] - p.mean - p.bx * (float_of(i) - xc) - p.by * (float_of(j) - yc);
+                sum = sum + r * r;
+                n = n + 1.0;
+            }
+            i = i + 1;
+        }
+        j = j + 1;
+    }
+    if n < 1.0 { return 0.0; }
+    return sqrt(sum / n);
+}
+
+// A plane that particles and pits do not pull on: fit, then leave out the pixels more than `k` residual rms from it and fit again, `rounds` times. A step across the image is still taken as tilt:
+// nothing in the pixels tells a real slope from a tilt.
+pub fn plane_robust[&a](z: &a [float], nx: int, ny: int, rounds: int, k: float) -> [] Plane {
+    var out = Plane { mean: 0.0, bx: 0.0, by: 0.0 };
+    region r {
+        let w = alloc_slice[r](nx * ny, byte_of(1));
+        out = plane_fit(z, w, nx, ny);
+        var round = 0;
+        while round < rounds {
+            let sd = residual_rms(z, w, nx, ny, out);
+            let xc = float_of(nx - 1) / 2.0;
+            let yc = float_of(ny - 1) / 2.0;
+            var j = 0;
+            while j < ny {
+                var i = 0;
+                while i < nx {
+                    var d = z[j * nx + i] - out.mean - out.bx * (float_of(i) - xc) - out.by * (float_of(j) - yc);
+                    if d < 0.0 { d = 0.0 - d; }
+                    if d > k * sd { w[j * nx + i] = byte_of(0); } else { w[j * nx + i] = byte_of(1); }
+                    i = i + 1;
+                }
+                j = j + 1;
+            }
+            out = plane_fit(z, w, nx, ny);
+            round = round + 1;
+        }
+    }
+    return out;
+}
+
+// The median of the first n entries of `v` (sorted in place; n at least 1).
+fn median_of[&a](v: &!a [float], n: int) -> [] float {
+    var i = 1;
+    while i < n {
+        let x = v[i];
+        var j = i - 1;
+        while j >= 0 && v[j] > x {
+            v[j + 1] = v[j];
+            j = j - 1;
+        }
+        v[j + 1] = x;
+        i = i + 1;
+    }
+    if n % 2 == 1 { return v[n / 2]; }
+    return (v[n / 2 - 1] + v[n / 2]) / 2.0;
+}
+
+// Remove line-to-line offsets without removing slow structure across the lines. Each line's median is compared with the median of the line medians within `reach` lines of it (itself included), and
+// the difference is subtracted from that line: an offset that differs from its neighbours' goes; a feature that spans more than `reach` lines stays. A step across the image shifts the lines on one side
+// and stays if it is more than `reach` lines from the edge on both sides; within `reach` of a step the lines are pulled a little toward their neighbours'. Subtracting every line's own median would
+// erase any structure along the slow axis (a terrace is half the lines at one level), which is why this is not that.
+pub fn level_lines[&a](z: &!a [float], nx: int, ny: int, reach: int) -> [] int {
+    region r {
+        let m = alloc_slice[r](ny, 0.0);
+        let row = alloc_slice[r](nx, 0.0);
+        let win = alloc_slice[r](2 * reach + 1, 0.0);
+        var j = 0;
+        while j < ny {
+            var i = 0;
+            while i < nx { row[i] = z[j * nx + i]; i = i + 1; }
+            m[j] = median_of(row, nx);
+            j = j + 1;
+        }
+        let off = alloc_slice[r](ny, 0.0);
+        j = 0;
+        while j < ny {
+            var n = 0;
+            var k = j - reach;
+            while k <= j + reach {
+                if k >= 0 && k < ny { win[n] = m[k]; n = n + 1; }
+                k = k + 1;
+            }
+            off[j] = m[j] - median_of(win, n);
+            j = j + 1;
+        }
+        j = 0;
+        while j < ny {
+            var i = 0;
+            while i < nx { z[j * nx + i] = z[j * nx + i] - off[j]; i = i + 1; }
+            j = j + 1;
+        }
+    }
+    return 0;
+}
