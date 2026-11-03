@@ -43,3 +43,9 @@ if [ -n "${KICAD_CLI:-}" ]; then
   sh hw/kicad/check.sh > /dev/null
   echo "hw/kicad schematic: generator, ERC and nets against the simulation: passed"
 fi
+# the scan -> particles.csv -> cancho-table flow (I3) needs a built `table`; it runs only when TABLE names one
+if [ -n "${TABLE:-}" ]; then
+  sh tests/particles_flow.sh
+else
+  echo "particles flow: skipped (set TABLE to a built cancho-table)"
+fi
