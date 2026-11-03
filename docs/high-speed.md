@@ -133,6 +133,8 @@ n = 18, m = 2 at 508 kHz, Q 6 (500 kHz, 9 samples per period exactly, word 47721
 * **Limits**: at 4.5 MS/s a cantilever above fs / 8 = 560 kHz has fewer than 8 samples per period (the profile above 600 kHz was not made to work; it needs the divider 3 or 4, 9 or 6.75 MS/s, chosen from the tuned frequency: not done). The snap assumes the drive can be set to the snapped frequency without losing the cantilever, true for a Q of about 5 and to be checked for the 100 or more of air.
 * **Twin, not measured:** the noise numbers are the twin's own (ADC noise of 2 counts, no photodiode), and its sampling is ideal.
 
+Image processing of the result (levelling, roughness, step height, pitch, particles) is designed in `docs/image-processing.md`.
+
 ## Risks
 
 1. **Optical detection** is a new subsystem (laser, alignment, quadrant photodiode, a fast TIA); none is designed. It is the schedule risk.
