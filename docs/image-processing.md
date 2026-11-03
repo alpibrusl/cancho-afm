@@ -35,7 +35,7 @@
 | I1 | Levelling: plane and line | a tilt added to a twin image (known to the pm) is recovered and removed to under 35 pm rms; a line offset added to every line is removed; tests, twin fork and HS images. **Done 2026-11-03, see "What I1 found"** |
 | I2 | Metrics: Ra, Rq, Rz, step height, grating pitch and height | terrace within 10%, pitch within 2%, grating height within 20%, on both profiles; Ra and Rq against a direct computation on the truth. **Done 2026-11-03, see "What I2 found"** |
 | I3 | Particle finder and its table | the twin's three particles found, heights within 20%, centres within a pixel, no false ones at the twin's noise; `particles.csv` read by `table` in a test of the flow. **Done 2026-11-03, see "What I3 found"** |
-| I4 | Drift: trace against retrace by cross-correlation | a drift set in the twin (`fl[8]`, pm per window) is estimated within 20%; then removed |
+| I4 | Drift: trace against retrace by cross-correlation | a drift set in the twin (`fl[8]`, pm per window) is estimated within 20%; then removed. **Done for x and height drift on the high-speed profile above a floor, see "What I4 found"** |
 | I5 | A page for it: levelled image, profile, table in `cancho-ui` (an image element is a change in that repo) | the live console shows the levelled image and the metrics of the last scan |
 | I6 | Fits with `cancho-opt` (grating, step, tip) | decided after I2: only if the closed-form metrics are not enough |
 
@@ -91,6 +91,36 @@ Images up to 256 x 256 (a region holds 64 KiB; the mask is bytes).
 * **Heights are above the local median, not above the lowest surface:** a particle on the terrace reads its height above the terrace (the third particle's 600 pm is measured from the 150 pm level, which is what is wanted), and a particle on a grating reads above the grating's median, so it carries up to +-50 pm of the grating's phase (the fork's 508 for 450 is probably that).
 * **The `table` flow** (`tests/particles_flow.sh`, run by `test_all.sh` when `TABLE` names a built `table`; otherwise it prints that it was skipped). It builds `scan_twin`, writes the HS 500 kHz scan's `particles.csv` and has `table` (cancho-table 0.3.0, built here from a clone with the local compiler and `--ignore-compiler-rev`, because it pins a compiler 173 commits older than the one I use) answer: three rows; `--agg count,max:height_pm:dec(2)` gives 3 and a maximum of 505 to 530 pm; `--where "height_pm:dec(2) > 450"` keeps 2 rows (above 550 it keeps none); and a decimal column **not** declared `:dec(2)` is refused with the rule `value.not-integer` rather than read as a number, which is the behaviour I wanted from it. Not run in CI here; I did not run `table`'s own tests under the newer compiler, so "works with a newer compiler" is shown only by this flow.
 * **Not done:** the pixel size is not known to the finder, so the area is in pixels and the heights and centres are not in nm and nm (the caller scales); overlapping particles are one group; touching the image edge is not flagged; a tilt steeper than the window can follow, and a tip of finite radius (the twin's tip is a point), are not handled.
+
+## What I4 found (`host/drift.cho`, `tests/drift_test.cho`, `./scan_twin <profile> <scanner> <kHz> 4 <x> <z>`; twin, 2026-11-03)
+
+**What the twin gained.** The sample drifts under the tip: `fl[20]` X DAC codes and `fl[8]` pm per detector window while a scan runs (`fl[22]` counts the windows; it is zero outside a scan, so the approach is unaffected). `scan_twin` takes the drift in milli-pixels per tick (a tick is one pixel of the raster) along x and milli-pm per tick in height, and now records the **retrace** as well as the trace: the raster already reports the tick (`pixline` runs 0 to 125 on a 64-pixel line), the retrace is ticks 64 to 125 and visits x = 62 down to 1.
+
+**Method.** The scan goes out and back along the same line, so point x is seen at tick x and at tick 2 (63 - x) + x: a lag of D(x) = 2 (63 - x) ticks. A drift of v pixels per tick along x makes the retrace see the surface shifted by v D(x) against the trace; a height drift of w pm per tick adds w D(x); and the feedback loop's own lag (the image trails the tip) adds a constant shift s. The model R(x) = T(x + s + v D(x)) + w D(x) + c(line) (c a free offset per line) is fitted by least squares over every pixel of every line: for a given (s, v) the height drift and the offsets are solved exactly, so only (s, v) are searched (a 25 x 25 grid, then a golden section along each in turn, four rounds). Not a plain cross-correlation: a cross-correlation gives one shift per window and cannot separate a drift (which grows along the line) from the loop's lag (which does not).
+* **Interpolation bias, found and fixed.** The first version compared the retrace with a cubic interpolation of the noisy trace. Interpolating noisy pixels at a fractional place averages their noise down by an amount that depends on the fraction, and the fit then preferred the shifts that average most: with 20 pm noise the model's own parameters scored 16.4 pm rms and a wrong shift 15.0, and v came out at 0.0004 for 0.006. Both images are now smoothed by the same kernel (1 4 6 4 1 / 16) before they are compared, and v is 0.006 within 10%.
+* **Correction** (`drift.correct`): each line's trace and retrace are put where they really were (relative to the middle of the line's time), the height drift taken off, and the two averaged. Drift **between** lines is not seen by a trace/retrace comparison and is not removed.
+
+**Tests with known answers** (`tests/drift_test.cho`, 64 x 32 images of a grating, a terrace and three bumps, 20 pm noise): drift 0.006 px per tick, lag 0.8 px, height drift 0.5 pm per tick recovered to 0.0006, 0.1 and 0.05; the same with all three negative; none set: all three under the floor; the correction brings the image within 10 pm of the surface (noise-free) where the raw trace is not.
+
+**On the twin's 64 x 64 scan** (HS profile, 500 kHz cantilever, ideal Z scanner unless stated; "set" and "found" in milli-pixels per tick along x, milli-pm per tick in height; the error is the rms difference from the true surface at the middle of each line's time, with the Z baseline removed, pm):
+
+| set x, z | found x, z | raw trace error | corrected error |
+|---|---|---|---|
+| 0, 0 | 1.4, 3 | 3.8 | 2.2 |
+| 3, 0 | 4.0, 1 | 4.4 | 2.7 |
+| 5, 0 | 5.9, 0 | 5.4 | 2.6 |
+| 8, 0 | 7.1, -3 | 6.5 | 2.3 |
+| 16, 500 | 15.0, 490 | 12.5 | 1.9 |
+| 30, 0 | 27.2, 0 | 18.1 | 2.2 |
+| 8, 0 at 300 kHz | 7.9, 1 | 7.4 | 2.6 |
+| 8, 0 at 600 kHz | 8.2, -5 | 6.3 | 2.5 |
+| 20, 500 on the fork | 20.0, 492 | 31.1 | 7.3 |
+
+* **Acceptance (within 20%) holds from 5 milli-pixels per tick** (0.6 pixel over a line), on the 300 to 600 kHz cantilevers and on the fork. The height drift is within 2% wherever the loop keeps the surface.
+* **The floor is a bias of about 1.4 milli-pixels per tick on the 500 and 600 kHz images with no drift set** (0.0 at 300 kHz). It grows with the loop's lag and is the same sign as the drift: the model takes the lag as one shift, and the loop's response to a grating, a particle and a step is not one shift. So a drift below about 5 milli-pixels per tick (under 0.6 pixel between the two ends of a line) cannot be told from the loop's asymmetry. I did not try to model the lag better (a lag per feature size is a candidate); the cost is a floor, not a wrong answer.
+* **Where it fails.** A height drift of 1 pm per tick (126 pm per line, 8 nm per frame) makes the twin lose the surface (the scan is garbage; this is the loop, not the estimator; the cause I did not look into: the contact range or the Z limit); 0.5 is fine. The x search is limited to shifts of 3 pixels at the far end of a line (a quarter of the grating's period).
+* **The error after correction (about 2 pm) is the image's own noise floor** on the HS profile; the fork's remains 7 pm, because its lag is 2 pixels and the pixel-to-pixel structure the model cannot follow is larger.
+* **What is not tested:** a real drift is not linear in time (it relaxes after a move); y drift (between lines) is not estimated; the zero of the drift clock (a few ticks) is taken as the scan start in the scoring.
 
 ## Open questions
 

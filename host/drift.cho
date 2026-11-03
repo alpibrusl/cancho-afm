@@ -1,0 +1,201 @@
+edition 7;
+
+module drift;
+
+// `drift` -- drift of the sample under the tip, from the trace and the retrace of the same lines (docs/image-processing.md, I4). The scan goes along x and back along the same line, so a point x is
+// visited at tick x on the way out and tick 2 (nx - 1) - x on the way back, a lag of D(x) = 2 (nx - 1 - x) ticks. A drift of v pixels per tick along x makes the retrace see the surface shifted by
+// v D(x) against the trace, a drift of w pm per tick in height adds w D(x), and the feedback loop's own lag (an image trails the tip in the direction of travel) adds a constant shift s that does not
+// depend on x. The model is  R(x) = T(x + s + v D(x)) + w D(x) + c(line)  with c a free offset per line; s, v and w are estimated, by least squares over every pixel of every line:
+// for a given (s, v) the height drift w and the offsets are solved exactly, so only (s, v) are searched (a grid, then a golden section along each in turn). Drift between lines (y) is not seen by this.
+// T is interpolated with a cubic (Catmull-Rom). Checked on synthetic images and the twin's scan, not on a real image.
+
+pub struct Drift { shift: float, v: float, w: float, rms: float }
+
+// The value of line `j` of `z` at the fractional position `p` (cubic through the four pixels about it; indexes clamped to the line).
+fn cubic[&a](z: &a [float], j: int, nx: int, p: float) -> [] float {
+    var i0 = truncate(p);
+    if p < 0.0 { i0 = 0 - 1; }
+    let f = p - float_of(i0);
+    var im = i0 - 1; var ia = i0; var ib = i0 + 1; var ic = i0 + 2;
+    if im < 0 { im = 0; } if ia < 0 { ia = 0; } if ib < 0 { ib = 0; } if ic < 0 { ic = 0; }
+    if im > nx - 1 { im = nx - 1; } if ia > nx - 1 { ia = nx - 1; } if ib > nx - 1 { ib = nx - 1; } if ic > nx - 1 { ic = nx - 1; }
+    let p0 = z[j * nx + im]; let p1 = z[j * nx + ia]; let p2 = z[j * nx + ib]; let p3 = z[j * nx + ic];
+    return p1 + 0.5 * f * (p2 - p0 + f * (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3 + f * (3.0 * (p1 - p2) + p3 - p0)));
+}
+
+// Line `j` of `z` smoothed by the binomial kernel 1 4 6 4 1 / 16 (the line clamped to [lo, hi], the pixels the scan visited; `o` is filled there) into `o`. Both images are smoothed alike before they are compared: interpolating noisy pixels at a fractional place
+// averages their noise down by an amount that depends on the fraction, and a least-squares fit then prefers the shifts that happen to average the most (found: with 20 pm noise the model's own
+// parameters scored 16.4 pm and a wrong shift 15.0). Smooth data interpolates without that.
+fn smooth_line[&a, &b](z: &a [float], j: int, nx: int, lo: int, hi: int, o: &!b [float]) -> [] int {
+    var i = lo;
+    while i <= hi {
+        var im2 = i - 2; var im1 = i - 1; var ip1 = i + 1; var ip2 = i + 2;
+        if im2 < lo { im2 = lo; } if im1 < lo { im1 = lo; } if ip1 > hi { ip1 = hi; } if ip2 > hi { ip2 = hi; }
+        o[i] = (z[j * nx + im2] + 4.0 * z[j * nx + im1] + 6.0 * z[j * nx + i] + 4.0 * z[j * nx + ip1] + z[j * nx + ip2]) / 16.0;
+        i = i + 1;
+    }
+    return 0;
+}
+
+struct Fit { sse: float, w: float, n: float }
+
+// The residual of the model for (s, v) with the height drift and the line offsets solved: pixels count when the retrace has them (valid >= 0 marks a pixel; the caller passes the retrace with `gap` for none)
+// and the position they map to is inside the line.
+fn fit_at[&a, &b](t: &a [float], r: &b [float], nx: int, ny: int, gap: float, s: float, v: float) -> [] Fit {
+    var sed = 0.0; var sdd = 0.0; var see = 0.0; var n = 0.0;
+    region g {
+        let ts = alloc_slice[g](nx, 0.0);
+        let rs = alloc_slice[g](nx, 0.0);
+        var j = 0;
+        while j < ny {
+            smooth_line(t, j, nx, 0, nx - 1, ts);
+            smooth_line(r, j, nx, 1, nx - 2, rs);
+            var cnt = 0.0; var me = 0.0; var md = 0.0;
+            var i = 3;
+            while i < nx - 3 {
+                let d = float_of(2 * (nx - 1 - i));
+                let q = float_of(i) + s + v * d;
+                if r[j * nx + i] > gap && q >= 2.0 && q <= float_of(nx - 3) {
+                    cnt = cnt + 1.0; me = me + (rs[i] - cubic(ts, 0, nx, q)); md = md + d;
+                }
+                i = i + 1;
+            }
+            if cnt >= 3.0 {
+                me = me / cnt; md = md / cnt;
+                i = 3;
+                while i < nx - 3 {
+                    let d = float_of(2 * (nx - 1 - i));
+                    let q = float_of(i) + s + v * d;
+                    if r[j * nx + i] > gap && q >= 2.0 && q <= float_of(nx - 3) {
+                        let e = rs[i] - cubic(ts, 0, nx, q) - me;
+                        sed = sed + e * (d - md); sdd = sdd + (d - md) * (d - md); see = see + e * e; n = n + 1.0;
+                    }
+                    i = i + 1;
+                }
+            }
+            j = j + 1;
+        }
+    }
+    if sdd < 0.000001 { return Fit { sse: see, w: 0.0, n: n }; }
+    let w = sed / sdd;
+    return Fit { sse: see - w * sed, w: w, n: n };
+}
+
+fn golden_s[&a, &b](t: &a [float], r: &b [float], nx: int, ny: int, gap: float, lo0: float, hi0: float, v: float) -> [] float {
+    var lo = lo0; var hi = hi0;
+    let g = 0.6180339887498949;
+    var x1 = hi - g * (hi - lo); var x2 = lo + g * (hi - lo);
+    var f1 = fit_at(t, r, nx, ny, gap, x1, v).sse; var f2 = fit_at(t, r, nx, ny, gap, x2, v).sse;
+    var it = 0;
+    while it < 24 {
+        if f1 < f2 { hi = x2; x2 = x1; f2 = f1; x1 = hi - g * (hi - lo); f1 = fit_at(t, r, nx, ny, gap, x1, v).sse; }
+        else { lo = x1; x1 = x2; f1 = f2; x2 = lo + g * (hi - lo); f2 = fit_at(t, r, nx, ny, gap, x2, v).sse; }
+        it = it + 1;
+    }
+    return (lo + hi) / 2.0;
+}
+
+fn golden_v[&a, &b](t: &a [float], r: &b [float], nx: int, ny: int, gap: float, lo0: float, hi0: float, s: float) -> [] float {
+    var lo = lo0; var hi = hi0;
+    let g = 0.6180339887498949;
+    var x1 = hi - g * (hi - lo); var x2 = lo + g * (hi - lo);
+    var f1 = fit_at(t, r, nx, ny, gap, s, x1).sse; var f2 = fit_at(t, r, nx, ny, gap, s, x2).sse;
+    var it = 0;
+    while it < 24 {
+        if f1 < f2 { hi = x2; x2 = x1; f2 = f1; x1 = hi - g * (hi - lo); f1 = fit_at(t, r, nx, ny, gap, s, x1).sse; }
+        else { lo = x1; x1 = x2; f1 = f2; x2 = lo + g * (hi - lo); f2 = fit_at(t, r, nx, ny, gap, s, x2).sse; }
+        it = it + 1;
+    }
+    return (lo + hi) / 2.0;
+}
+
+// Estimate the drift from the trace `t` and the retrace `r` (both nx * ny, row-major, x = pixel position, so the retrace is stored in x order; pixels the retrace did not visit hold `gap` or less).
+// The search covers shifts of up to `reach` pixels at the most distant end of the line (and in the lag s), which must stay under half the shortest period of the surface.
+pub fn estimate[&a, &b](t: &a [float], r: &b [float], nx: int, ny: int, gap: float, reach: float) -> [] Drift {
+    let dmax = float_of(2 * (nx - 2));
+    let vmax = reach / dmax;
+    var bs = 0.0; var bv = 0.0; var best = 1.0e30;
+    var a = 0 - 12;
+    while a <= 12 {
+        var b = 0 - 12;
+        while b <= 12 {
+            let s = reach * float_of(a) / 12.0;
+            let v = vmax * float_of(b) / 12.0;
+            let f = fit_at(t, r, nx, ny, gap, s, v).sse;
+            if f < best { best = f; bs = s; bv = v; }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    let ds = reach / 12.0;
+    let dv = vmax / 12.0;
+    var round = 0;
+    while round < 4 {
+        bs = golden_s(t, r, nx, ny, gap, bs - ds, bs + ds, bv);
+        bv = golden_v(t, r, nx, ny, gap, bv - dv, bv + dv, bs);
+        round = round + 1;
+        // the second and later rounds search in a narrower interval
+    }
+    let f = fit_at(t, r, nx, ny, gap, bs, bv);
+    var rms = 0.0;
+    if f.n > 0.0 { rms = sqrt(f.sse / f.n); }
+    return Drift { shift: bs, v: bv, w: f.w, rms: rms };
+}
+
+// Put one line of samples at positions p_i = i + shift_i + v (i - tm)... on the regular grid by linear interpolation: `pos(i)` is where sample i really was. Samples at positions outside [0, nx - 1] are dropped.
+// Writes the grid values to `g` (and 1 to `have` where the grid point lies inside the sampled range).
+fn regrid[&a, &b, &c, &d](z: &a [float], zr: &b [float], j: int, nx: int, pos: &c [float], g: &!d [float], have: &!d [float], first: int, last: int) -> [] int {
+    var x = 0;
+    while x < nx {
+        have[x] = 0.0;
+        var i = first;
+        while i < last {
+            if pos[i] <= float_of(x) && float_of(x) <= pos[i + 1] {
+                let span = pos[i + 1] - pos[i];
+                var f = 0.0;
+                if span > 0.000001 { f = (float_of(x) - pos[i]) / span; }
+                g[x] = zr[i] * (1.0 - f) + zr[i + 1] * f;
+                have[x] = 1.0;
+            }
+            i = i + 1;
+        }
+        x = x + 1;
+    }
+    return 0;
+}
+
+// The drift-corrected image: every line's trace and retrace are placed where they really were (relative to the middle of the line's time) and the height drift taken off, and the two are averaged
+// where both cover a grid point. Writes nx * ny heights to `out`. Drift between lines is not removed; the image shows the sample as it was in the middle of each line.
+pub fn correct[&a, &b, &c](t: &a [float], r: &b [float], nx: int, ny: int, gap: float, d: Drift, out: &!c [float]) -> [] int {
+    region g {
+        let tm = float_of(nx - 1);
+        let pt = alloc_slice[g](nx, 0.0); let zt = alloc_slice[g](nx, 0.0);
+        let pr = alloc_slice[g](nx, 0.0); let zr = alloc_slice[g](nx, 0.0);
+        let gt = alloc_slice[g](nx, 0.0); let ht = alloc_slice[g](nx, 0.0);
+        let gr = alloc_slice[g](nx, 0.0); let hr = alloc_slice[g](nx, 0.0);
+        var j = 0;
+        while j < ny {
+            var i = 0;
+            while i < nx {
+                let x = float_of(i);
+                pt[i] = x + d.v * (x - tm) - d.shift / 2.0;
+                zt[i] = t[j * nx + i] - d.w * (x - tm);
+                pr[i] = x + d.v * (2.0 * tm - x - tm) + d.shift / 2.0;
+                zr[i] = r[j * nx + i] - d.w * (2.0 * tm - x - tm);
+                i = i + 1;
+            }
+            regrid(t, zt, j, nx, pt, gt, ht, 0, nx - 1);
+            regrid(r, zr, j, nx, pr, gr, hr, 1, nx - 2);
+            var x = 0;
+            while x < nx {
+                var v = 0.0;
+                if ht[x] > 0.5 && hr[x] > 0.5 { v = (gt[x] + gr[x]) / 2.0; }
+                else { if ht[x] > 0.5 { v = gt[x]; } else { if hr[x] > 0.5 { v = gr[x]; } else { v = t[j * nx + x]; } } }
+                out[j * nx + x] = v;
+                x = x + 1;
+            }
+            j = j + 1;
+        }
+    }
+    return 0;
+}
