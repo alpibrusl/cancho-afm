@@ -1,0 +1,55 @@
+edition 5;
+
+module adc_par;
+
+// `adc_par` -- a cycle-accurate model of the interface to a parallel pipelined ADC (the AD9226 module of docs/hs-order.md: 12 bits, a clock input, data out), one FPGA clock per call. Each
+// state is what the generated registers hold after a clock edge; the generated SystemVerilog (gen/sv.cho) must equal it on every clock. NOT TESTED AGAINST A REAL CHIP.
+//
+// What the AD9226 datasheet (Rev. Pr A, 10/22/99, read 2026-11-03; a later revision may differ) says, and what this block assumes:
+//   * the input is sampled on the rising edge of CLK (aperture delay 1 ns after it); the output for that sample appears 7 clock cycles later, 7 ns typical and 10 ns at most after a rising
+//     edge (a Rev. B table found in a search says 3.5 to 7 ns: either is far under one FPGA clock of 37 ns); so the data after rising edge k is the sample of edge k - 7;
+//   * the conversion clock may run from 15.38 ns (65 MHz) per period, with 3 ns pulse widths at least, and be extended to 10 us; OTR (out of range) has the same delay as the data;
+//   * the output is straight binary or two's complement by the MODE pin: this block takes straight binary (the module's strap is **[unchecked]**), 12 bits, mid-scale 2048.
+// The block drives the ADC clock itself, from the FPGA clock: low for `half` FPGA clocks, high for `half`, and so on (`half` 1 to 255: 13.5 MS/s at 27 MHz for 1, 4.5 MS/s for 3; read when `en`
+// rises and held). It captures the data on the last clock of the high phase, at least `half` FPGA clocks after the rising edge, 37 ns or more against the chip's 10 ns. The first 7 captures after
+// `en` rises are the pipeline filling and are not reported; from the 8th on, `done` pulses for one clock, with `code` (the 12 bits) and `otr` for the sample of edge k - 7. `en` low holds the clock low.
+
+pub struct P { run: int, ck: int, pos: int, hl: int, n: int, done: int, code: int, otr: int }
+
+pub fn latency() -> [] int { return 7; }
+
+pub fn reset() -> [] P {
+    return P { run: 0, ck: 0, pos: 0, hl: 1, n: 0, done: 0, code: 0, otr: 0 };
+}
+
+fn at_least_one(h: int) -> [] int {
+    if h < 1 {
+        return 1;
+    }
+    return h;
+}
+
+pub fn step(s: P, en: int, half: int, d: int, otr: int) -> [] P {
+    if en == 0 {
+        return P { run: 0, ck: 0, pos: 0, hl: s.hl, n: 0, done: 0, code: s.code, otr: s.otr };
+    }
+    var h = s.hl;
+    var ck = s.ck;
+    var pos = s.pos;
+    var n = s.n;
+    if s.run == 0 {
+        h = at_least_one(half);
+        ck = 0;
+        pos = 0;
+        n = 0;
+    }
+    if pos == h - 1 {
+        if ck == 1 {
+            var done = 0;
+            if n >= latency() { done = 1; }
+            return P { run: 1, ck: 0, pos: 0, hl: h, n: n + 1, done: done, code: d % 4096, otr: otr % 2 };
+        }
+        return P { run: 1, ck: 1, pos: 0, hl: h, n: n, done: 0, code: s.code, otr: s.otr };
+    }
+    return P { run: 1, ck: ck, pos: pos + 1, hl: h, n: n, done: 0, code: s.code, otr: s.otr };
+}
