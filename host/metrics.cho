@@ -1,0 +1,242 @@
+edition 7;
+
+module metrics;
+
+import std.math;
+
+// `metrics` -- numbers read off an AFM image (docs/image-processing.md, I2). An image is nx * ny heights (pm) in a float slice, row-major, one scan line per row, x the fast axis. The methods are the
+// estimators of the models, not shortcuts: roughness is the plain sums; a step is an exhaustive edge search with a least-squares fit of two levels and a common slope along the lines (exact maximum
+// likelihood for white noise once the edge is placed); a grating is a joint least-squares sinusoid over all lines with one frequency, one amplitude and phase and a free offset per line (variable
+// projection: for a given frequency the amplitudes and offsets are solved exactly, and only the frequency is searched), refitted without the pixels beyond 3 residual rms so particles do not pull it.
+// Checked on synthetic images and the twin's scan, not on a real image.
+
+// Line roughness in the sense of ISO 4287 with one scan line as the evaluation length and no cut-off filter: Ra and Rq about the image mean, Rz the mean over the lines of (highest - lowest) in the line.
+pub struct Rough { ra: float, rq: float, rz: float }
+
+pub fn rough[&a](z: &a [float], nx: int, ny: int) -> [] Rough {
+    var mean = 0.0;
+    var k = 0;
+    while k < nx * ny { mean = mean + z[k]; k = k + 1; }
+    mean = mean / float_of(nx * ny);
+    var sa = 0.0;
+    var sq = 0.0;
+    var rz = 0.0;
+    var j = 0;
+    while j < ny {
+        var lo = z[j * nx];
+        var hi = z[j * nx];
+        var i = 0;
+        while i < nx {
+            let v = z[j * nx + i];
+            var d = v - mean;
+            sq = sq + d * d;
+            if d < 0.0 { d = 0.0 - d; }
+            sa = sa + d;
+            if v < lo { lo = v; }
+            if v > hi { hi = v; }
+            i = i + 1;
+        }
+        rz = rz + (hi - lo);
+        j = j + 1;
+    }
+    let n = float_of(nx * ny);
+    return Rough { ra: sa / n, rq: sqrt(sq / n), rz: rz / float_of(ny) };
+}
+
+// The median of the first n entries of `v` (sorted in place; n at least 1).
+fn median_of[&a](v: &!a [float], n: int) -> [] float {
+    var i = 1;
+    while i < n {
+        let x = v[i];
+        var j = i - 1;
+        while j >= 0 && v[j] > x {
+            v[j + 1] = v[j];
+            j = j - 1;
+        }
+        v[j + 1] = x;
+        i = i + 1;
+    }
+    if n % 2 == 1 { return v[n / 2]; }
+    return (v[n / 2 - 1] + v[n / 2]) / 2.0;
+}
+
+// A step across the lines: the first line of the upper level, its height (pm; the upper level minus the lower, at the edge) and the common slope along y (pm per line).
+pub struct Step { line: int, height: float, slope: float, rms: float }
+
+// Fit  m_j = a + b (j - jc) + h [j >= k]  to the line medians for every edge k with at least `margin` lines on each side; the best k is the one with the least squared residual. The medians keep the
+// grating and the particles (a minority of every line) out; the slope keeps a tilt along y from being read as part of the step, so this is to be run on the image BEFORE a plane is taken out (a plane
+// flattens a real step into a slope, docs/image-processing.md).
+pub fn step_fit[&a](z: &a [float], nx: int, ny: int, margin: int) -> [] Step {
+    var best = Step { line: 0, height: 0.0, slope: 0.0, rms: 0.0 };
+    region r {
+        let m = alloc_slice[r](ny, 0.0);
+        let row = alloc_slice[r](nx, 0.0);
+        var j = 0;
+        while j < ny {
+            var i = 0;
+            while i < nx { row[i] = z[j * nx + i]; i = i + 1; }
+            m[j] = median_of(row, nx);
+            j = j + 1;
+        }
+        let jc = float_of(ny - 1) / 2.0;
+        var bsse = 1.0e30;
+        var k = margin;
+        while k <= ny - margin {
+            // normal equations in (a, b, h): columns 1, (j - jc), [j >= k]
+            var s1 = 0.0; var sj = 0.0; var sjj = 0.0; var sh = 0.0; var sjh = 0.0;
+            var tm = 0.0; var tjm = 0.0; var thm = 0.0; var tmm = 0.0;
+            j = 0;
+            while j < ny {
+                let x = float_of(j) - jc;
+                var hh = 0.0;
+                if j >= k { hh = 1.0; }
+                s1 = s1 + 1.0; sj = sj + x; sjj = sjj + x * x; sh = sh + hh; sjh = sjh + x * hh;
+                tm = tm + m[j]; tjm = tjm + x * m[j]; thm = thm + hh * m[j]; tmm = tmm + m[j] * m[j];
+                j = j + 1;
+            }
+            // | s1  sj  sh  | |a|   |tm |
+            // | sj  sjj sjh | |b| = |tjm|     (the h column's own square is sh: [j >= k] is 0 or 1)
+            // | sh  sjh sh  | |h|   |thm|
+            let det = s1 * (sjj * sh - sjh * sjh) - sj * (sj * sh - sjh * sh) + sh * (sj * sjh - sjj * sh);
+            if det > 0.000001 || det < 0.0 - 0.000001 {
+                let da = tm * (sjj * sh - sjh * sjh) - sj * (tjm * sh - sjh * thm) + sh * (tjm * sjh - sjj * thm);
+                let db = s1 * (tjm * sh - sjh * thm) - tm * (sj * sh - sjh * sh) + sh * (sj * thm - tjm * sh);
+                let dh = s1 * (sjj * thm - tjm * sjh) - sj * (sj * thm - tjm * sh) + tm * (sj * sjh - sjj * sh);
+                let fa = da / det;
+                let fb = db / det;
+                let fh = dh / det;
+                let sse = tmm - (fa * tm + fb * tjm + fh * thm);
+                if sse < bsse {
+                    bsse = sse;
+                    best = Step { line: k, height: fh, slope: fb, rms: 0.0 };
+                }
+            }
+            k = k + 1;
+        }
+        var s = bsse / float_of(ny);
+        if s < 0.0 { s = 0.0; }
+        best = Step { line: best.line, height: best.height, slope: best.slope, rms: sqrt(s) };
+    }
+    return best;
+}
+
+// The grating: pitch in pixels, peak-to-peak height in pm (twice the sine's amplitude), and the fit's residual rms in pm.
+pub struct Grating { pitch: float, height: float, rms: float }
+
+// Amplitudes (cos, sin) and the squared residual of the least-squares sinusoid of angular frequency `om` (per pixel) with a free offset per line, over the pixels whose mask byte is 1.
+struct Sine { ca: float, sb: float, sse: float, n: float }
+
+fn sine_ls[&a, &b](z: &a [float], w: &b [byte], nx: int, ny: int, om: float) -> [] Sine {
+    var scc = 0.0; var scs = 0.0; var sss = 0.0; var scz = 0.0; var ssz = 0.0; var szz = 0.0; var n = 0.0;
+    var j = 0;
+    while j < ny {
+        var cnt = 0.0; var mc = 0.0; var ms = 0.0; var mz = 0.0;
+        var i = 0;
+        while i < nx {
+            if int_of(w[j * nx + i]) == 1 {
+                let t = om * float_of(i);
+                cnt = cnt + 1.0; mc = mc + math.cos(t); ms = ms + math.sin(t); mz = mz + z[j * nx + i];
+            }
+            i = i + 1;
+        }
+        if cnt >= 2.0 {
+            mc = mc / cnt; ms = ms / cnt; mz = mz / cnt;
+            i = 0;
+            while i < nx {
+                if int_of(w[j * nx + i]) == 1 {
+                    let t = om * float_of(i);
+                    let c = math.cos(t) - mc;
+                    let s = math.sin(t) - ms;
+                    let v = z[j * nx + i] - mz;
+                    scc = scc + c * c; scs = scs + c * s; sss = sss + s * s; scz = scz + c * v; ssz = ssz + s * v; szz = szz + v * v;
+                    n = n + 1.0;
+                }
+                i = i + 1;
+            }
+        }
+        j = j + 1;
+    }
+    let det = scc * sss - scs * scs;
+    if det < 0.000000001 { return Sine { ca: 0.0, sb: 0.0, sse: szz, n: n }; }
+    let ca = (scz * sss - ssz * scs) / det;
+    let sb = (ssz * scc - scz * scs) / det;
+    return Sine { ca: ca, sb: sb, sse: szz - (ca * scz + sb * ssz), n: n };
+}
+
+fn pi2() -> [] float { return 6.283185307179586; }
+
+// Search the frequency: a coarse grid in f (cycles per pixel) from a period of nx / 2 down to 3 pixels in steps of 1 / (8 nx), then a golden-section refinement of the best cell's neighbourhood.
+fn best_freq[&a, &b](z: &a [float], w: &b [byte], nx: int, ny: int) -> [] float {
+    let df = 1.0 / (8.0 * float_of(nx));
+    var f = 2.0 / float_of(nx);
+    var bf = f;
+    var bs = 1.0e30;
+    while f < 1.0 / 3.0 {
+        let s = sine_ls(z, w, nx, ny, pi2() * f).sse;
+        if s < bs { bs = s; bf = f; }
+        f = f + df;
+    }
+    var lo = bf - df;
+    var hi = bf + df;
+    let g = 0.6180339887498949;
+    var x1 = hi - g * (hi - lo);
+    var x2 = lo + g * (hi - lo);
+    var f1 = sine_ls(z, w, nx, ny, pi2() * x1).sse;
+    var f2 = sine_ls(z, w, nx, ny, pi2() * x2).sse;
+    var it = 0;
+    while it < 40 {
+        if f1 < f2 {
+            hi = x2; x2 = x1; f2 = f1;
+            x1 = hi - g * (hi - lo);
+            f1 = sine_ls(z, w, nx, ny, pi2() * x1).sse;
+        } else {
+            lo = x1; x1 = x2; f1 = f2;
+            x2 = lo + g * (hi - lo);
+            f2 = sine_ls(z, w, nx, ny, pi2() * x2).sse;
+        }
+        it = it + 1;
+    }
+    return (lo + hi) / 2.0;
+}
+
+// Fit the grating of an image (one that has one: the search finds the strongest sinusoid along x between periods of 3 pixels and nx / 2). Two outlier rounds: pixels more than 3 residual rms from the
+// fit (particles, edges) are left out and the frequency and amplitudes are fitted again.
+pub fn grating_fit[&a](z: &a [float], nx: int, ny: int) -> [] Grating {
+    var out = Grating { pitch: 0.0, height: 0.0, rms: 0.0 };
+    region r {
+        let w = alloc_slice[r](nx * ny, byte_of(1));
+        var round = 0;
+        while round < 3 {
+            let f = best_freq(z, w, nx, ny);
+            let om = pi2() * f;
+            let sn = sine_ls(z, w, nx, ny, om);
+            out = Grating { pitch: 1.0 / f, height: 2.0 * sqrt(sn.ca * sn.ca + sn.sb * sn.sb), rms: sqrt(sn.sse / (sn.n + 1.0)) };
+            if round < 2 {
+                // the residuals about the fit with each line's offset (its mean of z - model over the kept pixels)
+                var j = 0;
+                while j < ny {
+                    var cnt = 0.0; var mo = 0.0;
+                    var i = 0;
+                    while i < nx {
+                        if int_of(w[j * nx + i]) == 1 {
+                            mo = mo + z[j * nx + i] - sn.ca * math.cos(om * float_of(i)) - sn.sb * math.sin(om * float_of(i));
+                            cnt = cnt + 1.0;
+                        }
+                        i = i + 1;
+                    }
+                    if cnt > 0.0 { mo = mo / cnt; }
+                    i = 0;
+                    while i < nx {
+                        var d = z[j * nx + i] - mo - sn.ca * math.cos(om * float_of(i)) - sn.sb * math.sin(om * float_of(i));
+                        if d < 0.0 { d = 0.0 - d; }
+                        if d > 3.0 * out.rms { w[j * nx + i] = byte_of(0); } else { w[j * nx + i] = byte_of(1); }
+                        i = i + 1;
+                    }
+                    j = j + 1;
+                }
+            }
+            round = round + 1;
+        }
+    }
+    return out;
+}

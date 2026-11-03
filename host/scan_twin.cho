@@ -7,6 +7,7 @@ import run_twin;
 import session;
 import regs;
 import image;
+import metrics;
 
 // The twin's automatic procedure up to the loop being closed (host/session.cho: tune, choose, approach), then a larger raster (64 x 64) over the made-up sample of sim/board.cho
 // (grating, terrace step, three particles) with noise and slow drift. Prints the image (Z, pm), one `line pixel Z` record per reading (a pixel may be read more than once; the last reading is the one the loop settled to). A prediction of this software, not a measurement.
@@ -77,7 +78,45 @@ fn analyse[&h, &a](heap: &!h Heap, o: buffer.Buffer, pic: &a [int]) -> [heap] bu
     return b;
 }
 
-// the profile: argument 1 (the scanner, argument 2, and for the high-speed profile the cantilever's resonance in kHz, argument 3, the same way; default 500; argument 4 = 1 prints the levelling check of docs/image-processing.md instead of the pixels), `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md)
+// The metrics check on the twin's own image (docs/image-processing.md, I2): the same numbers are read off the scanned trace and off the sample's true surface at the pixels' places (`surface_at`, x = 1000 + 100 i,
+// y = 1000 + 100 j), no noise, no tracking error. The true values of the sample are a 150 pm terrace from line 25, a grating of 100 pm peak to peak and 12 pixels' pitch.
+fn report[&h, &t, &a](heap: &!h Heap, o: buffer.Buffer, tag: &t [byte], z: &a [float]) -> [heap] buffer.Buffer {
+    var b = o;
+    let q = metrics.rough(z, 64, 64);
+    let s = metrics.step_fit(z, 64, 64, 4);
+    let g = metrics.grating_fit(z, 64, 64);
+    b = text(heap, b, tag); b = text(heap, b, ": Ra "); b = num(heap, b, truncate(q.ra * 1000.0)); b = text(heap, b, " Rq "); b = num(heap, b, truncate(q.rq * 1000.0)); b = text(heap, b, " Rz "); b = num(heap, b, truncate(q.rz * 1000.0));
+    b = text(heap, b, " (milli pm); step at line "); b = num(heap, b, s.line); b = text(heap, b, " height "); b = num(heap, b, truncate(s.height * 1000.0)); b = text(heap, b, " slope "); b = num(heap, b, truncate(s.slope * 1000.0));
+    b = text(heap, b, "; grating pitch "); b = num(heap, b, truncate(g.pitch * 1000.0)); b = text(heap, b, " (milli pixel), height "); b = num(heap, b, truncate(g.height * 1000.0)); b = text(heap, b, " (milli pm), fit rms "); b = num(heap, b, truncate(g.rms * 1000.0)); b = text(heap, b, "\n");
+    return b;
+}
+
+fn metrics_check[&h, &a, &b2, &c, &d](heap: &!h Heap, o: buffer.Buffer, pic: &a [int], rf: &b2 [int], st: &!c [int], fl: &d [float]) -> [heap] buffer.Buffer {
+    var b = o;
+    region r1 {
+        let t = alloc_slice[r1](4096, 0.0);
+        var k = 0;
+        while k < 4096 { t[k] = float_of(pic[k]); k = k + 1; }
+        b = report(heap, b, "measured", t);
+    }
+    region r2 {
+        let t = alloc_slice[r2](4096, 0.0);
+        var j = 0;
+        while j < 64 {
+            var i = 0;
+            while i < 64 {
+                st[19] = 1000 + 100 * i; st[20] = 1000 + 100 * j;
+                t[j * 64 + i] = board.surface_at(rf, st, fl);
+                i = i + 1;
+            }
+            j = j + 1;
+        }
+        b = report(heap, b, "truth   ", t);
+    }
+    return b;
+}
+
+// the profile: argument 1 (the scanner, argument 2, and for the high-speed profile the cantilever's resonance in kHz, argument 3, the same way; default 500; argument 4 = 1 prints the levelling check, 2 the metrics check, of docs/image-processing.md instead of the pixels), `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md)
 fn number_of[&t](text: &t [byte]) -> [] int {
     var n = 0;
     var i = 0;
@@ -172,12 +211,13 @@ fn main(world: World) -> [] int {
                 if ln >= side() { done = 1; }
                 else {
                     if pix < 64 && ln < 64 { pic[ln * 64 + pix] = out[2]; }
-                    if lv == 0 { o = num(h, o, ln); o = text(h, o, " "); o = num(h, o, pix); o = text(h, o, " "); o = num(h, o, out[2]); o = text(h, o, "\n"); }
+                    if lv != 1 && lv != 2 { o = num(h, o, ln); o = text(h, o, " "); o = num(h, o, pix); o = text(h, o, " "); o = num(h, o, out[2]); o = text(h, o, "\n"); }
                 }
                 guard2 = guard2 + 1;
                 if ln < side() { calls = calls + 1; }
             }
             if lv == 1 { o = analyse(h, o, pic); }
+            if lv == 2 { o = metrics_check(h, o, pic, rf, st, fl); }
             o = text(h, o, "frame_us "); o = num(h, o, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27); o = text(h, o, "\n");
         }
         var code = 0;

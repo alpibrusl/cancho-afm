@@ -1,0 +1,84 @@
+import std.test;
+import std.math;
+import metrics;
+
+// Images with known answers: a square wave and a sine for roughness, a step on a tilt, a grating with line offsets, noise and particles.
+fn bump(x: float, y: float, cx: float, cy: float, h: float) -> [] float {
+    let d2 = ((x - cx) * (x - cx) + (y - cy) * (y - cy)) / 16.0;
+    if d2 >= 1.0 { return 0.0; }
+    return h * (1.0 - d2) * (1.0 - d2);
+}
+
+fn near(a: float, b: float, tol: float) -> [] int {
+    var d = a - b;
+    if d < 0.0 { d = 0.0 - d; }
+    if d <= tol { return 1; }
+    return 0;
+}
+
+// a deterministic pseudo-noise in -1..1 for pixel k
+fn noise(k: int) -> [] float { return float_of((k * 1103515245 + 12345) / 65536 % 2001 - 1000) / 1000.0; }
+
+fn test_roughness_of_a_square_wave_and_a_sine() -> [] int {
+    region r {
+        let z = alloc_slice[r](32 * 32, 0.0);
+        var k = 0;
+        while k < 32 * 32 { if k % 2 == 0 { z[k] = 30.0; } else { z[k] = 0.0 - 30.0; } k = k + 1; }
+        let q = metrics.rough(z, 32, 32);
+        test.assert_eq(near(q.ra, 30.0, 0.01), 1);
+        test.assert_eq(near(q.rq, 30.0, 0.01), 1);
+        test.assert_eq(near(q.rz, 60.0, 0.01), 1);
+        // a sine of amplitude 50 over whole periods: Rq = A / sqrt 2 = 35.355, Ra = 2 A / pi = 31.83 for a continuous sine, 31.42 for 16 samples a period
+        var j = 0;
+        while j < 32 { var i = 0; while i < 32 { z[j * 32 + i] = 50.0 * math.sin(6.283185307179586 * float_of(i) / 16.0); i = i + 1; } j = j + 1; }
+        let s = metrics.rough(z, 32, 32);
+        test.assert_eq(near(s.rq, 35.355, 0.05), 1);
+        test.assert_eq(near(s.ra, 31.42, 0.05), 1);
+    }
+    return 0;
+}
+
+fn test_a_step_on_a_tilt_is_measured_with_its_slope() -> [] int {
+    region r {
+        let z = alloc_slice[r](32 * 32, 0.0);
+        var j = 0;
+        while j < 32 {
+            var i = 0;
+            while i < 32 {
+                var step = 0.0;
+                if j >= 18 { step = 150.0; }
+                z[j * 32 + i] = 2.0 * float_of(j) + step + 20.0 * noise(j * 32 + i) + bump(float_of(i), float_of(j), 8.0, 9.0, 500.0) + bump(float_of(i), float_of(j), 22.0, 26.0, 450.0);
+                i = i + 1;
+            }
+            j = j + 1;
+        }
+        let s = metrics.step_fit(z, 32, 32, 4);
+        test.assert_eq(s.line, 18);
+        test.assert_eq(near(s.height, 150.0, 6.0), 1);
+        test.assert_eq(near(s.slope, 2.0, 0.3), 1);
+    }
+    return 0;
+}
+
+fn test_a_grating_is_fitted_through_offsets_noise_and_particles() -> [] int {
+    region r {
+        let z = alloc_slice[r](64 * 64, 0.0);
+        var j = 0;
+        while j < 64 {
+            let off = float_of((j * 1103515245 + 12345) / 65536 % 81 - 40);
+            var i = 0;
+            while i < 64 {
+                let x = float_of(i);
+                let y = float_of(j);
+                z[j * 64 + i] = off + 50.0 * math.sin(6.283185307179586 * x / 11.7 + 0.8) + 25.0 * noise(j * 64 + i) + bump(x, y, 12.0, 14.0, 600.0) + bump(x, y, 40.0, 30.0, 450.0) + bump(x, y, 25.0, 50.0, 600.0);
+                i = i + 1;
+            }
+            j = j + 1;
+        }
+        let g = metrics.grating_fit(z, 64, 64);
+        // the pitch to 0.5%, the peak-to-peak height (100) to 5%
+        test.assert_eq(near(g.pitch, 11.7, 0.06), 1);
+        test.assert_eq(near(g.height, 100.0, 5.0), 1);
+    }
+    return 0;
+}
