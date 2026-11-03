@@ -11,7 +11,7 @@ import drift;
 //   1. the drift is estimated from the trace and the retrace; if it is large enough to see (more than `floor` pixels per tick, the estimate's own bias of I4) AND the loop's lag is under a pixel (the model of I4
 //      takes the lag as one shift; the fork's 2 pixels is outside it and its "drift" is the lag) the image is the drift-corrected one, else the trace (`corrected` 0, or 2 when the drift was large but the lag too);
 //   2. the step is measured on that image BEFORE any plane is taken out (a plane flattens a real step into a slope, I1);
-//   3. the image is levelled: robust plane, then line offsets (I1);
+//   3. the image is levelled: robust plane, then line offsets (I1), then the bow along x (the quadratic of the column medians);
 //   4. roughness, the grating and the particles are read off the levelled image (I2, I3).
 // The image is left levelled in `lev`, the particles in `parts` (4 floats each: x, y, height, area).
 
@@ -44,6 +44,7 @@ pub fn run[&a, &b, &c, &d](t: &a [float], r: &b [float], nx: int, ny: int, floor
     let pl = image.plane_robust(lev, nx, ny, 3, 2.5);
     image.subtract_tilt(lev, nx, ny, pl);
     image.level_lines(lev, nx, ny, 4);
+    image.level_bow(lev, nx, ny);
     let ro = metrics.rough(lev, nx, ny);
     let gr = metrics.grating_fit(lev, nx, ny);
     let np = features.find_particles(lev, nx, ny, 15, 0.0, 4, parts, cap);
