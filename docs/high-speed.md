@@ -138,6 +138,8 @@ n = 18, m = 2 at 508 kHz, Q 6 (500 kHz, 9 samples per period exactly, word 47721
 `adc_par` (`sim/adc_par.cho`, `gen/sv.cho`, details and checks in `gen/README.md`) is the interface to the AD9226 module: it drives the ADC clock, captures 12 bits and OTR, drops the 7 pipeline-filling captures and reports. Lockstep against the cancho model, a protocol test against a datasheet-based chip model with the 10 ns worst-case output delay (data settled 27 ns before capture at 13.5 MS/s), place and route 146 MHz. **The datasheet says the latency is 7 clocks, not the 3 I first assumed**, which the protocol test would have caught as well. The 7-sample delay does not matter to the lock-in (it is phase-blind), but it is a delay in the loop: 7 conversions, 1.6 us at 4.5 MS/s, before the first sample of a window reaches the detector.
 Not done: wiring it into `afm_top` (a register to choose between the SPI and the parallel ADC changes the register table), pin assignments, the module's MODE strap, and a real chip.
 
+Image processing of the result (levelling, roughness, step height, pitch, particles) is designed in `docs/image-processing.md`.
+
 ## Risks
 
 1. **Optical detection** is a new subsystem (laser, alignment, quadrant photodiode, a fast TIA); none is designed. It is the schedule risk.
