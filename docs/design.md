@@ -57,7 +57,7 @@ A fast AFM differs from a slow one in the **hardware**, mostly not the software:
 scanner; a fast low-noise amplitude detector; a controller loop with a high update rate. The loop in the FPGA is what makes the rate
 reachable at all, so the design does not close the door. **[unknown]** how fast an all-open build can go; the one published open
 high-speed controller found (`docs/references.md`) reports 55 lines per second, which is a number to read and reproduce, not one to
-assume.
+assume. The HS stage is designed in `docs/high-speed.md` (a bandwidth budget, what the twin can and cannot predict, slices H1 to H6).
 
 ## 7. Slices, each with its acceptance written first
 
