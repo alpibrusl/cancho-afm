@@ -32,12 +32,23 @@
 
 | Slice | What | Acceptance |
 |---|---|---|
-| I1 | Levelling: plane and line | a tilt added to a twin image (known to the pm) is recovered and removed to under 35 pm rms; a line offset added to every line is removed; tests, twin fork and HS images |
+| I1 | Levelling: plane and line | a tilt added to a twin image (known to the pm) is recovered and removed to under 35 pm rms; a line offset added to every line is removed; tests, twin fork and HS images. **Done 2026-11-03, see "What I1 found"** |
 | I2 | Metrics: Ra, Rq, Rz, step height, grating pitch and height | terrace within 10%, pitch within 2%, grating height within 20%, on both profiles; Ra and Rq against a direct computation on the truth |
 | I3 | Particle finder and its table | the twin's three particles found, heights within 20%, centres within a pixel, no false ones at the twin's noise; `particles.csv` read by `table` in a test of the flow |
 | I4 | Drift: trace against retrace by cross-correlation | a drift set in the twin (`fl[8]`, pm per window) is estimated within 20%; then removed |
 | I5 | A page for it: levelled image, profile, table in `cancho-ui` (an image element is a change in that repo) | the live console shows the levelled image and the metrics of the last scan |
 | I6 | Fits with `cancho-opt` (grating, step, tip) | decided after I2: only if the closed-form metrics are not enough |
+
+## What I1 found (`host/image.cho`, `tests/image_test.cho`, `./scan_twin <profile> 0 0 1`; twin, 2026-11-03)
+
+`image.plane_fit` (least squares with a mask, Cramer's rule), `image.plane_robust` (fit, drop pixels beyond 2.5 residual rms, refit, three rounds), `image.subtract_tilt`, `image.level_lines` (each line's median against the median of the medians within 4 lines).
+Images up to 256 x 256 (a region holds 64 KiB; the mask is bytes).
+
+* **Particles pull a plain plane; the robust one is not pulled.** On a flat 32 x 32 image with a tilt of 2.0 and -1.5 pm per pixel and three particles (450 to 600 pm), the plain fit gives bx = 0.77 (error 1.2 pm per pixel, 60%), the robust fit 2.006 and -1.505 (error under 0.01).
+* **On the twin's 64 x 64 scan with a tilt of 2.0 and -1.5 added and line offsets of +-40 pm (rms 23 pm):** the tilt estimate is off by 0.009 and 0.04 to 0.05 pm per pixel; after levelling the plane the rms difference from the truth is 23.4 pm (the offsets, untouched), after the lines **11.9 pm for the fork's image, 10.5 pm for the HS profile's**, under the image's own noise of 28 to 30 pm. The acceptance (under 35 pm) is met.
+* **A plane flattens real slopes.** The twin's own sample has a 150 pm terrace across the lines; the robust plane fit reads it as a slope of 3.3 pm per pixel along y (210 pm over the image, more than the step: the particles and the two levels pull it). Levelling a plane **before** measuring a step or a slope **removes it**: I2 must measure heights on the image before the plane is taken out (or take the plane from a region without structure).
+* **Line levelling cannot tell a line offset from a step across the lines.** The version here keeps a step (a test: a 150 pm step at line 16 of 32 stays within 50 pm after levelling while +-40 pm offsets go), but within 4 lines of a step the lines are pulled toward their neighbours'; and a feature spanning fewer than 5 lines is treated as an offset. The 11 to 12 pm residual on the twin is mostly that edge and the particles.
+* **Not done:** a polynomial surface (a bow) beyond the plane; scan lines that are not straight; real data. The twin's image has no bow, creep or drift yet.
 
 ## Open questions
 

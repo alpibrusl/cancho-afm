@@ -6,6 +6,7 @@ import script;
 import run_twin;
 import session;
 import regs;
+import image;
 
 // The twin's automatic procedure up to the loop being closed (host/session.cho: tune, choose, approach), then a larger raster (64 x 64) over the made-up sample of sim/board.cho
 // (grating, terrace step, three particles) with noise and slow drift. Prints the image (Z, pm), one `line pixel Z` record per reading (a pixel may be read more than once; the last reading is the one the loop settled to). A prediction of this software, not a measurement.
@@ -21,7 +22,62 @@ fn num[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer {
 
 fn side() -> [] int { return 64; }
 
-// the profile: argument 1 (the scanner, argument 2, and for the high-speed profile the cantilever's resonance in kHz, argument 3, the same way; default 500), `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md)
+// The levelling check on the twin's own image (docs/image-processing.md, I1): `pic` is the scanned trace, 64 x 64 heights in pm. The truth is that image levelled by its own robust plane. A copy gets a known tilt
+// (2 and -1.5 pm per pixel) and line offsets (a deterministic +-40 pm), is levelled (robust plane, then lines within 4), and is scored against the truth, with the mean removed.
+fn line_off(j: int) -> [] float { return float_of((j * 1103515245 + 12345) / 65536 % 81 - 40); }
+
+fn rms_diff[&a, &b](x: &a [float], y: &b [float]) -> [] float {
+    var mx = 0.0;
+    var my = 0.0;
+    var k = 0;
+    while k < 4096 { mx = mx + x[k]; my = my + y[k]; k = k + 1; }
+    mx = mx / 4096.0;
+    my = my / 4096.0;
+    var sum = 0.0;
+    k = 0;
+    while k < 4096 {
+        let d = (x[k] - mx) - (y[k] - my);
+        sum = sum + d * d;
+        k = k + 1;
+    }
+    return sqrt(sum / 4096.0);
+}
+
+fn analyse[&h, &a](heap: &!h Heap, o: buffer.Buffer, pic: &a [int]) -> [heap] buffer.Buffer {
+    var b = o;
+    region r1 {
+        let tr = alloc_slice[r1](4096, 0.0);
+        var k = 0;
+        while k < 4096 { tr[k] = float_of(pic[k]); k = k + 1; }
+        let p = image.plane_robust(tr, 64, 64, 3, 2.5);
+        image.subtract_tilt(tr, 64, 64, p);
+        region r2 {
+            let t = alloc_slice[r2](4096, 0.0);
+            var j = 0;
+            while j < 64 {
+                var i = 0;
+                while i < 64 {
+                    t[j * 64 + i] = float_of(pic[j * 64 + i]) + 2.0 * (float_of(i) - 31.5) - 1.5 * (float_of(j) - 31.5) + line_off(j);
+                    i = i + 1;
+                }
+                j = j + 1;
+            }
+            let q = image.plane_robust(t, 64, 64, 3, 2.5);
+            image.subtract_tilt(t, 64, 64, q);
+            let e1 = rms_diff(t, tr);
+            image.level_lines(t, 64, 64, 4);
+            let e2 = rms_diff(t, tr);
+            b = text(heap, b, "level: robust plane of the twin image bx "); b = num(heap, b, truncate(p.bx * 1000.0)); b = text(heap, b, " by "); b = num(heap, b, truncate(p.by * 1000.0));
+            b = text(heap, b, " (milli pm per pixel); tilt added 2000 -1500; estimate error bx "); b = num(heap, b, truncate((q.bx - p.bx - 2.0) * 1000.0));
+            b = text(heap, b, " by "); b = num(heap, b, truncate((q.by - p.by + 1.5) * 1000.0)); b = text(heap, b, "\n");
+            b = text(heap, b, "level: rms difference from the truth in milli pm, after the plane "); b = num(heap, b, truncate(e1 * 1000.0));
+            b = text(heap, b, ", after the plane and the lines "); b = num(heap, b, truncate(e2 * 1000.0)); b = text(heap, b, "\n");
+        }
+    }
+    return b;
+}
+
+// the profile: argument 1 (the scanner, argument 2, and for the high-speed profile the cantilever's resonance in kHz, argument 3, the same way; default 500; argument 4 = 1 prints the levelling check of docs/image-processing.md instead of the pixels), `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md)
 fn number_of[&t](text: &t [byte]) -> [] int {
     var n = 0;
     var i = 0;
@@ -40,10 +96,12 @@ fn main(world: World) -> [] int {
     var prof = 0;
     var scn = 0;
     var fk = 0;
+    var lv = 0;
     borrow args as &g in {
         if arg_count(g) > 1 { prof = number_of(arg(g, 1)); }
         if arg_count(g) > 2 { scn = number_of(arg(g, 2)); }
         if arg_count(g) > 3 { fk = number_of(arg(g, 3)); }
+        if arg_count(g) > 4 { lv = number_of(arg(g, 4)); }
     }
     release(args); release(net); release(clock); release(signals); release(exec);
     borrow mut heap as &!h in {
@@ -71,6 +129,7 @@ fn main(world: World) -> [] int {
             let sc = alloc_slice[r](4 * 200, 0);
             let out = alloc_slice[r](128, 0);
             let img = alloc_slice[r](64, 0 - 1);
+            let pic = alloc_slice[r](4096, 0);
             let req = alloc_slice[r](16, byte_of(0));
             let rsp = alloc_slice[r](16, byte_of(0));
             var guard = 0;
@@ -112,11 +171,13 @@ fn main(world: World) -> [] int {
                 if out[3] % 2 == 1 || out[3] / 8 % 2 == 1 { done = 1; }
                 if ln >= side() { done = 1; }
                 else {
-                    o = num(h, o, ln); o = text(h, o, " "); o = num(h, o, pix); o = text(h, o, " "); o = num(h, o, out[2]); o = text(h, o, "\n");
+                    if pix < 64 && ln < 64 { pic[ln * 64 + pix] = out[2]; }
+                    if lv == 0 { o = num(h, o, ln); o = text(h, o, " "); o = num(h, o, pix); o = text(h, o, " "); o = num(h, o, out[2]); o = text(h, o, "\n"); }
                 }
                 guard2 = guard2 + 1;
                 if ln < side() { calls = calls + 1; }
             }
+            if lv == 1 { o = analyse(h, o, pic); }
             o = text(h, o, "frame_us "); o = num(h, o, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27); o = text(h, o, "\n");
         }
         var code = 0;
