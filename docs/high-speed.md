@@ -15,7 +15,7 @@ constants**. In the order of difficulty:
 | Resonance | 32.768 kHz, Q about 500 | **0.5 to 1.5 MHz**; Q 2 to 10 in liquid, 100 or more in air **[search]** (Ando: small cantilevers, 450 to 650 kHz in 2001; 1.2 MHz in later work; a commercial one is listed at 1.5 MHz in air, 0.5 MHz in liquid, 0.1 N/m) | cantilevers may be bought; **[unverified]** price and stock |
 | ADC | 262 kS/s, 12 bits (Pmod AD1, AD7476A, 1 MS/s) | **4 to 10 MS/s**, 12 bits: at 8 samples per period (what our lock-in needs for a phase-free figure, `docs/converters.md`) 0.5 MHz is 4 MS/s, 1.2 MHz is 9.6 MS/s | AD7476A is too slow (already rejected); AD9226 (12 bits, parallel) is a candidate `docs/converter-candidates.md` **[search]** |
 | Drive | DDS word, DAC about 262 kS/s | the same DDS, a DAC at 8 or more times f0 (4 to 10 MS/s) | **[unknown]** part |
-| Detector window | 64 samples, 0.24 ms | **8 to 16 samples (1 to 2 cycles)**, microseconds | generated lock-in has the window as a parameter; needs a lockstep run at that value |
+| Detector window | 64 samples, 0.24 ms | **16 to 35 samples (2 to 4 whole cycles)**, microseconds | generated lock-in has the window as a register; lockstep run at 18, 23 and 35 (H3) |
 | FPGA clock | 27 MHz, timing met at 65.9 MHz estimated | a PLL to 100 MHz or more is wanted for 10 MS/s; Tang Nano 20K has a PLL **[unverified]** | to check |
 | Z scanner | the fork's piezo tube or stack, a 1 MOhm-class amplifier (`docs/amplifier.md`) | **small stack, first resonance above 100 kHz** and an amplifier with the bandwidth and slew rate for it; no ringing at the loop rate | **[unknown]**; the amplifier of `docs/amplifier.md` is far too slow for it |
 | Z and XY DAC | 16 bits, SPI | settling well under the loop period; SPI at 50 MHz sets the update rate | datasheet values **[unknown]** |
@@ -46,7 +46,7 @@ What this says, plainly:
 * **The one open published controller** reports 55 lines/s, a 512 x 512 image in 9.3 s, for under USD 4,000, on NI hardware (`docs/references.md`). Our cost goal
   is far below that, and our line rate on this budget is also lower **[A]**; neither is measured here.
 
-Noise, which the table ignores: the lock-in's figure noise falls with window length, roughly as 1/sqrt(samples). A window 8 times shorter is about 2.8 times noisier.
+Noise, which the table ignores: the lock-in's figure noise falls with window length, roughly as 1/sqrt(samples). A window 8 times shorter is about 2.8 times noisier **in theory**; in the twin (H3) the 18-sample window with a snapped drive gave the fork's 28 pm, because its ADC noise is small, so this is not yet seen.
 Whether that leaves a usable setpoint depends on the photodiode's noise, **[unknown]**.
 
 ## What the twin can and cannot say
@@ -69,7 +69,7 @@ at 4.5 MS/s a 0.5 MHz, Q = 5 cantilever has alpha = 0.07, so the lag is modelled
 |---|---|---|
 | H1 | An `hs` profile in the twin: constants only, a larger raster, the frame rate printed | the full procedure (tune, approach, scan) finds a 0.5 MHz, Q = 5 cantilever and scans 64 x 64; the predicted frame rate is within 10% of the table's formula; existing tests unchanged. **Done 2026-11-03, see "What H1 found"** |
 | H2 | Second-order Z scanner and amplifier slew in the twin | with the loop faster than the scanner's resonance the twin shows ringing; with a slower one it does not; a test for both. **Done 2026-11-03, see "What H2 found"** |
-| H3 | The generated lock-in at 8 to 16 samples per window, and a DAC and ADC rate of 4 to 10 MS/s, in Verilog | lockstep with the cancho model at window 8 and 16; timing at the clock that gives 8 samples per period (**[unknown]** whether a PLL is needed) |
+| H3 | The generated lock-in at 16 to 35 samples per window and 4.5 MS/s, in Verilog | lockstep with the cancho model at several windows at 6 clocks per sample; timing at the clock that gives 8 or more samples per period. **Done for the detector 2026-11-03, see "What H3 found"; the parallel ADC and the fast DAC are not designed** |
 | H4 | A video of a fast scan, labelled as a prediction | the video states the frame rate, the window and what is not modelled |
 | H5 | Parts: a cantilever, a laser and photodiode, a fast ADC and DAC, a small stack and its amplifier | an order list as in `docs/amp-order.md`, with prices **checked** and sources, and what is still **[unknown]** marked |
 | H6 | A measured line rate on a real small cantilever | the S7 acceptance: measured, not predicted; before this, no claim of speed |
@@ -82,9 +82,9 @@ H1 and H2 are cancho and need no hardware. H3 is generated hardware and runs und
 (divider 6 of the 27 MHz clock), an 18-sample window, 20 loop updates per pixel, a sweep of 100 to 899 kHz. The full procedure ran with no operator input and no refused write.
 
 * **Tune found the cantilever:** f0 = 508.3 kHz against the twin's 500 kHz (1.7% high: the sweep step is 12.7 kHz), Q = 6 against 5. Contact at Z = 2704 pm, as for the fork. A first sweep of 376 to 628 kHz was refused (no resonance well above the floor: the edges were only 2.7 times lower than the peak); the sweep must span several line widths.
-* **The window must be a whole number of cycles.** With 16 samples (1.8 cycles at 4.5 MS/s) the amplitude figure rippled by 12% from window to window and the approach saw a false contact at the top of the Z range: the scan was all zeros. 18 samples (2.05 cycles) works. Among the windows tried (9, 14, 15, 16, 18 at dividers 6 and 7) only 18 at divider 6 completed. With a fixed integer divider of 27 MHz this is luck; **a PLL, or a window chosen from the tuned frequency, is needed (H3)**. This is risk 4 of the list below, now seen.
+* **The window must be a whole number of cycles.** With 16 samples (1.8 cycles at 4.5 MS/s) the amplitude figure rippled by 12% from window to window and the approach saw a false contact at the top of the Z range: the scan was all zeros. 18 samples (2.05 cycles) worked. Of the windows tried (9, 14, 15, 16, 18 at dividers 6 and 7) only 18 at divider 6 completed. **H3 below explains this and fixes it.**
 * **Frame rate predicted:** 0.65 s per 64 x 64 frame with trace and retrace, 1.5 frames/s; 3.1 frames/s if only the trace were scanned (the formula's 3.05 to 3.4 /s for a 4 to 4.5 MS/s, 16 to 18 sample window). The twin counts the clocks it simulates, so this agrees with the formula by construction; it is not a check of the formula.
-* **The detector, not the loop, limits the image.** Over the same sample the hs image has a trace-minus-retrace rms of 87 pm against 28 pm for the fork's, a correlation of 0.81 with the fork's image, and the same numbers at 20, 40 and 60 updates per pixel. More loop time does not help; the shorter window's noise does (about 4% of the figure here). 20 updates per pixel is enough in the twin.
+* **The loop did not limit the image: something in the detector did.** Over the same sample the hs image had a trace-minus-retrace rms of 87 pm against 28 pm for the fork's, and the same numbers at 20, 40 and 60 updates per pixel. This note first read that as the cost of a shorter window (about 4% of the figure). **That was wrong, corrected by H3:** it was the beating of a drive that did not span a whole number of cycles per window; with the drive snapped (below) the same 18-sample window gives 28 to 31 pm, the fork's own figure.
 * **Not found, because not modelled:** photodiode noise, the real scanner (H2), liquid damping.
 
 ## What H2 found (twin, 2026-11-03; predictions, not measurements)
@@ -109,12 +109,36 @@ HS profile, 64 x 64, the loop's gains as the session chooses them (it knows noth
 * **The session's gain choice (`tune.choose`) ignores the scanner.** Taking its resonance into account, or a slower loop, would widen what works, at the cost of rate. Not done; the table is for the gains as they are.
 * **Not shown:** a measured scanner, hysteresis and creep, the amplifier of `docs/amplifier.md` (far too slow: its bandwidth is for the fork).
 
+## What H3 found (generated Verilog and the twin, 2026-11-03)
+
+**The detector.** The generated lock-in (`gen/lockin_ir.cho`, unchanged: the window is a register) was fed one sample every 6 clocks (4.5 MS/s from 27 MHz) over three windows (18, 23, 35 samples, drives at 2, 2 and 4 whole cycles): 36 windows,
+**0 mismatches** against `sim/lockin.cho` under Icarus (`gen/lockin_hs_tb.v`, in `gen/check.sh`). The amplitude arrives **13 clocks (0.48 us)** after the window closes. It accepts a sample every clock, and its place and route
+gave Fmax 83.3 MHz (`gen/README.md`), so **no PLL is needed for the detector**: 27 MHz allows up to 27 MS/s and the divider (3 for 9 MS/s, 6 for 4.5) is a register. What is not designed: the ADC itself (the Pmod AD1's SPI is 1 MS/s at most; a 12-bit parallel part such as the AD9226 needs a new generated interface block), the fast drive DAC, and the pins.
+
+**Why windows failed in H1, and the fix.** A square-wave lock-in is steady only if each window sees the same sample phases, i.e. m whole cycles in n samples. Spanning "about" a whole number of cycles is not enough: windows of 2.02 cycles still beat by 6% at 400 kHz.
+So `lockin.snap` (`sim/lockin.cho`) snaps the drive to `fs m / n` within 1/(8 Q) of the tuned frequency (under 2% of the amplitude lost) and takes the shortest such window; the session uses it for the HS profile after the sweep (window and tuning word, `ss[15]`, `ss[18]`). Tests: the snap picks
+n = 18, m = 2 at 508 kHz, Q 6 (500 kHz, 9 samples per period exactly, word 477218588) and n = 23, m = 2 at 395 kHz; a steady sine's figure is identical every window at the snapped drive (spread of at most 1 count) and ripples by more than 1,000 counts at 1.8 cycles in 16 samples.
+
+**In the twin**, a cantilever anywhere from 300 to 600 kHz (Q about 5) now tunes, approaches and scans 64 x 64 with no operator input, where only 500 and 600 kHz worked before:
+
+| f0 | window | frame (trace+retrace) | trace-minus-retrace rms |
+|---|---|---|---|
+| 300 kHz | 29 | 1.04 s | 28 pm |
+| 400 kHz | 23 | 0.82 s | 29 pm |
+| 450 kHz | 20 | 0.72 s | 29 pm |
+| 500 kHz | 18 | 0.65 s | 30 pm |
+| 550 kHz | 16 | 0.57 s | 30 pm |
+| 600 kHz | 16 | 0.57 s | 31 pm |
+
+* **Limits**: at 4.5 MS/s a cantilever above fs / 8 = 560 kHz has fewer than 8 samples per period (the profile above 600 kHz was not made to work; it needs the divider 3 or 4, 9 or 6.75 MS/s, chosen from the tuned frequency: not done). The snap assumes the drive can be set to the snapped frequency without losing the cantilever, true for a Q of about 5 and to be checked for the 100 or more of air.
+* **Twin, not measured:** the noise numbers are the twin's own (ADC noise of 2 counts, no photodiode), and its sampling is ideal.
+
 ## Risks
 
 1. **Optical detection** is a new subsystem (laser, alignment, quadrant photodiode, a fast TIA); none is designed. It is the schedule risk.
 2. **The cantilever's Q in air** (above) limits the rate whatever we do.
 3. **The Z scanner** decides the line rate; the cheap small stacks with resonances above 100 kHz are **[unverified]**.
-4. **The lock-in under one cycle** is not phase-free; H3 must measure how noisy and how phase-dependent the figure becomes.
+4. **The lock-in's window** must hold a whole number of drive cycles (H3: solved by snapping the drive; the noise of a short window then equals the fork's in the twin, not yet seen with a real photodiode).
 5. **The tune stage is written for a fork**: it sweeps a small range, with a long settle (20 ms), neither valid at 1 MHz.
 
 ## Sources

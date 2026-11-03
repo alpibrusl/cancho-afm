@@ -6,6 +6,7 @@ import script;
 import regs;
 import tune;
 import approach;
+import lockin;
 
 // `session` -- the automatic run, as a host program that has no I/O of its own: for each stage it BUILDS a script of register operations
 // (`build`), a runner executes it (over the serial port or against the twin), and `consume` looks at what the reads returned and decides what
@@ -30,6 +31,9 @@ pub fn sample_div(p: int) -> [] int { if p == 1 { return 6; } return 103; }     
 pub fn window(p: int) -> [] int { if p == 1 { return 18; } return 64; }          // samples per detector window: fork 0.24 ms, short so a loop step is quick; hs 18 samples = 4.0 us, 2.05 cycles at 508 kHz (a whole number of cycles: 16 gave a 12% ripple, docs/high-speed.md)
 pub fn window_clocks(p: int) -> [] int { return window(p) * sample_div(p); }
 pub fn window_s(p: int) -> [] float { return float_of(window_clocks(p)) / 27000000.0; }
+// The window in use (ss[15]): the profile's own until the sweep is done, then, for the high-speed profile, the one of lockin.snap, whose drive (the tuning word, ss[18]) puts a whole number of cycles in it.
+pub fn win_clocks[&a](ss: &a [int]) -> [] int { return ss[15] * sample_div(ss[3]); }
+pub fn win_s[&a](ss: &a [int]) -> [] float { return float_of(win_clocks(ss)) / 27000000.0; }
 pub fn fs(p: int) -> [] float { return 27000000.0 / float_of(sample_div(p)); }
 pub fn free_pm() -> [] float { return 2000.0; }                   // the free amplitude the program ASSUMES (no calibration yet), pm
 pub fn zmax() -> [] int { return 10000; }
@@ -92,7 +96,9 @@ pub fn build[&a, &b, &c](ss: &a [int], sf: &b [float], sc: &!c [int]) -> [] int 
         }
     }
     if stage == 2 {
-        n = script.write(sc, n, regs.tuning(), tuning_word(p, sf[0]));
+        n = script.write(sc, n, regs.window(), ss[15]);
+        if ss[18] != 0 { n = script.write(sc, n, regs.tuning(), ss[18]); }
+        else { n = script.write(sc, n, regs.tuning(), tuning_word(p, sf[0])); }
         n = script.wait(sc, n, 2 * settle_clocks(p));
         n = script.read(sc, n, regs.amp());
     }
@@ -103,7 +109,7 @@ pub fn build[&a, &b, &c](ss: &a [int], sf: &b [float], sc: &!c [int]) -> [] int 
             n = script.wait(sc, n, ss[20] * coarse_steps() * motor_rate() + 20000);
             n = script.read(sc, n, regs.motor_status());                      // the motor must be idle and must not have refused
         }
-        n = script.wait(sc, n, window_clocks(p));
+        n = script.wait(sc, n, win_clocks(ss));
         n = script.read(sc, n, regs.amp());
     }
     if stage == 4 {
@@ -119,7 +125,7 @@ pub fn build[&a, &b, &c](ss: &a [int], sf: &b [float], sc: &!c [int]) -> [] int 
         var k = 0;
         while k < 8 {
             n = script.write(sc, n, regs.kick(), 0);
-            n = script.wait(sc, n, 20 * window_clocks(p));
+            n = script.wait(sc, n, 20 * win_clocks(ss));
             k = k + 1;
         }
         n = script.read(sc, n, regs.status());
@@ -137,11 +143,11 @@ pub fn build[&a, &b, &c](ss: &a [int], sf: &b [float], sc: &!c [int]) -> [] int 
     }
     if stage == 6 {
         n = script.write(sc, n, regs.kick(), 0);
-        n = script.wait(sc, n, (pixdiv(p) - 1) * window_clocks(p));
+        n = script.wait(sc, n, (pixdiv(p) - 1) * win_clocks(ss));
         n = script.read(sc, n, regs.pixline());
         n = script.read(sc, n, regs.zout());
         n = script.read(sc, n, regs.status());
-        n = script.wait(sc, n, window_clocks(p));
+        n = script.wait(sc, n, win_clocks(ss));
     }
     if stage == 7 {
         n = script.write(sc, n, regs.ctrl(), 0);
@@ -186,6 +192,7 @@ pub fn consume[&a, &b, &c, &d](ss: &!a [int], sf: &!b [float], out: &c [int], im
     ss[1] = ss[1] + 1;
     if ss[1] > 40000 { ss[2] = 6; ss[0] = 98; return 0; }
     if stage == 0 {
+        ss[15] = window(p);
         // the identity, and the limits read back as written (the board must not be trusted to have taken them)
         if out[1] == 0xAF500001 && out[2] == 0 && out[3] == zmax() && out[4] == zmax() && out[5] == zmax() {
             ss[0] = 1;
@@ -209,7 +216,11 @@ pub fn consume[&a, &b, &c, &d](ss: &!a [int], sf: &!b [float], out: &c [int], im
             } else {
                 sf[0] = t.f0; sf[1] = t.q; sf[2] = t.peak;
                 // the plant gain k (figure counts per pm) assumes the free amplitude above; with no calibration it is the one number the program takes on trust
-                let g = tune.choose(t, t.peak / free_pm(), window_s(p), 0.8);
+                if p == 1 {
+                    let w = lockin.snap(t.f0, t.q, fs(p), 64);
+                    ss[15] = w.n; ss[18] = w.tuning;
+                }
+                let g = tune.choose(t, t.peak / free_pm(), win_s(ss), 0.8);
                 ss[11] = g.shift; ss[13] = g.kp; ss[14] = g.ki; sf[3] = g.alpha;
                 ss[0] = 2;
             }

@@ -21,10 +21,17 @@ fn num[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer {
 
 fn side() -> [] int { return 64; }
 
-// the profile: argument 1 (and the scanner, argument 2, the same way), `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md)
+// the profile: argument 1 (the scanner, argument 2, and for the high-speed profile the cantilever's resonance in kHz, argument 3, the same way; default 500), `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md)
 fn number_of[&t](text: &t [byte]) -> [] int {
-    if len(text) == 1 { return int_of(text[0]) - 48; }
-    return 0;
+    var n = 0;
+    var i = 0;
+    while i < len(text) {
+        let c = int_of(text[i]);
+        if c < 48 || c > 57 { return 0; }
+        n = n * 10 + (c - 48);
+        i = i + 1;
+    }
+    return n;
 }
 
 fn main(world: World) -> [] int {
@@ -32,9 +39,11 @@ fn main(world: World) -> [] int {
     release(ffi); release(fs);
     var prof = 0;
     var scn = 0;
+    var fk = 0;
     borrow args as &g in {
         if arg_count(g) > 1 { prof = number_of(arg(g, 1)); }
         if arg_count(g) > 2 { scn = number_of(arg(g, 2)); }
+        if arg_count(g) > 3 { fk = number_of(arg(g, 3)); }
     }
     release(args); release(net); release(clock); release(signals); release(exec);
     borrow mut heap as &!h in {
@@ -44,7 +53,7 @@ fn main(world: World) -> [] int {
             let st = alloc_slice[r](32, 0);
             let fl = alloc_slice[r](24, 0.0);
             board.reset(rf, st, fl);
-            if prof == 1 { board.set_plant(fl, 500000.0, 5.0, 2000.0, 2000.0, 100.0, 1200.0, 2.0); }
+            if prof == 1 { var fc = 500000.0; if fk > 0 { fc = 1000.0 * float_of(fk); } board.set_plant(fl, fc, 5.0, 2000.0, 2000.0, 100.0, 1200.0, 2.0); }
             else { board.set_plant(fl, 32781.4, 500.0, 2000.0, 2000.0, 100.0, 1200.0, 2.0); }
             fl[10] = 150.0;
             // argument 2, the Z scanner: 0 ideal, 1 a good small stack (100 kHz, Q 3), 2 a slow one (20 kHz, Q 10), 3 the good one behind a 20 pm/us amplifier, 4 to 6 a Q = 3 stack at 30, 50, 70 kHz (docs/high-speed.md, H2)
@@ -74,7 +83,7 @@ fn main(world: World) -> [] int {
             }
             o = text(h, o, "twin scan; failure code "); o = num(h, o, ss[2]); o = text(h, o, ", refused writes "); o = num(h, o, failures);
             o = text(h, o, ", contact Z "); o = num(h, o, ss[9]); o = text(h, o, " pm; f0 "); o = num(h, o, truncate(sf[0])); o = text(h, o, " Hz, Q "); o = num(h, o, truncate(sf[1])); o = text(h, o, ", free figure "); o = num(h, o, ss[10]);
-            o = text(h, o, ", shift "); o = num(h, o, ss[11]); o = text(h, o, ", setpoint "); o = num(h, o, ss[12]); o = text(h, o, ", motor steps "); o = num(h, o, ss[21]); o = text(h, o, ", settled Z "); o = num(h, o, ss[22]); o = text(h, o, " pm\n");
+            o = text(h, o, ", window "); o = num(h, o, ss[15]); o = text(h, o, ", shift "); o = num(h, o, ss[11]); o = text(h, o, ", setpoint "); o = num(h, o, ss[12]); o = text(h, o, ", motor steps "); o = num(h, o, ss[21]); o = text(h, o, ", settled Z "); o = num(h, o, ss[22]); o = text(h, o, " pm\n");
             var n = 0;
             n = script.write(sc, n, regs.npix(), side());
             n = script.write(sc, n, regs.nlines(), side());
@@ -92,11 +101,11 @@ fn main(world: World) -> [] int {
             while done == 0 && guard2 < 400000 {
                 var m = 0;
                 m = script.write(sc, m, regs.kick(), 0);
-                m = script.wait(sc, m, (session.pixdiv(prof) - 1) * session.window_clocks(prof));
+                m = script.wait(sc, m, (session.pixdiv(prof) - 1) * session.win_clocks(ss));
                 m = script.read(sc, m, regs.pixline());
                 m = script.read(sc, m, regs.zout());
                 m = script.read(sc, m, regs.status());
-                m = script.wait(sc, m, session.window_clocks(prof));
+                m = script.wait(sc, m, session.win_clocks(ss));
                 failures = failures + run_twin.run(sc, m, rf, st, fl, out, req, rsp);
                 let pix = out[1] / 65536;
                 let ln = out[1] % 65536;
@@ -108,7 +117,7 @@ fn main(world: World) -> [] int {
                 guard2 = guard2 + 1;
                 if ln < side() { calls = calls + 1; }
             }
-            o = text(h, o, "frame_us "); o = num(h, o, calls * session.pixdiv(prof) * session.window_clocks(prof) / 27); o = text(h, o, "\n");
+            o = text(h, o, "frame_us "); o = num(h, o, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27); o = text(h, o, "\n");
         }
         var code = 0;
         borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
