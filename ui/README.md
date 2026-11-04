@@ -43,7 +43,7 @@ identified `afm_top`, wrote nothing, and printed `"source":"board"` lines throug
 ### The server in cancho (`host/serve.cho`)
 
 One program on the Pi replaces the loop and the static server: it checks the board's identifier, then every turn (at most 250 ms) READS the seven live registers and answers `GET /live.json` (the latest reading,
-`source: "board"`, `Cache-Control: no-store`), and `GET /`, `/live.html`, `/live.js` (read from `/home/alfonso/afm-build/ui`, a literal in the source because `narrow` takes one; a file over 48 KiB is cut).
+`source: "board"`, `Cache-Control: no-store`), and `GET /`, `/live.html`, `/live.js` (read from `/srv/afm/ui`, a literal in the source because `narrow` takes one; a file over 48 KiB is cut).
 Anything else is 404, anything but GET is 405. It uses the `http.server` package of the compiler repository (`packages/http-server/server.cho`, passed on the command line as a module), with a second poller for the serial
 port so the server's own is not disturbed; it is not cancho-web (which adds routes, schemas and OpenAPI, none of which one JSON document needs).
 
@@ -54,7 +54,7 @@ cancho build host/serve.cho host/live_json.cho host/proto.cho host/regs.cho <can
 
 **Measured, on the Pi against the real board:** `/live.json` 200 with `"source":"board"`; `/` 200 `text/html`, `/live.js` 200 `text/javascript` (30,454 bytes); an unknown path 404; a POST 405; the page
 opened through an SSH tunnel read it and showed `Source: board`, reading 71 and rising. The readings were all zeros (the board idle, nothing wired). `cancho authority` lists `net_in("")` (unbounded: the port is an
-argument, as in the compiler's own `examples/api`), `tty_open("/dev")`, `fs_read("/home/alfonso/afm-build/ui")`, `conn_*`, `poll`, `clock`; no foreign code, no writes. **Not measured:** load, long runs, a reading during a scan.
+argument, as in the compiler's own `examples/api`), `tty_open("/dev")`, `fs_read("/srv/afm/ui")`, `conn_*`, `poll`, `clock`; no foreign code, no writes. **Not measured:** load, long runs, a reading during a scan.
 
 ### Before the console can write: put cancho-gateway in front
 
