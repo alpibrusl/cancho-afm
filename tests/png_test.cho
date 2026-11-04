@@ -1,0 +1,34 @@
+import std.test;
+import std.buffer;
+import png;
+
+fn test_adler32_of_wikipedia() -> [] int {
+    // the example of RFC 1950's Wikipedia article: Adler-32("Wikipedia") = 0x11E60398
+    test.assert_eq(png.adler32("Wikipedia"), 300286872);
+    return 0;
+}
+
+fn test_a_2_by_2_image_is_a_well_formed_png[&h](heap: &!h Heap) -> [heap] int {
+    region r {
+        let pix = alloc_slice[r](4, byte_of(0));
+        pix[1] = byte_of(1); pix[2] = byte_of(2); pix[3] = byte_of(1);
+        let pal = alloc_slice[r](9, byte_of(0));
+        pal[3] = byte_of(255); pal[7] = byte_of(255);
+        var b = buffer.empty(heap, 256);
+        b = png.indexed(heap, b, 2, 2, pix, pal);
+        // 8 signature + IHDR 25 + PLTE 21 + IDAT (12 + 2 zlib + 5 block + 2 rows of 3 bytes + 4 adler = 29) + IEND 12
+        borrow b as &x in {
+            test.assert_eq(buffer.size(x), 95);
+            let by = buffer.bytes(x);
+            test.assert_eq(int_of(by[0]), 137);
+            test.assert_eq(int_of(by[1]), 80);
+            // the end of the file is IEND's well-known CRC AE 42 60 82
+            test.assert_eq(int_of(by[91]), 174);
+            test.assert_eq(int_of(by[92]), 66);
+            test.assert_eq(int_of(by[93]), 96);
+            test.assert_eq(int_of(by[94]), 130);
+        }
+        buffer.drop(heap, b);
+    }
+    return 0;
+}

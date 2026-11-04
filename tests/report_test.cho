@@ -1,0 +1,55 @@
+import std.test;
+import std.math;
+import report;
+
+// The whole pipeline on a synthetic 64 x 32 scan: a grating of pitch 12 and 100 pm peak to peak, a 150 pm terrace from line 25, a tilt along x and +-10 pm line offsets, three particles, 15 pm noise, a loop lag of
+// 0.5 px between trace and retrace, no drift. The retrace holds 0 where the scan did not visit (x = 0 and 63).
+fn bump(x: float, y: float, cx: float, cy: float, h: float) -> [] float {
+    let d2 = ((x - cx) * (x - cx) + (y - cy) * (y - cy)) / 16.0;
+    if d2 >= 1.0 { return 0.0; }
+    return h * (1.0 - d2) * (1.0 - d2);
+}
+fn noise(k: int) -> [] float { return float_of((k * 1103515245 + 12345) / 65536 % 2001 - 1000) / 1000.0; }
+fn f(x: float, j: int) -> [] float {
+    let y = float_of(j);
+    var terrace = 0.0;
+    if j >= 25 { terrace = 150.0; }
+    return 50.0 * math.sin(6.283185307179586 * x / 12.0) + terrace + 1.5 * (x - 31.5) + float_of((j * 1103515245 + 12345) / 65536 % 21 - 10) + bump(x, y, 12.0, 13.0, 600.0) + bump(x, y, 32.0, 18.0, 450.0) + bump(x, y, 46.0, 10.0, 600.0);
+}
+fn near(a: float, b: float, tol: float) -> [] int {
+    var d = a - b;
+    if d < 0.0 { d = 0.0 - d; }
+    if d <= tol { return 1; }
+    return 0;
+}
+
+fn test_the_pipeline_reads_step_grating_and_particles_through_tilt_and_offsets() -> [] int {
+    region g {
+        let t = alloc_slice[g](64 * 32, 0.0);
+        let r = alloc_slice[g](64 * 32, 0.0);
+        let lev = alloc_slice[g](64 * 32, 0.0);
+        let parts = alloc_slice[g](4 * 16, 0.0);
+        var j = 0;
+        while j < 32 {
+            var i = 0;
+            while i < 64 {
+                let x = float_of(i);
+                t[j * 64 + i] = 3000.0 + f(x - 0.25, j) + 15.0 * noise(j * 64 + i);
+                if i == 0 || i == 63 { r[j * 64 + i] = 0.0; } else { r[j * 64 + i] = 3000.0 + f(x + 0.25, j) + 15.0 * noise(5000 + j * 64 + i); }
+                i = i + 1;
+            }
+            j = j + 1;
+        }
+        let rp = report.run(t, r, 64, 32, 0.005, lev, parts, 16);
+        test.assert_eq(rp.corrected, 0);
+        // the step (150 pm) on the image before any plane; the line offsets of +-10 pm move its height by a few pm (with +-30 pm and only 7 lines above the edge the estimate was 100 pm, 50 off: the step is read from line medians, so offsets are its noise, about offset rms / sqrt(lines on a side))
+        test.assert_eq(near(float_of(rp.step_line), 25.0, 1.0), 1);
+        test.assert_eq(near(rp.step_pm, 150.0, 25.0), 1);
+        test.assert_eq(near(rp.pitch, 12.0, 0.1), 1);
+        test.assert_eq(near(rp.grating_pm, 100.0, 15.0), 1);
+        test.assert_eq(rp.particles, 3);
+        // the tilt is gone: the levelled image's corner heights are within the grating's and the noise's reach of each other
+        test.assert_eq(near(lev[0 * 64 + 4], lev[0 * 64 + 60], 120.0), 1);
+    }
+    return 0;
+}
