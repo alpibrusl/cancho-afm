@@ -1,0 +1,336 @@
+edition 8;
+
+import std.io;
+import std.buffer;
+import std.math;
+import proto;
+import regs;
+
+// bench.cho -- the first measuring program for the bench (docs/bench.md): what the DACs put out and what the ADC reads, through the board's serial port.
+// Three commands, each of which READS the identifier first and stops, writing nothing, if it is not afm_top's (0xAF500001):
+//   adc  N                       read ADC0 and ADC1 N times (1 to 5000) and print mean, spread, smallest and largest
+//   dac  CH CODE bare [SECONDS]  hold DAC CH (z, x, y or d) at CODE (0 to 65535) for SECONDS (default 20) so a meter can be read, then put it back
+//   ramp CH STEPS bare           step DAC CH over its range (2 to 256 steps), read ADC0 at each, and fit a line: the loop-back of tutorial Part 5
+//   cancho run host/bench.cho host/proto.cho host/regs.cho --std -- adc 200
+// MANUAL mode puts the code straight on the DAC and BYPASSES the Z limit (gen/glue.cho: code_z = manual ? man_z : z_out), so `dac` and `ramp` refuse to run
+// unless the word `bare` is given: your promise that nothing but a meter or the ADC input is on the DA3 outputs (no amplifier, no piezo, no motor).
+// Assumed, not checked on a board: the AD1 reads 0 to 3.3 V as a 12-bit straight-binary code (4096 counts), and the DA3 gives 0 to 2.5 V over 65536 codes.
+// The program restores CTRL and the MAN_ register it changed. Exit 0 = every check passed, 1 = a FAIL, 2 = not afm_top, 3 = usage, 4 and 5 = the port.
+
+fn text[&h, &r](heap: &!h Heap, b: buffer.Buffer, s: &r [byte]) -> [heap] buffer.Buffer { return buffer.append(heap, b, s); }
+
+fn num[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer {
+    if n < 0 { return buffer.push_nat(heap, buffer.append(heap, b, "-"), 0 - n); }
+    return buffer.push_nat(heap, b, n);
+}
+
+// v with three decimals
+fn fixed[&h](heap: &!h Heap, b: buffer.Buffer, v: float) -> [heap] buffer.Buffer {
+    var o = b;
+    var x = v;
+    if x < 0.0 { o = buffer.append(heap, o, "-"); x = 0.0 - x; }
+    let m = truncate(x * 1000.0 + 0.5);
+    o = buffer.push_nat(heap, o, m / 1000);
+    o = buffer.append(heap, o, ".");
+    let f = m % 1000;
+    if f < 100 { o = buffer.append(heap, o, "0"); }
+    if f < 10 { o = buffer.append(heap, o, "0"); }
+    return buffer.push_nat(heap, o, f);
+}
+
+fn number_of[&t](s: &t [byte]) -> [] int {
+    var n = 0;
+    var i = 0;
+    if len(s) == 0 { return 0 - 1; }
+    while i < len(s) {
+        let c = int_of(s[i]);
+        if c < 48 || c > 57 { return 0 - 1; }
+        n = n * 10 + (c - 48);
+        i = i + 1;
+    }
+    return n;
+}
+
+fn is_bare[&t](s: &t [byte]) -> [] bool {
+    if len(s) != 4 { return false; }
+    return int_of(s[0]) == 98 && int_of(s[1]) == 97 && int_of(s[2]) == 114 && int_of(s[3]) == 101;
+}
+
+// the register that holds the manual code of DAC `ch` (z, x, y, d), or -1
+fn man_reg(ch: int) -> [] int {
+    if ch == 122 { return regs.man_z(); }
+    if ch == 120 { return regs.man_x(); }
+    if ch == 121 { return regs.man_y(); }
+    if ch == 100 { return regs.man_d(); }
+    return 0 - 1;
+}
+
+// what that register held at reset: the drive rests at mid-scale, the others at 0
+fn man_rest(ch: int) -> [] int {
+    if ch == 100 { return 32768; }
+    return 0;
+}
+
+// One request, one answer: write `n` request bytes, collect `want` answer bytes. Returns how many arrived. (The same as host/bringup.cho.)
+fn exchange[&q, &p, &a, &b, &c, &d](port: &!q Port, pw: &!p Poller, req: &a [byte], n: int, rsp: &!b [byte], want: int, chunk: &!c [byte], ev: &!d [int]) -> [poll, tty_read, tty_write] int {
+    tty_flush_input(port);
+    tty_write(port, req[0..n]);
+    var got = 0;
+    var tries = 0;
+    while got < want && tries < 60 {
+        let k = tty_read(port, chunk);
+        if k > 0 {
+            var i = 0;
+            while i < k && got < want {
+                rsp[got] = chunk[i];
+                got = got + 1;
+                i = i + 1;
+            }
+        } else {
+            poller_wait(pw, ev, 20);
+            tries = tries + 1;
+        }
+    }
+    return got;
+}
+
+// read register `idx`: ans[0] = the answer code (-1 if it did not answer), ans[1] = the value
+fn read_reg[&q, &p, &a, &b, &c, &d, &e](port: &!q Port, pw: &!p Poller, req: &!a [byte], rsp: &!b [byte], chunk: &!c [byte], ev: &!d [int], ans: &!e [int], idx: int) -> [poll, tty_read, tty_write] int {
+    proto.read_req(req, idx);
+    let got = exchange(port, pw, req, 5, rsp, 5, chunk, ev);
+    if got == 5 {
+        ans[0] = proto.resp_code(rsp);
+        ans[1] = proto.resp_value(rsp);
+    } else {
+        ans[0] = 0 - 1;
+        ans[1] = 0;
+    }
+    return ans[0];
+}
+
+// write register `idx`: returns the answer code (-1 if it did not answer)
+fn write_reg[&q, &p, &a, &b, &c, &d](port: &!q Port, pw: &!p Poller, req: &!a [byte], rsp: &!b [byte], chunk: &!c [byte], ev: &!d [int], idx: int, value: int) -> [poll, tty_read, tty_write] int {
+    proto.write_req(req, idx, value);
+    let got = exchange(port, pw, req, 9, rsp, 1, chunk, ev);
+    if got == 1 { return proto.resp_code(rsp); }
+    return 0 - 1;
+}
+
+fn check[&h, &r](heap: &!h Heap, o: buffer.Buffer, label: &r [byte], ok: bool) -> [heap] buffer.Buffer {
+    if ok { return buffer.append(heap, buffer.append(heap, buffer.append(heap, o, "PASS "), label), "\n"); }
+    return buffer.append(heap, buffer.append(heap, buffer.append(heap, o, "FAIL "), label), "\n");
+}
+
+// `n` reads of one ADC channel register `reg`: the mean, the standard deviation, the smallest and the largest, as counts and as millivolts of 3.3 V over 4096.
+fn adc_line[&h, &q, &p, &a, &b, &c, &d, &e](heap: &!h Heap, o: buffer.Buffer, port: &!q Port, pw: &!p Poller, req: &!a [byte], rsp: &!b [byte], chunk: &!c [byte], ev: &!d [int], ans: &!e [int], reg: int, n: int, label: &static [byte]) -> [heap, poll, tty_read, tty_write] buffer.Buffer {
+    var out = text(heap, o, label);
+    var sum = 0.0;
+    var sq = 0.0;
+    var lo = 1000000;
+    var hi = 0 - 1;
+    var good = 0;
+    var k = 0;
+    while k < n {
+        if read_reg(port, pw, req, rsp, chunk, ev, ans, reg) == 0 {
+            let v = ans[1];
+            sum = sum + float_of(v);
+            sq = sq + float_of(v) * float_of(v);
+            if v < lo { lo = v; }
+            if v > hi { hi = v; }
+            good = good + 1;
+        }
+        k = k + 1;
+    }
+    if good == 0 {
+        return text(heap, out, " no answers\n");
+    }
+    let mean = sum / float_of(good);
+    var var2 = sq / float_of(good) - mean * mean;
+    if var2 < 0.0 { var2 = 0.0; }
+    out = text(heap, out, " n "); out = num(heap, out, good);
+    out = text(heap, out, "  mean "); out = fixed(heap, out, mean);
+    out = text(heap, out, " counts ("); out = fixed(heap, out, mean * 3300.0 / 4096.0);
+    out = text(heap, out, " mV)  sd "); out = fixed(heap, out, sqrt(var2));
+    out = text(heap, out, "  min "); out = num(heap, out, lo);
+    out = text(heap, out, "  max "); out = num(heap, out, hi);
+    return text(heap, out, "\n");
+}
+
+fn cmd_adc[&h, &q, &p, &a, &b, &c, &d, &e](heap: &!h Heap, o: buffer.Buffer, port: &!q Port, pw: &!p Poller, req: &!a [byte], rsp: &!b [byte], chunk: &!c [byte], ev: &!d [int], ans: &!e [int], n: int) -> [heap, poll, tty_read, tty_write] buffer.Buffer {
+    var out = o;
+    write_reg(port, pw, req, rsp, chunk, ev, regs.ctrl(), 16);
+    poller_wait(pw, ev, 20);
+    read_reg(port, pw, req, rsp, chunk, ev, ans, regs.nsamp());
+    let before = ans[1];
+    out = adc_line(heap, out, port, pw, req, rsp, chunk, ev, ans, regs.adc0(), n, "ADC0");
+    out = adc_line(heap, out, port, pw, req, rsp, chunk, ev, ans, regs.adc1(), n, "ADC1");
+    read_reg(port, pw, req, rsp, chunk, ev, ans, regs.nsamp());
+    let after = ans[1];
+    out = check(heap, out, "conversions are running (NSAMP advanced)", after != before);
+    write_reg(port, pw, req, rsp, chunk, ev, regs.ctrl(), 0);
+    return text(heap, out, "ADC run switched off again\n");
+}
+
+fn cmd_dac[&h, &q, &p, &a, &b, &c, &d, &e](heap: &!h Heap, o: buffer.Buffer, port: &!q Port, pw: &!p Poller, req: &!a [byte], rsp: &!b [byte], chunk: &!c [byte], ev: &!d [int], ans: &!e [int], ch: int, code: int, seconds: int) -> [heap, poll, tty_read, tty_write] buffer.Buffer {
+    var out = o;
+    let reg = man_reg(ch);
+    write_reg(port, pw, req, rsp, chunk, ev, regs.ctrl(), 8);
+    let w = write_reg(port, pw, req, rsp, chunk, ev, reg, code);
+    read_reg(port, pw, req, rsp, chunk, ev, ans, reg);
+    out = check(heap, out, "the manual code was written and reads back", w == 0 && ans[1] == code);
+    out = text(heap, out, "holding code "); out = num(heap, out, code);
+    out = text(heap, out, ": the DA3 should give about "); out = fixed(heap, out, float_of(code) * 2500.0 / 65536.0);
+    out = text(heap, out, " mV (0 to 2.5 V over 65536 codes). Read the meter now, for ");
+    out = num(heap, out, seconds); out = text(heap, out, " s\n");
+    var t = 0;
+    while t < seconds * 10 { poller_wait(pw, ev, 100); t = t + 1; }
+    write_reg(port, pw, req, rsp, chunk, ev, reg, man_rest(ch));
+    write_reg(port, pw, req, rsp, chunk, ev, regs.ctrl(), 0);
+    return text(heap, out, "MANUAL off, the code put back to its reset value\n");
+}
+
+fn cmd_ramp[&h, &q, &p, &a, &b, &c, &d, &e](heap: &!h Heap, o: buffer.Buffer, port: &!q Port, pw: &!p Poller, req: &!a [byte], rsp: &!b [byte], chunk: &!c [byte], ev: &!d [int], ans: &!e [int], ch: int, steps: int) -> [heap, poll, tty_read, tty_write] buffer.Buffer {
+    var out = text(heap, o, "code  adc_mean  expected  error (counts)\n");
+    let reg = man_reg(ch);
+    write_reg(port, pw, req, rsp, chunk, ev, regs.ctrl(), 24);
+    var n = 0.0;
+    var sx = 0.0; var sy = 0.0; var sxx = 0.0; var sxy = 0.0;
+    var worst = 0.0;
+    var k = 0;
+    while k < steps {
+        let code = k * 65535 / (steps - 1);
+        write_reg(port, pw, req, rsp, chunk, ev, reg, code);
+        poller_wait(pw, ev, 40);
+        var sum = 0.0;
+        var good = 0;
+        var j = 0;
+        while j < 8 {
+            if read_reg(port, pw, req, rsp, chunk, ev, ans, regs.adc0()) == 0 { sum = sum + float_of(ans[1]); good = good + 1; }
+            j = j + 1;
+        }
+        if good > 0 {
+            let mean = sum / float_of(good);
+            let want = float_of(code) * 2500.0 * 4096.0 / (65536.0 * 3300.0);
+            var err = mean - want;
+            out = num(heap, out, code); out = text(heap, out, "  ");
+            out = fixed(heap, out, mean); out = text(heap, out, "  ");
+            out = fixed(heap, out, want); out = text(heap, out, "  ");
+            out = fixed(heap, out, err); out = text(heap, out, "\n");
+            if err < 0.0 { err = 0.0 - err; }
+            if err > worst { worst = err; }
+            let x = float_of(code);
+            n = n + 1.0; sx = sx + x; sy = sy + mean; sxx = sxx + x * x; sxy = sxy + x * mean;
+        }
+        k = k + 1;
+    }
+    write_reg(port, pw, req, rsp, chunk, ev, reg, man_rest(ch));
+    write_reg(port, pw, req, rsp, chunk, ev, regs.ctrl(), 0);
+    let den = n * sxx - sx * sx;
+    if n < 2.0 || den < 1.0 { return text(heap, out, "FAIL too few readings to fit a line\n"); }
+    let slope = (n * sxy - sx * sy) / den;
+    let icpt = (sy - slope * sx) / n;
+    let slope_want = 2500.0 * 4096.0 / (65536.0 * 3300.0);
+    out = text(heap, out, "fit: ADC counts = "); out = fixed(heap, out, icpt);
+    out = text(heap, out, " + "); out = fixed(heap, out, slope * 65536.0);
+    out = text(heap, out, " x (code / 65536)   gain against the ideal "); out = fixed(heap, out, slope / slope_want);
+    out = text(heap, out, "   largest error "); out = fixed(heap, out, worst); out = text(heap, out, " counts\n");
+    out = text(heap, out, "Write the gain, the offset and the largest error down; the converters' stated accuracy is not in this program.\n");
+    return check(heap, out, "the ADC follows the DAC (positive slope)", slope > 0.0);
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec, tty } = split(world);
+    release(ffi); release(fs); release(net); release(signals); release(exec); release(clock);
+    var cmd = 0;
+    var ch = 0;
+    var n1 = 0 - 1;
+    var bare = false;
+    var secs = 20;
+    borrow args as &g in {
+        if arg_count(g) > 1 { cmd = int_of(arg(g, 1)[0]); }
+        if arg_count(g) > 2 {
+            if cmd == 97 { n1 = number_of(arg(g, 2)); }
+            else { ch = int_of(arg(g, 2)[0]); }
+        }
+        if arg_count(g) > 3 && cmd != 97 { n1 = number_of(arg(g, 3)); }
+        if arg_count(g) > 4 { bare = is_bare(arg(g, 4)); }
+        if arg_count(g) > 5 && cmd == 100 { secs = number_of(arg(g, 5)); }
+    }
+    release(args);
+    var status = 3;
+    var fails = 0;
+    let device = narrow(tty, "/dev");
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 8192);
+        // a clean usage check before the port is touched: dac CH CODE bare [SECONDS], ramp CH STEPS bare, adc N
+        var usage_ok = false;
+        if cmd == 97 && n1 >= 1 && n1 <= 5000 { usage_ok = true; }
+        if cmd == 100 && man_reg(ch) >= 0 && n1 >= 0 && n1 <= 65535 && secs >= 1 && secs <= 600 { usage_ok = true; }
+        if cmd == 114 && man_reg(ch) >= 0 && n1 >= 2 && n1 <= 256 { usage_ok = true; }
+        if (cmd == 100 || cmd == 114) && !bare { usage_ok = false; }
+        if !usage_ok {
+            o = text(h, o, "usage: adc N | dac CH CODE bare [SECONDS] | ramp CH STEPS bare   (CH is z, x, y or d)\n");
+            o = text(h, o, "dac and ramp put a code straight on a DAC and bypass the Z limit: `bare` says only a meter or the ADC is connected to the DAC outputs\n");
+        } else {
+            match poller_new() {
+                Polling::Failed(e) => { status = 1; }
+                Polling::Ok(open) => {
+                    var p = open;
+                    borrow device as &t in {
+                        match tty_open(t, "/dev/ttyUSB1") {
+                            TtyOpened::Failed(errno) => { status = 4; o = text(h, o, "cannot open /dev/ttyUSB1\n"); }
+                            TtyOpened::Ok(port) => {
+                                borrow mut port as &!q in {
+                                    if tty_configure(q, 115200) != 0 { status = 5; }
+                                    else {
+                                        borrow mut p as &!pw in { poller_add_tty(pw, q, 1, 1); }
+                                        region r {
+                                            let req = alloc_slice[r](16, byte_of(0));
+                                            let rsp = alloc_slice[r](16, byte_of(0));
+                                            let chunk = alloc_slice[r](16, byte_of(0));
+                                            let ev = alloc_slice[r](2, 0);
+                                            let ans = alloc_slice[r](2, 0);
+                                            borrow mut p as &!pw in {
+                                                let code = read_reg(q, pw, req, rsp, chunk, ev, ans, regs.id());
+                                                if code == 0 && ans[1] == 0xAF500001 {
+                                                    o = check(h, o, "identifier is afm_top's (0xAF500001)", true);
+                                                    if cmd == 97 { o = cmd_adc(h, o, q, pw, req, rsp, chunk, ev, ans, n1); }
+                                                    if cmd == 100 { o = cmd_dac(h, o, q, pw, req, rsp, chunk, ev, ans, ch, n1, secs); }
+                                                    if cmd == 114 { o = cmd_ramp(h, o, q, pw, req, rsp, chunk, ev, ans, ch, n1); }
+                                                    status = 0;
+                                                } else {
+                                                    o = text(h, o, "stopping: not afm_top on this port (no answer, or another identifier); nothing was written\n");
+                                                    status = 2;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                tty_close(port);
+                            }
+                        }
+                    }
+                    poller_close(p);
+                }
+            }
+        }
+        // a FAIL line anywhere means a non-zero exit
+        borrow o as &tb in {
+            let body = buffer.bytes(tb);
+            var i = 0;
+            while i + 3 < len(body) {
+                if int_of(body[i]) == 70 && int_of(body[i + 1]) == 65 && int_of(body[i + 2]) == 73 && int_of(body[i + 3]) == 76 { fails = fails + 1; }
+                i = i + 1;
+            }
+        }
+        borrow mut io as &!i2 in {
+            borrow o as &ob in { io.write_all(i2, buffer.bytes(ob)); }
+        }
+        buffer.drop(h, o);
+    }
+    release(device);
+    release(io);
+    release(heap);
+    if status == 0 && fails > 0 { return 1; }
+    return status;
+}
