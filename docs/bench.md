@@ -1,6 +1,7 @@
 # Measuring with cancho while building
 
-> Written 2026-11-04. **A design, not a tool.** The only measuring program that exists and has run on the board is `host/bringup.cho` (17 of 17 on 2026-11-02, nothing wired). Everything below
+> Written 2026-11-04. **Mostly a design.** The only measuring program that has run on the board is `host/bringup.cho` (17 of 17 on 2026-11-02, nothing wired). `host/bench.cho` (`adc`, `dac`, `ramp`) is written, compiles,
+> and was run against a throwaway fake of the board on a pseudo-terminal (it checks the arguments, the register traffic and the arithmetic); **it has never touched a real board**. Everything below
 > marked *to write* is a plan built on the register table (`registers-table.md`) and the byte protocol (`host/proto.cho`); none of it has been run. The point: after every step of the
 > tutorial, the instrument itself takes a second, independent reading next to the meter, because the one time that happened (`first-hardware.md`) it found a bug the whole simulation had missed.
 
@@ -8,6 +9,7 @@
 
 * **Drive, with the loop off** (`CTRL` MANUAL bit): the four DACs directly, as codes: `MAN_Z`, `MAN_X`, `MAN_Y`, `MAN_D`. The fork drive's size and middle: `DRIVE_AMP`, `DRIVE_OFFS`; its frequency: `TUNING`.
 * **Read:** the latest raw ADC conversion on each channel (`ADC0`, `ADC1`); how many conversions and detector windows have run (`NSAMP`, `NWIN`); the detector's I and Q sums and its amplitude figure (`I`, `Q`, `AMP`); the Z, X and Y the DACs are told (`ZOUT`, `XOUT`, `YOUT`); the raster's line and pixel; `STATUS` (fault, overflow, scan done); the motor's position and refusals.
+* **A safety finding:** in MANUAL mode the DAC codes go straight to the outputs and **bypass `ZMIN` and `ZMAX`** (`gen/glue.cho`: `code_z = manual ? man_z : z_out`). Anything that uses `MAN_*` with an amplifier and a piezo attached can put the full range on the piezo, so `host/bench.cho` refuses unless told `bare`.
 * **Protocol:** a read is 5 bytes out and 5 back, a write 9 out and 1 back, at 115200 baud (`host/proto.cho`).
 
 ## The limit that shapes everything: about a thousand readings a second
@@ -31,14 +33,14 @@ For a step response there are two ways: an oscilloscope, or **a capture buffer i
 | Part | Measurement | What the program does | Registers | Result it prints | State |
 |---|---|---|---|---|---|
 | 4 | the link and the registers | reads the identifier before any write; checks defaults, read-back and refusals | `ID`, defaults, `SETPOINT`, `MOTOR_MAX` | PASS or FAIL per check; exit code | **exists, run on the board** (`host/bringup.cho`) |
-| 5 | a DAC code to a voltage | MANUAL on; sets a code; the operator reads the meter and types it back | `CTRL`, `MAN_*` | code, volts read, error | *to write* |
-| 5 | the ADC's offset, gain and noise | ADC run on; reads `ADC0` and `ADC1` N times with the input at GND, at 3V3 and at a divider | `CTRL`, `ADC0`, `ADC1`, `NSAMP` | mean and standard deviation in counts and in mV | *to write* |
-| 5 | the DAC to ADC loop-back | writes a code, waits, reads the ADC, repeats over the range (a ramp) | `MAN_*`, `ADC0` | the error against code; the largest error; a straight-line fit's gain and offset | *to write* |
-| 5 | noise floor and drift of the electronics | many reads of a quiet input over seconds, then minutes | `ADC0` | rms in counts (one AD1 step is 806 uV); drift per minute | *to write* |
+| 5 | a DAC code to a voltage | MANUAL on; sets a code; the operator reads the meter and types it back | `CTRL`, `MAN_*` | the code, the volts it should give; the operator reads the meter | *written 2026-11-04, `host/bench.cho`; run only against a fake serial port, never on a board* (`dac CH CODE bare`) |
+| 5 | the ADC's offset, gain and noise | ADC run on; reads `ADC0` and `ADC1` N times with the input at GND, at 3V3 and at a divider | `CTRL`, `ADC0`, `ADC1`, `NSAMP` | mean, standard deviation, smallest and largest, in counts and in mV | *written 2026-11-04, `host/bench.cho`; run only against a fake serial port, never on a board* (`adc N`) |
+| 5 | the DAC to ADC loop-back | writes a code, waits, reads the ADC, repeats over the range (a ramp) | `MAN_*`, `ADC0` | the error against code; the largest error; a straight-line fit's gain and offset | *written 2026-11-04, `host/bench.cho`; run only against a fake serial port, never on a board* (`ramp CH STEPS bare`) |
+| 5 | noise floor and drift of the electronics | many reads of a quiet input over seconds, then minutes | `ADC0` | rms in counts (one AD1 step is 806 uV); drift per minute | the rms is in `adc N`; the drift over minutes is *to write* |
 | 6 | the fork's resonance | for each frequency: sets `TUNING`, waits for the fork to settle and `NWIN` to advance, reads `AMP`, `I`, `Q` | `TUNING`, `DRIVE_AMP`, `NWIN`, `AMP`, `I`, `Q` | amplitude against frequency; the peak, its width, the Q (peak frequency over full width at half the peak power) | *to write* |
 | 6 | the baseline and the C0 trimmer | the same sweep, repeated while the trimmer is turned; reports the peak-to-baseline ratio | as above | the ratio (design: about 84 matched, 6.8 with no trimmer, assumed fork) | *to write* |
 | 6 | the drive reaching the fork | steps `DRIVE_AMP`, reads `AMP` at resonance | `DRIVE_AMP`, `AMP` | amplitude per drive step; where it saturates | *to write* |
-| 8 | the three piezo drivers' DC points | MANUAL on; sets named codes (0, mid, full) for Z, X and Y and tells the operator what the meter should show | `MAN_Z/X/Y` | the expected number, a place for the read one | *to write* |
+| 8 | the three piezo drivers' DC points | MANUAL on; sets named codes (0, mid, full) for Z, X and Y and tells the operator what the meter should show | `MAN_Z/X/Y` | the expected number, a place for the read one | *to write*: `dac` as written refuses unless `bare` (nothing but a meter on the DAC); with the amplifier connected it needs a cap on the code |
 | 8 | an amplifier's step response | not by the host (see above) | none | a scope reading, or a capture buffer | **not possible today** |
 | 9 | the coarse motor | enables it; commands steps; reads where it thinks it is; the operator confirms the mark | `MOTOR_MAX`, `MOTOR_CMD`, `MOTOR_POS`, `MOTOR_STATUS` | steps asked, position read, refused flag | the register checks exist; the turn test is *to write* |
 | 10 | the Z limit | sets `ZMIN` and `ZMAX`, asks for a Z past them, reads `ZOUT` | `ZMIN`, `ZMAX`, `ZOUT` | the Z it reports against the limit; the operator checks the meter too | the behaviour is tested in simulation (`tests/board_test.cho`); the host program that measures it on the board is *to write* |

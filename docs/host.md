@@ -12,6 +12,7 @@
 | `host/twin_link.cho`, `host/run_twin.cho` | the serial bridge in software, and a runner that executes a script against the twin through the real bytes |
 | `host/tty_run.cho` | the runner for the real board over `/dev/ttyUSB1` at 115200 baud; edition 8 (the Tty capability), so it needs the newer compiler |
 | `host/bringup.cho` | first contact with the real board: reads the identifier, checks the defaults and refusals and that the motor fails closed; run on the Pi, 17 of 17 passed (`docs/first-hardware.md`) |
+| `host/bench.cho` | the first measuring program (`docs/bench.md`): `adc N` reads the ADC and prints mean and spread; `dac CH CODE bare` holds a DAC at a code for a meter; `ramp CH STEPS bare` steps a DAC and fits the ADC's response. Manual mode bypasses the Z limit, so the last two refuse without the word `bare`. Compiles; run only against a fake serial port, never on a board |
 | `host/demo_twin.cho` | runs the whole procedure on the twin and prints the run record and the image |
 
 **What `tty_run.cho` can and cannot do.** Its declared authority (from `cancho authority`) is `poll`, `tty_open("/dev")`, `tty_read` and `tty_write`: no network,
