@@ -163,3 +163,46 @@ pub fn level_lines[&a](z: &!a [float], nx: int, ny: int, reach: int) -> [] int {
     }
     return 0;
 }
+
+// Remove a bow along x: the median of every column over all lines is fitted with a quadratic in u = (x - middle) / (half width) by least squares, and the linear and quadratic parts are subtracted (the
+// constant stays, so the heights keep their level). A scanner's bow is the same in every line, which is why the medians of the columns carry it; the grating and the particles are a minority of each
+// column or average out over it. A grating whose periods do not fill the line leaks a few pm into the quadratic (checked in tests/image_test.cho).
+pub fn level_bow[&a](z: &!a [float], nx: int, ny: int) -> [] int {
+    region r {
+        let m = alloc_slice[r](nx, 0.0);
+        let col = alloc_slice[r](ny, 0.0);
+        var i = 0;
+        while i < nx {
+            var j = 0;
+            while j < ny { col[j] = z[j * nx + i]; j = j + 1; }
+            m[i] = median_of(col, ny);
+            i = i + 1;
+        }
+        let h = float_of(nx - 1) / 2.0;
+        // normal equations for 1, u, u^2
+        var s0 = 0.0; var s1 = 0.0; var s2 = 0.0; var s3 = 0.0; var s4 = 0.0; var t0 = 0.0; var t1 = 0.0; var t2 = 0.0;
+        i = 0;
+        while i < nx {
+            let u = (float_of(i) - h) / h;
+            s0 = s0 + 1.0; s1 = s1 + u; s2 = s2 + u * u; s3 = s3 + u * u * u; s4 = s4 + u * u * u * u;
+            t0 = t0 + m[i]; t1 = t1 + u * m[i]; t2 = t2 + u * u * m[i];
+            i = i + 1;
+        }
+        let det = s0 * (s2 * s4 - s3 * s3) - s1 * (s1 * s4 - s3 * s2) + s2 * (s1 * s3 - s2 * s2);
+        if det > 0.000001 {
+            let c1 = (s0 * (t1 * s4 - s3 * t2) - t0 * (s1 * s4 - s3 * s2) + s2 * (s1 * t2 - t1 * s2)) / det;
+            let c2 = (s0 * (s2 * t2 - t1 * s3) - s1 * (s1 * t2 - t1 * s2) + t0 * (s1 * s3 - s2 * s2)) / det;
+            var j = 0;
+            while j < ny {
+                i = 0;
+                while i < nx {
+                    let u = (float_of(i) - h) / h;
+                    z[j * nx + i] = z[j * nx + i] - c1 * u - c2 * u * u;
+                    i = i + 1;
+                }
+                j = j + 1;
+            }
+        }
+    }
+    return 0;
+}

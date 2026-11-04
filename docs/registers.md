@@ -18,7 +18,7 @@ host sets limits ("fails closed"). The host reads the limits back to confirm the
 From the same table: the cancho-hdl contract [`hw/afm.chw`](../hw/afm.chw) (checked by `chw check`) and the C header [`hw/afm.h`](../hw/afm.h) made from it, a Verilog check of the real
 register file (`gen/regs_tb.cho`), and a test of the twin (`tests/contract_test.cho`); `sh test_all.sh` fails if a generated file is stale. What the bits and values mean:
 
-* **CTRL:** bit 0 RUN (the loop), 1 DRIVE_EN, 2 SCAN (the raster, needs RUN), 3 MANUAL (the DACs follow MAN_Z/X/Y/D), 4 ADC_RUN (sampling and the detector), 5 MOTOR_EN (the STEP/DIR/EN pins; EN is active low and inactive at power-on).
+* **CTRL:** bit 0 RUN (the loop), 1 DRIVE_EN, 2 SCAN (the raster, needs RUN), 3 MANUAL (the DACs follow MAN_Z/X/Y/D), 4 ADC_RUN (sampling and the detector), 5 MOTOR_EN (the STEP/DIR/EN pins; EN is active low and inactive at power-on), 7 ADC_PAR (the parallel AD9226 interface in place of the Pmod AD1: one sample per 2 x HALF clocks while ADC_RUN is set, 4.5 MS/s at HALF 3; SAMPLE_DIV is not used; ADC0 is the 12-bit code and ADC1 the OTR bit; the six LEDs no longer exist, their pins carry its data).
 * **STATUS:** bit 0 FAULT (the deadman latched), 1 LOOP_BUSY, 2 OVERFLOW (the detector's sums left +-8,388,607; sticky, steps are skipped while it is set), 3 SCAN_DONE, 4 ADC_BUSY.
 * **Units:** Z, ZMIN, ZMAX, ZINIT, ZRETRACT and ZOUT are picometres (the Z DAC code is Z / 16); X, Y, X0, Y0, DX, DY and the DRIVE and MAN registers are DAC codes; TIMEOUT and MOTOR_RATE are FPGA clocks (27 MHz); gains are Q16 (65536 = 1.0).
 * **TUNING** is 2^32 x f / fs (536870912 = 8 samples per period); **SHIFT** shifts the detector figure right before the loop; **SETPOINT** is a signed 32-bit word.

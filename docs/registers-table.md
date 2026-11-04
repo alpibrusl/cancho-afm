@@ -3,7 +3,7 @@
 | Index | Address | Name | Access | Reset | Bit fields | What |
 |---|---|---|---|---|---|---|
 | 0 | 0x40000000 | ID | RO | 2941255681 | 32 bits | identifier and version |
-| 1 | 0x40000004 | CTRL | RW | 0 | RUN [0:0], DRIVE_EN [1:1], SCAN [2:2], MANUAL [3:3], ADC_RUN [4:4], MOTOR_EN [5:5], SINE [6:6] | run bits |
+| 1 | 0x40000004 | CTRL | RW | 0 | RUN [0:0], DRIVE_EN [1:1], SCAN [2:2], MANUAL [3:3], ADC_RUN [4:4], MOTOR_EN [5:5], SINE [6:6], ADC_PAR [7:7] | run bits |
 | 2 | 0x40000008 | STATUS | RO | 0 | FAULT [0:0], LOOP_BUSY [1:1], OVERFLOW [2:2], SCAN_DONE [3:3], ADC_BUSY [4:4] | status bits |
 | 3 | 0x4000000c | SAMPLE_DIV | RW | 103 | 32 bits | FPGA clocks between ADC conversions |
 | 4 | 0x40000010 | TUNING | RW | 536870912 | 32 bits | reference phase step per sample: 2^32 f / fs |

@@ -8,8 +8,16 @@ module afm_top_tb;
   wire adc_cs, adc_sck, adc_d0, adc_d1;
   wire dz_cs, dz_din, dz_sclk, dx_cs, dx_din, dx_sclk, dy_cs, dy_din, dy_sclk, dd_cs, dd_din, dd_sclk, ldac, motor_step, motor_dir, motor_en_n;
   integer m_edges = 0; always @(posedge motor_step) m_edges = m_edges + 1;
-  wire [5:0] led;
-  afm_top dut(clk, rxd, txd, adc_cs, adc_sck, adc_d0, adc_d1, dz_cs, dz_din, dz_sclk, dx_cs, dx_din, dx_sclk, dy_cs, dy_din, dy_sclk, dd_cs, dd_din, dd_sclk, ldac, motor_step, motor_dir, motor_en_n, led);
+  wire adc_clk; wire [11:0] adc_p; wire adc_otr;
+  // a parallel ADC (AD9226 module): the input is sampled on the rising edge of its clock, 7 clocks later the code is on the pins, 8 ns after that edge
+  reg [11:0] feed = 12'd0; reg feed_otr = 1'b0; reg [11:0] pipe [0:6]; reg otr_pipe [0:6]; integer pk;
+  always @(posedge adc_clk) begin
+    for (pk = 6; pk > 0; pk = pk - 1) begin pipe[pk] <= pipe[pk - 1]; otr_pipe[pk] <= otr_pipe[pk - 1]; end
+    pipe[0] <= feed; otr_pipe[0] <= feed_otr;
+  end
+  assign #8 adc_p = pipe[6];
+  assign #8 adc_otr = otr_pipe[6];
+  afm_top dut(clk, rxd, txd, adc_cs, adc_sck, adc_d0, adc_d1, dz_cs, dz_din, dz_sclk, dx_cs, dx_din, dx_sclk, dy_cs, dy_din, dy_sclk, dd_cs, dd_din, dd_sclk, ldac, motor_step, motor_dir, motor_en_n, adc_clk, adc_p, adc_otr);
 
   // ---- DA3 models: shift DIN in on rising SCLK while CS low; load the output when CS rises with exactly 16 bits and LDAC low
   reg [15:0] code_z = 0, code_x = 0, code_y = 0, code_d = 32768;
@@ -49,7 +57,7 @@ module afm_top_tb;
   assign adc_d0 = sr0[15];
   assign adc_d1 = sr1[15];
 
-  integer fails = 0;
+  integer fails = 0; integer nconv_before = 0; reg [31:0] n0; real ta, tb, ns;
   // ---- the host: a serial port
   reg [7:0] fifo [0:255]; integer wp = 0, rpn = 0; reg [7:0] cur; integer k;
   initial forever begin
@@ -185,6 +193,22 @@ module afm_top_tb;
     if (x_max !== 40999) begin fails = fails + 1; $display("FAIL the X DAC reached %0d, wanted 40999", x_max); end
     if (code_x !== 16'd1000 || code_y !== 16'd2250) begin fails = fails + 1; $display("FAIL after the sine scan X=%0d Y=%0d, wanted 1000 and 2250", code_x, code_y); end
     $display("phase 8 (sine scan): x max %0d, final x %0d y %0d", x_max, code_x, code_y);
+    // ---- phase 9: the parallel ADC (CTRL bit 7). A constant 0xA5C with OTR high must read back exactly (the wiring and bit order), at one sample per 2 * HALF clocks, with the SPI converter idle
+    w(1, 0); repeat (1000) @(posedge clk);
+    feed = 12'hA5C; feed_otr = 1'b1; nconv_before = nconv;
+    w(6, 3); w(1, 32'h90);   // adc_run + adc_par, half 3: one sample per 6 clocks (4.5 MS/s)
+    repeat (20000) @(posedge clk);
+    rdi(2, d); if (d[4] !== 1'b1) begin fails = fails + 1; $display("FAIL ADC_BUSY is not set while the parallel ADC runs"); end
+    rdi(38, d); if (d !== 32'h0A5C) begin fails = fails + 1; $display("FAIL parallel ADC0 reads %h, wanted 0A5C", d); end
+    rdi(39, d); if (d !== 32'h1) begin fails = fails + 1; $display("FAIL parallel ADC1 (OTR) reads %h, wanted 1", d); end
+    ta = $realtime; rdi(40, d); n0 = d; repeat (60000) @(posedge clk); tb = $realtime; rdi(40, d);
+    // the two reads start the same way, so the elapsed time between their starts is the time between their samples; one sample per 6 clocks of 37 ns
+    ns = (tb - ta) / 222.0;
+    if ((d - n0) < 0.995 * ns || (d - n0) > 1.005 * ns) begin fails = fails + 1; $display("FAIL %0d samples in %0d clocks, wanted one per 6", d - n0, $rtoi(ns * 6.0)); end
+    if (nconv !== nconv_before || adc_cs !== 1'b1) begin fails = fails + 1; $display("FAIL the SPI converter ran while the parallel ADC was chosen"); end
+    w(1, 0); repeat (200) @(posedge clk);
+    if (adc_clk !== 1'b0) begin fails = fails + 1; $display("FAIL the ADC clock keeps running with ADC_RUN off"); end
+    $display("phase 9 (parallel ADC): %0d samples in the second interval, ADC0 0A5C", d - n0);
     $display("afm_top system test: %0d failures, %0d bad DAC frames, %0d conversions", fails, bad_frames, nconv);
     $finish;
   end

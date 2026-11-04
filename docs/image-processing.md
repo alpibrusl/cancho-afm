@@ -138,3 +138,9 @@ Images up to 256 x 256 (a region holds 64 KiB; the mask is bytes).
 1. **Real data.** Everything above is checked on the twin; the invented sample is not an AFM's. The first real image decides what is wrong.
 2. **Where the image comes from for a fast scan**: the HS profile's image has 28 to 30 pm noise in the twin; with a real photodiode it will be more. Denoising (a median or Gaussian filter) is deliberately not in the list until the noise is seen.
 3. **The tip**: the twin's tip is a point; tip deconvolution needs a tip model in the twin first.
+
+## What the twin's image artifacts showed (2026-11-03)
+
+The twin can now put a tilt, a bow and line offsets into the sample (`sim/board.cho` `artifacts`, `fl[24]` to `fl[27]`; `scan_twin` arguments 7 to 10), and mode 7 writes the raw trace as a PNG, so the picture before and after the pipeline can be set side by side (`docs/img-artifacts.png`). The levelling gained a bow step (`image.level_bow`: a quadratic fitted to the column medians, subtracted after the plane and the line offsets; tested on a synthetic 60 pm bow under a grating, 60 pm before and under 8 after).
+
+On the high-speed profile with a tilt of 3 pm per pixel and 4 pm per line, a bow of 60 pm and line offsets of up to 30 pm: Ra, Rq, Rz **46.3, 66.1, 192.4 pm against 46.3, 65.9, 192.4 for the clean scan** (without the bow step Rq was 67.3 and Rz 216), the grating 100.1 pm against 98.8, all three particles at the same places. The step reads **142.2 pm against 155.5**: that is the line offsets, not the bow (a bow alone gives 151.4), the same limit as in the I5 test (the step is measured from line medians, so an offset of a line is its noise; seven lines above the edge and offsets of 30 pm). Whether a different estimator, for instance one that takes the offsets out first, does better is untested. Twin only.

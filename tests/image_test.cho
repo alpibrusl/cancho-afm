@@ -1,4 +1,5 @@
 import std.test;
+import std.math;
 import image;
 
 // Images of 32 x 32 (a region holds 64 KiB): flat, three particles (raised cosine, 450 to 600 pm) and a known tilt.
@@ -76,6 +77,32 @@ fn test_line_offsets_go_and_a_step_across_the_lines_stays() -> [] int {
         test.assert_eq(near(z[2 * 32], 0.0, 20.0), 1);
         test.assert_eq(near(z[29 * 32], 150.0, 20.0), 1);
         test.assert_eq(near(z[17 * 32] - z[14 * 32], 150.0, 50.0), 1);
+    }
+    return 0;
+}
+
+// A bow of 60 pm at the edges (quadratic about the middle of the 32 pixel line) under a grating of pitch 8 (4 periods), 30 pm peak to peak: after `level_bow` the edge-to-middle difference of the
+// column medians is a few pm, not 60.
+fn test_a_bow_along_x_is_levelled_out() -> [] int {
+    region g {
+        let z = alloc_slice[g](32 * 32, 0.0);
+        var j = 0;
+        while j < 32 {
+            var i = 0;
+            while i < 32 {
+                let u = (float_of(i) - 15.5) / 15.5;
+                z[j * 32 + i] = 60.0 * u * u + 15.0 * math.sin(6.283185307179586 * float_of(i) / 8.0);
+                i = i + 1;
+            }
+            j = j + 1;
+        }
+        image.level_bow(z, 32, 32);
+        // the end of the line (x = 0, a sine zero) against its middle (x = 16, also a zero): 60 pm apart before
+        var d = z[0] - z[16];
+        if d < 0.0 { d = 0.0 - d; }
+        var ok = 0;
+        if d < 8.0 { ok = 1; }
+        test.assert_eq(ok, 1);
     }
     return 0;
 }

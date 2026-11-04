@@ -9,7 +9,7 @@ fn test_defaults_and_refusals_match_the_hardware() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](24, 0.0);
+        let fl = alloc_slice[r](32, 0.0);
         board.reset(rf, st, fl);
         let (id, r0) = board.read(rf, st, 0);
         test.assert_eq(id, 0xAF500001);
@@ -50,7 +50,7 @@ fn test_the_free_figure_matches_the_verilog_run() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](24, 0.0);
+        let fl = alloc_slice[r](32, 0.0);
         setup(rf, st, fl);
         board.write(rf, st, 1, 24);        // manual + adc_run
         board.write(rf, st, 28, 2500);     // Z at 40,000 pm: far above the surface
@@ -70,7 +70,7 @@ fn test_the_loop_settles_where_the_verilog_run_does() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](24, 0.0);
+        let fl = alloc_slice[r](32, 0.0);
         setup(rf, st, fl);
         board.write(rf, st, 1, 24); board.write(rf, st, 28, 2500);
         board.advance(rf, st, fl, 2000);
@@ -96,7 +96,7 @@ fn test_the_limit_the_deadman_and_the_reset() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](24, 0.0);
+        let fl = alloc_slice[r](32, 0.0);
         setup(rf, st, fl);
         board.write(rf, st, 7, 4); board.write(rf, st, 8, 2190); board.write(rf, st, 9, 2304);
         board.write(rf, st, 12, 65535); board.write(rf, st, 13, 0); board.write(rf, st, 14, 60000);
@@ -137,7 +137,7 @@ fn test_the_scan_ends_where_the_verilog_scan_does() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](24, 0.0);
+        let fl = alloc_slice[r](32, 0.0);
         setup(rf, st, fl);
         board.write(rf, st, 7, 4); board.write(rf, st, 8, 2190); board.write(rf, st, 9, 2304);
         board.write(rf, st, 12, 65535); board.write(rf, st, 14, 60000); board.write(rf, st, 15, 3000); board.write(rf, st, 16, 60000);
@@ -163,7 +163,7 @@ fn test_the_sine_scan_follows_the_cosine() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](24, 0.0);
+        let fl = alloc_slice[r](32, 0.0);
         setup(rf, st, fl);
         board.write(rf, st, 7, 4); board.write(rf, st, 8, 2190); board.write(rf, st, 9, 2304);
         board.write(rf, st, 12, 65535); board.write(rf, st, 14, 60000); board.write(rf, st, 15, 3000); board.write(rf, st, 16, 60000);
@@ -195,7 +195,7 @@ fn test_the_motor_fails_closed_and_moves_the_tip() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](24, 0.0);
+        let fl = alloc_slice[r](32, 0.0);
         board.reset(rf, st, fl);
         board.set_distance(fl, 10000.0, 198.4375);
         let (mx, r0) = board.read(rf, st, 47);
@@ -251,7 +251,7 @@ fn step_peak(f_res: float, q: float, slew: float, n: int) -> [] float {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](24, 0.0);
+        let fl = alloc_slice[r](32, 0.0);
         board.reset(rf, st, fl);
         board.set_scanner(fl, f_res, q, slew);
         board.write(rf, st, 28, 0);
@@ -288,5 +288,33 @@ fn test_the_amplifier_slew_limit_bounds_the_speed() -> [] int {
     // 5 pm/us over 10 conversions of 3.8 us is at most 190 pm; an ideal scanner is at 1600 at once
     test.assert_eq(below(step_peak(2600.0, 0.5, 5.0, 10), 200.0), 1);
     test.assert_eq(above(step_peak(0.0, 0.0, 0.0, 10), 1599.0), 1);
+    return 0;
+}
+
+// CTRL bit 7 (the parallel ADC): a sample every 2 x HALF clocks instead of SAMPLE_DIV, and ADC_RUN counts them (nsamp, register 40) at that rate.
+fn test_the_parallel_adc_sets_the_sample_rate_by_half() -> [] int {
+    region r {
+        let rf = alloc_slice[r](64, 0);
+        let st = alloc_slice[r](32, 0);
+        let fl = alloc_slice[r](32, 0.0);
+        board.reset(rf, st, fl);
+        test.assert_eq(board.sample_clocks(rf), 103);
+        test.assert_eq(board.write(rf, st, 6, 3), 0);
+        test.assert_eq(board.write(rf, st, 1, 128), 0);
+        test.assert_eq(board.sample_clocks(rf), 6);
+        test.assert_eq(board.write(rf, st, 6, 0), 0);
+        test.assert_eq(board.sample_clocks(rf), 2);   // HALF 0 behaves as 1, like the Verilog
+        test.assert_eq(board.write(rf, st, 6, 3), 0);
+        test.assert_eq(board.write(rf, st, 1, 144), 0);   // ADC_RUN + ADC_PAR
+        board.advance_clocks(rf, st, fl, 600);
+        let (n, r1) = board.read(rf, st, 40);
+        test.assert_eq(n, 100);
+        // the same clocks with the Pmod AD1 (SAMPLE_DIV 103): 5 samples
+        test.assert_eq(board.write(rf, st, 1, 0), 0);
+        test.assert_eq(board.write(rf, st, 1, 16), 0);
+        board.advance_clocks(rf, st, fl, 600);
+        let (m, r2) = board.read(rf, st, 40);
+        test.assert_eq(m, 5);
+    }
     return 0;
 }

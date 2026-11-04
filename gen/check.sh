@@ -87,13 +87,13 @@ grep -q "back 4 edges (want 4), dir 0, pos 3" mo.log
 iverilog -g2012 -s uart_tb -o ub.vvp afm_glue.sv ../gen/uart_bridge_tb.v
 vvp ub.vvp | tee ub.log
 grep -q "uart bridge: 0 failures" ub.log
-iverilog -g2012 -s afm_top_tb -o sys.vvp afm_glue.sv pid_step.sv raster.sv lockin.sv spi.sv ../gen/afm_top_tb.v
+iverilog -g2012 -s afm_top_tb -o sys.vvp afm_glue.sv pid_step.sv raster.sv lockin.sv spi.sv adc_par.sv ../gen/afm_top_tb.v
 vvp sys.vvp | tee sys.log
 grep -q "afm_top system test: 0 failures, 0 bad DAC frames" sys.log
 # the register file of afm_top against the register table (host/regs.cho)
 cd ..
 $CANCHO run gen/regs_tb.cho host/regs.cho --std > build/contract_tb.v
 cd build
-iverilog -g2012 -s contract_tb -o ct.vvp afm_glue.sv pid_step.sv raster.sv lockin.sv spi.sv contract_tb.v
+iverilog -g2012 -s contract_tb -o ct.vvp afm_glue.sv pid_step.sv raster.sv lockin.sv spi.sv adc_par.sv contract_tb.v
 vvp ct.vvp | tee ct.log
 grep -q "contract check: 50 registers, 0 failures" ct.log

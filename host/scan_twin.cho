@@ -268,11 +268,19 @@ fn scan_out[&h, &a](heap: &!h Heap, o: buffer.Buffer, pic: &a [int], mode: int, 
                         }
                         i = i + 1;
                     }
-                    var span = rp.hi - rp.lo;
+                    var lo = rp.lo;
+                    var hi = rp.hi;
+                    if mode == 7 {
+                        // the raw trace as the instrument read it: no drift correction, no plane, no line offsets, stretched over its own range
+                        lo = t[0]; hi = t[0];
+                        k = 0;
+                        while k < 4096 { lev[k] = t[k]; if t[k] < lo { lo = t[k]; } if t[k] > hi { hi = t[k]; } k = k + 1; }
+                    }
+                    var span = hi - lo;
                     if span < 1.0 { span = 1.0; }
                     k = 0;
                     while k < 4096 {
-                        var q = truncate((lev[k] - rp.lo) / span * 255.0 + 0.5);
+                        var q = truncate((lev[k] - lo) / span * 255.0 + 0.5);
                         if q < 0 { q = 0; }
                         if q > 255 { q = 255; }
                         pix[k] = byte_of(q);
@@ -286,7 +294,7 @@ fn scan_out[&h, &a](heap: &!h Heap, o: buffer.Buffer, pic: &a [int], mode: int, 
     return b;
 }
 
-// the profile: argument 1 (the scanner, argument 2, and for the high-speed profile the cantilever's resonance in kHz, argument 3, the same way; default 500; argument 4 = 1 prints the levelling check, 2 the metrics check, 5 the console's scan.json, 6 its levelled image as a PNG, 4 the drift check (arguments 5 and 6: the sample's drift along x in milli-pixels per tick and in height in milli-pm per tick), of docs/image-processing.md instead of the pixels), `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md)
+// the profile: argument 1 (the scanner, argument 2, and for the high-speed profile the cantilever's resonance in kHz, argument 3, the same way; default 500; argument 4 = 1 prints the levelling check, 2 the metrics check, 5 the console's scan.json, 6 its levelled image as a PNG, 7 the raw trace as a PNG, 4 the drift check (arguments 5 and 6: the sample's drift along x in milli-pixels per tick and in height in milli-pm per tick; 7 to 10: a tilt along x in pm per pixel, a tilt along y in pm per line, a bow in pm and line offsets of up to that many pm), of docs/image-processing.md instead of the pixels), `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md)
 fn number_of[&t](text: &t [byte]) -> [] int {
     var n = 0;
     var i = 0;
@@ -308,6 +316,10 @@ fn main(world: World) -> [] int {
     var lv = 0;
     var xd = 0;
     var zd = 0;
+    var tx = 0;
+    var ty = 0;
+    var bw = 0;
+    var lo7 = 0;
     borrow args as &g in {
         if arg_count(g) > 1 { prof = number_of(arg(g, 1)); }
         if arg_count(g) > 2 { scn = number_of(arg(g, 2)); }
@@ -315,6 +327,10 @@ fn main(world: World) -> [] int {
         if arg_count(g) > 4 { lv = number_of(arg(g, 4)); }
         if arg_count(g) > 5 { xd = number_of(arg(g, 5)); }
         if arg_count(g) > 6 { zd = number_of(arg(g, 6)); }
+        if arg_count(g) > 7 { tx = number_of(arg(g, 7)); }
+        if arg_count(g) > 8 { ty = number_of(arg(g, 8)); }
+        if arg_count(g) > 9 { bw = number_of(arg(g, 9)); }
+        if arg_count(g) > 10 { lo7 = number_of(arg(g, 10)); }
     }
     release(args); release(net); release(clock); release(signals); release(exec);
     borrow mut heap as &!h in {
@@ -322,7 +338,7 @@ fn main(world: World) -> [] int {
         region r {
             let rf = alloc_slice[r](64, 0);
             let st = alloc_slice[r](32, 0);
-            let fl = alloc_slice[r](24, 0.0);
+            let fl = alloc_slice[r](32, 0.0);
             board.reset(rf, st, fl);
             if prof == 1 { var fc = 500000.0; if fk > 0 { fc = 1000.0 * float_of(fk); } board.set_plant(fl, fc, 5.0, 2000.0, 2000.0, 100.0, 1200.0, 2.0); }
             else { board.set_plant(fl, 32781.4, 500.0, 2000.0, 2000.0, 100.0, 1200.0, 2.0); }
@@ -335,6 +351,7 @@ fn main(world: World) -> [] int {
             if scn == 5 { board.set_scanner(fl, 50000.0, 3.0, 0.0); }
             if scn == 6 { board.set_scanner(fl, 70000.0, 3.0, 0.0); }
             fl[8] = float_of(zd) / 1000.0 / float_of(session.pixdiv(prof)); fl[20] = float_of(xd) / 1000.0 * 100.0 / float_of(session.pixdiv(prof));
+            fl[24] = float_of(tx); fl[25] = float_of(ty); fl[26] = float_of(bw); fl[27] = float_of(lo7);
             board.set_distance(fl, 11000.0, 198.4375);
             let ss = alloc_slice[r](32, 0);
             ss[3] = prof;
@@ -353,7 +370,7 @@ fn main(world: World) -> [] int {
                 session.consume(ss, sf, out, img);
                 guard = guard + 1;
             }
-            if lv != 3 && lv != 5 && lv != 6 {
+            if lv != 3 && lv != 5 && lv != 6 && lv != 7 {
             o = text(h, o, "twin scan; failure code "); o = num(h, o, ss[2]); o = text(h, o, ", refused writes "); o = num(h, o, failures);
             o = text(h, o, ", contact Z "); o = num(h, o, ss[9]); o = text(h, o, " pm; f0 "); o = num(h, o, truncate(sf[0])); o = text(h, o, " Hz, Q "); o = num(h, o, truncate(sf[1])); o = text(h, o, ", free figure "); o = num(h, o, ss[10]);
             o = text(h, o, ", window "); o = num(h, o, ss[15]); o = text(h, o, ", shift "); o = num(h, o, ss[11]); o = text(h, o, ", setpoint "); o = num(h, o, ss[12]); o = text(h, o, ", motor steps "); o = num(h, o, ss[21]); o = text(h, o, ", settled Z "); o = num(h, o, ss[22]); o = text(h, o, " pm\n");
@@ -396,9 +413,9 @@ fn main(world: World) -> [] int {
             if lv == 1 { o = analyse(h, o, pic); }
             if lv == 2 { o = metrics_check(h, o, pic, rf, st, fl); }
             if lv == 3 { o = particles_csv(h, o, pic); }
-            if lv == 5 || lv == 6 { o = scan_out(h, o, pic, lv, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27, prof); }
+            if lv == 5 || lv == 6 || lv == 7 { o = scan_out(h, o, pic, lv, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27, prof); }
             if lv == 4 { o = drift_check(h, o, pic, rf, st, fl, session.pixdiv(prof), xd, zd); }
-            if lv != 3 && lv != 5 && lv != 6 { o = text(h, o, "frame_us "); o = num(h, o, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27); o = text(h, o, "\n"); }
+            if lv != 3 && lv != 5 && lv != 6 && lv != 7 { o = text(h, o, "frame_us "); o = num(h, o, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27); o = text(h, o, "\n"); }
         }
         var code = 0;
         borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
