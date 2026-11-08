@@ -1,0 +1,162 @@
+import std.test;
+import board;
+import plant;
+import tune;
+import lockin;
+import proto;
+import script;
+import twin_link;
+import run_twin;
+import session;
+import approach;
+import pid;
+import raster;
+
+// docs/liquid.md, S9.4: the optical lever in the twin: a sum signal, a deflection level that wanders, optical noise, a spot that is misaligned or fading.
+// The twin's own guess at the shape of a photodiode, not a model of any laser, lens or lever.
+
+fn close(got: float, want: float, tol: float) -> [] int {
+    var d = got - want;
+    if d < 0.0 { d = 0.0 - d; }
+    if d <= tol { return 1; }
+    return 0;
+}
+
+fn test_the_optics_are_off_by_default() -> [] int {
+    region r {
+        let rf = alloc_slice[r](64, 0);
+        let st = alloc_slice[r](32, 0);
+        let fl = alloc_slice[r](48, 0.0);
+        board.reset(rf, st, fl);
+        st[14] = 100000;
+        test.assert(close(board.light(st, fl), 1.0, 0.0) == 1);
+        test.assert(close(board.sum_now(st, fl), 0.0, 0.0) == 1);
+        test.assert(close(board.deflection_now(st, fl), 0.0, 0.0) == 1);
+    }
+    return 0;
+}
+
+fn test_the_sum_signal_falls_and_the_deflection_wanders() -> [] int {
+    region r {
+        let rf = alloc_slice[r](64, 0);
+        let st = alloc_slice[r](32, 0);
+        let fl = alloc_slice[r](48, 0.0);
+        board.reset(rf, st, fl);
+        board.set_optics(fl, 2000.0, 0.8, 0.0, 0.01, 0.00001);
+        st[14] = 0;
+        test.assert(close(board.sum_now(st, fl), 1600.0, 0.001) == 1);
+        test.assert(close(board.deflection_now(st, fl), 0.0, 0.001) == 1);
+        st[14] = 50000;
+        // 0.8 x (1 - 0.00001 x 50,000) = 0.4 of the nominal 2,000; the deflection has wandered 500 counts
+        test.assert(close(board.sum_now(st, fl), 800.0, 0.01) == 1);
+        test.assert(close(board.deflection_now(st, fl), 500.0, 0.01) == 1);
+        // the light never goes below nothing
+        st[14] = 1000000;
+        test.assert(close(board.sum_now(st, fl), 0.0, 0.0) == 1);
+    }
+    return 0;
+}
+
+// The whole run (profile 1) on a 400 kHz, Q 3 lever with the optical lever set. got: 0 the session's state, 1 pixels read, 2 the free figure, 3 contact Z (pm).
+fn run_optics[&a](got: &!a [int], noise: float, align: float, wander: float, loss: float) -> [] int {
+    var fault = 0 - 1;
+    region r {
+        let rf = alloc_slice[r](64, 0);
+        let st = alloc_slice[r](32, 0);
+        let fl = alloc_slice[r](48, 0.0);
+        board.reset(rf, st, fl);
+        board.set_plant(fl, 400000.0, 3.0, 2000.0, 2000.0, 100.0, 600.0, 2.0);
+        board.set_optics(fl, 2000.0, align, noise, wander, loss);
+        board.set_distance(fl, 11000.0, 198.4375);
+        let ss = alloc_slice[r](32, 0);
+        ss[3] = 1;
+        let sf = alloc_slice[r](8, 0.0);
+        let sc = alloc_slice[r](4 * 200, 0);
+        let out = alloc_slice[r](128, 0);
+        let img = alloc_slice[r](64, 0 - 1);
+        let req = alloc_slice[r](16, byte_of(0));
+        let rsp = alloc_slice[r](16, byte_of(0));
+        var guard = 0;
+        while ss[0] != 99 && ss[0] != 98 && guard < 40000 {
+            let n = session.build(ss, sf, sc);
+            run_twin.run(sc, n, rf, st, fl, out, req, rsp);
+            session.consume(ss, sf, out, img);
+            guard = guard + 1;
+        }
+        got[0] = ss[0]; got[1] = ss[16]; got[2] = ss[10]; got[3] = ss[9];
+        fault = ss[2];
+    }
+    return fault;
+}
+
+fn test_a_noisy_and_half_aligned_lever_still_runs_with_half_the_figure() -> [] int {
+    region r {
+        let full = alloc_slice[r](8, 0);
+        let half = alloc_slice[r](8, 0);
+        test.assert_eq(run_optics(full, 3.0, 1.0, 0.0, 0.0), 0);
+        test.assert_eq(run_optics(half, 3.0, 0.5, 0.0, 0.0), 0);
+        test.assert_eq(full[0], 99);
+        test.assert_eq(half[0], 99);
+        test.assert_eq(half[1], 36);
+        // half the light reaching the photodiode, half the figure (within 10%)
+        test.assert(close(float_of(half[2]), float_of(full[2]) / 2.0, float_of(full[2]) / 10.0) == 1);
+    }
+    return 0;
+}
+
+fn test_a_dark_photodiode_is_refused_as_no_resonance() -> [] int {
+    region r {
+        let got = alloc_slice[r](8, 0);
+        test.assert_eq(run_optics(got, 0.0, 0.0, 0.0, 0.0), 22);
+        test.assert_eq(got[0], 98);
+        test.assert_eq(got[1], 0);
+    }
+    return 0;
+}
+
+// a wandering baseline that clips the converter used to read as "contact" at the top of Z and scan nothing, with the code 0; it is now refused with the approach's fault 3 (code 43)
+fn test_a_wandering_baseline_is_refused_not_scanned() -> [] int {
+    region r {
+        let got = alloc_slice[r](8, 0);
+        test.assert_eq(run_optics(got, 0.0, 1.0, 0.2, 0.0), 43);
+        test.assert_eq(got[0], 98);
+        test.assert_eq(got[1], 0);
+        // a gentle one (0.002 counts a window) runs
+        let gentle = alloc_slice[r](8, 0);
+        test.assert_eq(run_optics(gentle, 0.0, 1.0, 0.002, 0.0), 0);
+        test.assert_eq(gentle[1], 36);
+    }
+    return 0;
+}
+
+// contact is not accepted at Z fully retracted: the approach alone
+fn test_contact_at_full_retract_is_a_fault() -> [] int {
+    let p = approach.P { free_r: 1000, free_pm: 2000, contact_pct: 90, dz: 192, dwell: 0, zmin: 0, zmax: 10000, coarse: 5000, max_motor: 20 };
+    let s = approach.A { phase: 1, z: 10000, motor: 0, dwell: 0, fault: 0 };
+    let a = approach.next(s, 800, p);
+    test.assert_eq(a.phase, 3);
+    test.assert_eq(a.fault, 3);
+    // the same reading with Z lowered a step is contact
+    let s2 = approach.A { phase: 1, z: 9808, motor: 0, dwell: 0, fault: 0 };
+    let b = approach.next(s2, 800, p);
+    test.assert_eq(b.phase, 2);
+    return 0;
+}
+
+// a sweep of noise alone (a dark photodiode) is "no resonance", never a peak and never "ambiguous"
+fn test_a_noise_only_sweep_is_tag_2() -> [] int {
+    region r {
+        let f = alloc_slice[r](63, 0.0);
+        let d = alloc_slice[r](63, 0.0);
+        var i = 0;
+        while i < 63 {
+            f[i] = 100000.0 + 12700.0 * float_of(i);
+            d[i] = float_of((i * 1103515245 + 12345) / 65536 % 9);
+            i = i + 1;
+        }
+        let t = tune.analyse(f, d, 63);
+        test.assert_eq(t.ok, 0);
+        test.assert_eq(t.why, 2);
+    }
+    return 0;
+}
