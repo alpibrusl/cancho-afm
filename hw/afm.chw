@@ -28,7 +28,8 @@
           { "name": "ADC_RUN", "lsb": 4, "msb": 4 },
           { "name": "MOTOR_EN", "lsb": 5, "msb": 5 },
           { "name": "SINE", "lsb": 6, "msb": 6 },
-          { "name": "ADC_PAR", "lsb": 7, "msb": 7 }
+          { "name": "ADC_PAR", "lsb": 7, "msb": 7 },
+          { "name": "OPT_RUN", "lsb": 8, "msb": 8 }
         ]
       },
       {
@@ -465,6 +466,24 @@
         "name": "SINE_STEP",
         "offset": "0xc4",
         "kind": "RW",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "OPT_DEFL",
+        "offset": "0xc8",
+        "kind": "RO",
+        "reset": "0x00000000",
+        "fields": [
+          { "name": "VALUE", "lsb": 0, "msb": 31 }
+        ]
+      },
+      {
+        "name": "OPT_SUM",
+        "offset": "0xcc",
+        "kind": "RO",
         "reset": "0x00000000",
         "fields": [
           { "name": "VALUE", "lsb": 0, "msb": 31 }

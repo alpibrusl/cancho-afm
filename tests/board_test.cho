@@ -26,8 +26,11 @@ fn test_defaults_and_refusals_match_the_hardware() -> [] int {
         // a write to a read-only register, and to and from unmapped ones, are refused
         test.assert_eq(board.write(rf, st, 2, 1), 2);
         test.assert_eq(board.write(rf, st, 0, 1), 2);
+        test.assert_eq(board.write(rf, st, 52, 1), 2);
+        // the optical lever's two registers are read-only
         test.assert_eq(board.write(rf, st, 50, 1), 2);
-        let (z, r4) = board.read(rf, st, 50);
+        test.assert_eq(board.write(rf, st, 51, 1), 2);
+        let (z, r4) = board.read(rf, st, 52);
         test.assert_eq(r4, 2);
         test.assert_eq(board.write(rf, st, 27, 7), 0);
         let (pd, r5) = board.read(rf, st, 27);
