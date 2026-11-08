@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 520" font-family="sans-serif" font-size="12">
+<rect width="720" height="520" fill="#fff"/>
+<text x="360" y="22" text-anchor="middle" font-size="14" font-weight="bold">Droplet cell: holder, window, stage and the dry/wet line (side view; a plan, not built; not to scale)</text>
+<rect x="20" y="36" width="680" height="95" fill="#eef6ff" stroke="#4477aa" stroke-dasharray="6 4"/>
+<text x="30" y="54" fill="#225588">DRY above the glass: laser, lens, photodiode and every amplifier (docs/liquid-optics.svg)</text>
+<!-- glass window / holder -->
+<rect x="220" y="150" width="280" height="14" fill="#cfe8ff" stroke="#333"/><text x="510" y="162">glass holder plate, 1 mm (window)</text>
+<rect x="300" y="164" width="60" height="9" fill="#bbb" stroke="#333"/><text x="215" y="190" text-anchor="end">lever chip + insulating clip</text>
+<line x1="360" y1="168" x2="392" y2="200" stroke="#222" stroke-width="3"/><text x="400" y="200">lever</text>
+<!-- droplet -->
+<path d="M270 164 Q255 205 290 232 L430 232 Q465 205 450 164 Z" fill="#d6f0ff" stroke="#2a78b5"/>
+<text x="330" y="216" fill="#225588">droplet (50 to 100 uL, held by surface tension)</text>
+<!-- stage -->
+<rect x="340" y="232" width="50" height="8" fill="#a55" stroke="#333"/><text x="398" y="240">mica on a glass stage (1 to 1.5 mm rod, per Ando)</text>
+<rect x="358" y="240" width="14" height="40" fill="#cfe8ff" stroke="#333"/>
+<!-- skirt -->
+<ellipse cx="365" cy="285" rx="60" ry="9" fill="#ccc" stroke="#333"/><text x="440" y="289">hydrophobic drip skirt</text>
+<!-- scanner -->
+<rect x="325" y="296" width="80" height="44" fill="#ddd" stroke="#333"/><text x="365" y="322" text-anchor="middle">scanner</text>
+<text x="365" y="352" text-anchor="middle" fill="#a22">electrodes insulated, potted, below the skirt</text>
+<!-- tray -->
+<path d="M230 372 L230 410 L500 410 L500 372" fill="none" stroke="#333" stroke-width="2"/><text x="365" y="428" text-anchor="middle">drip tray (holds more than the whole droplet and the syringe)</text>
+<line x1="270" y1="404" x2="270" y2="395" stroke="#c60" stroke-width="3"/><line x1="460" y1="404" x2="460" y2="395" stroke="#c60" stroke-width="3"/>
+<text x="365" y="448" text-anchor="middle" fill="#c60">two bare leak electrodes on the tray floor feed the hardware cut (interlock 5)</text>
+<text x="360" y="490" text-anchor="middle" fill="#555">Nothing electrical touches the droplet. The window, the clip, the stage and the skirt are insulators.</text>
+</svg>
