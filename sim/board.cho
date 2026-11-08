@@ -245,8 +245,8 @@ fn resets[&a, &b](rf: &a [int], st: &!b [int]) -> [] int {
 
 // 0 = OKAY, 2 = SLVERR, like the serial bridge: a write to a read-only or unmapped register is refused and changes nothing.
 pub fn write[&a, &b](rf: &!a [int], st: &!b [int], idx: int, value: int) -> [] int {
-    if idx < 0 || idx > 49 { return 2; }
-    if idx == 0 || idx == 2 || (idx >= 32 && idx <= 42) || idx == 45 || idx == 46 { return 2; }
+    if idx < 0 || idx > 51 { return 2; }
+    if idx == 0 || idx == 2 || (idx >= 32 && idx <= 42) || idx == 45 || idx == 46 || idx == 50 || idx == 51 { return 2; }
     if idx == 18 {
         st[11] = 0;
         return 0;
@@ -304,6 +304,7 @@ pub fn read[&a, &b](rf: &a [int], st: &b [int], idx: int) -> [] (int, int) {
     if idx == 44 || idx == 47 || idx == 48 || idx == 49 { return (rf[idx], 0); }
     if idx == 45 { return (st[24] + rf[1] / 32 % 2 * 2 + st[30] * 4, 0); }
     if idx == 46 { return (u32(st[28]), 0); }
+    if idx == 50 || idx == 51 { return (rf[idx], 0); }
     return (0, 2);
 }
 
@@ -340,7 +341,7 @@ fn step_one[&a, &b, &c](rf: &!a [int], st: &!b [int], fl: &!c [float]) -> [] int
             }
         }
     }
-    if adc == 0 { return 0; }
+    if adc == 0 { rf[50] = 0; rf[51] = 0; return 0; }
     let fs = 27000000.0 / float_of(sdiv);
     let fref = float_of(rf[4]) / 4294967296.0 * fs;
     var zc = zout(rf, st) / 16;
@@ -382,6 +383,14 @@ fn step_one[&a, &b, &c](rf: &!a [int], st: &!b [int], fl: &!c [float]) -> [] int
     }
     st[15] = code;
     st[16] = 1234;
+    // the Pmod AD1's two conversions (OPT_DEFL, OPT_SUM, docs/liquid.md S9.5): in the SPI mode they are the two channels the detector reads (ADC0, ADC1); in the parallel mode
+    // they exist only when CTRL.OPT_RUN is set (the converter runs beside the parallel one) and then carry the optical lever's deflection DC level and sum signal, in counts
+    // (0 where the optics are not modelled: nothing is wired to the AD1)
+    if rf[1] / 128 % 2 == 0 { rf[50] = code; rf[51] = 1234; }
+    else if rf[1] / 256 % 2 == 1 {
+        rf[50] = clampi(truncate(math.round(2048.0 + deflection_now(st, fl))), 0, 4095);
+        rf[51] = clampi(truncate(math.round(sum_now(st, fl))), 0, 4095);
+    }
     st[13] = st[13] + 1;
     let ls = lockin.step(lockin.L { phase: st[0], acc_i: st[1], acc_q: st[2], cnt: st[3], done: 0, out_i: st[4], out_q: st[5], amp: st[6] }, code - 2048, rf[4], rf[5]);
     st[0] = ls.phase; st[1] = ls.acc_i; st[2] = ls.acc_q; st[3] = ls.cnt;

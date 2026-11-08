@@ -48,6 +48,8 @@ fn test_the_names_the_host_uses_match_the_table() -> [] int {
         // the name function and the index function agree for the registers the host names
         k = k + 1;
     }
-    test.assert_eq(regs.count(), 50);
+    test.assert_eq(regs.count(), 52);
+    test.assert_eq(regs.opt_defl(), 50);
+    test.assert_eq(regs.opt_sum(), 51);
     return 0;
 }

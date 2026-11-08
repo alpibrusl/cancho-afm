@@ -160,3 +160,64 @@ fn test_a_noise_only_sweep_is_tag_2() -> [] int {
     }
     return 0;
 }
+
+// OPT_DEFL and OPT_SUM (registers 50 and 51, docs/liquid.md S9.5): what the Pmod AD1 reads, in the twin.
+fn test_the_slow_channels_in_the_parallel_mode() -> [] int {
+    region r {
+        let rf = alloc_slice[r](64, 0);
+        let st = alloc_slice[r](32, 0);
+        let fl = alloc_slice[r](48, 0.0);
+        board.reset(rf, st, fl);
+        board.set_plant(fl, 400000.0, 3.0, 2000.0, 2000.0, 0.0, 0.0, 0.0);
+        board.set_optics(fl, 2000.0, 0.8, 0.0, 0.01, 0.0);
+        board.write(rf, st, 6, 3);
+        // parallel ADC running, OPT_RUN clear: the AD1 is idle and both registers read 0
+        board.write(rf, st, 1, 144);
+        board.advance(rf, st, fl, 2000);
+        let (d0, e0) = board.read(rf, st, 50);
+        let (s0, e1) = board.read(rf, st, 51);
+        test.assert_eq(e0, 0);
+        test.assert_eq(d0, 0);
+        test.assert_eq(s0, 0);
+        // OPT_RUN set: the sum is 0.8 of 2,000 and the deflection is 2,048 plus the wander so far (0.01 count a window)
+        board.write(rf, st, 1, 400);
+        board.advance(rf, st, fl, 2000);
+        let (d1, e2) = board.read(rf, st, 50);
+        let (s1, e3) = board.read(rf, st, 51);
+        test.assert_eq(e2, 0);
+        test.assert_eq(s1, 1600);
+        test.assert(d1 >= 2048);
+        test.assert(d1 <= 2048 + 40);
+        // read-only
+        test.assert_eq(board.write(rf, st, 50, 5), 2);
+        test.assert_eq(board.write(rf, st, 51, 5), 2);
+        // ADC_RUN off clears them, as the hardware does
+        board.write(rf, st, 1, 0);
+        board.advance(rf, st, fl, 10);
+        let (d2, e4) = board.read(rf, st, 50);
+        let (s2, e5) = board.read(rf, st, 51);
+        test.assert_eq(d2, 0);
+        test.assert_eq(s2, 0);
+    }
+    return 0;
+}
+
+fn test_the_slow_channels_in_the_spi_mode_are_adc0_and_adc1() -> [] int {
+    region r {
+        let rf = alloc_slice[r](64, 0);
+        let st = alloc_slice[r](32, 0);
+        let fl = alloc_slice[r](48, 0.0);
+        board.reset(rf, st, fl);
+        board.set_plant(fl, 32781.4, 500.0, 2000.0, 2000.0, 0.0, 0.0, 0.0);
+        board.write(rf, st, 1, 16);
+        board.advance(rf, st, fl, 500);
+        let (a0, ea) = board.read(rf, st, 38);
+        let (a1, eb) = board.read(rf, st, 39);
+        let (o0, ec) = board.read(rf, st, 50);
+        let (o1, ed) = board.read(rf, st, 51);
+        test.assert_eq(o0, a0);
+        test.assert_eq(o1, a1);
+        test.assert(o0 > 0);
+    }
+    return 0;
+}

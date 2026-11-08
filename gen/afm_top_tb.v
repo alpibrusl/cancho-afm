@@ -206,9 +206,27 @@ module afm_top_tb;
     ns = (tb - ta) / 222.0;
     if ((d - n0) < 0.995 * ns || (d - n0) > 1.005 * ns) begin fails = fails + 1; $display("FAIL %0d samples in %0d clocks, wanted one per 6", d - n0, $rtoi(ns * 6.0)); end
     if (nconv !== nconv_before || adc_cs !== 1'b1) begin fails = fails + 1; $display("FAIL the SPI converter ran while the parallel ADC was chosen"); end
+    rdi(50, d); if (d !== 32'h0) begin fails = fails + 1; $display("FAIL OPT_DEFL reads %h in the parallel mode without OPT_RUN, wanted 0", d); end
+    rdi(51, d); if (d !== 32'h0) begin fails = fails + 1; $display("FAIL OPT_SUM reads %h in the parallel mode without OPT_RUN, wanted 0", d); end
     w(1, 0); repeat (200) @(posedge clk);
     if (adc_clk !== 1'b0) begin fails = fails + 1; $display("FAIL the ADC clock keeps running with ADC_RUN off"); end
     $display("phase 9 (parallel ADC): %0d samples in the second interval, ADC0 0A5C", d - n0);
+    // ---- phase 10: the optical lever's slow outputs (docs/liquid.md, S9.5). CTRL bit 8 (OPT_RUN) runs the Pmod AD1 beside the parallel ADC: OPT_SUM must read the AD1 model's channel 1 (1234)
+    // and OPT_DEFL a 12-bit code from channel 0, while the parallel ADC keeps its exact code, OTR and one sample per 6 clocks; with OPT_RUN clear the SPI converter stays idle (phase 9)
+    feed = 12'hA5C; feed_otr = 1'b1; nconv_before = nconv;
+    w(6, 3); w(1, 32'h190);
+    repeat (20000) @(posedge clk);
+    rdi(38, d); if (d !== 32'h0A5C) begin fails = fails + 1; $display("FAIL parallel ADC0 reads %h with OPT_RUN, wanted 0A5C", d); end
+    rdi(39, d); if (d !== 32'h1) begin fails = fails + 1; $display("FAIL parallel ADC1 (OTR) reads %h with OPT_RUN, wanted 1", d); end
+    rdi(51, d); if (d !== 32'd1234) begin fails = fails + 1; $display("FAIL OPT_SUM reads %0d with OPT_RUN, wanted 1234", d); end
+    rdi(50, d); if (d > 32'd4095) begin fails = fails + 1; $display("FAIL OPT_DEFL reads %0d, a code is 12 bits", d); end
+    if (nconv === nconv_before) begin fails = fails + 1; $display("FAIL the SPI converter did not run with OPT_RUN set"); end
+    ta = $realtime; rdi(40, d); n0 = d; repeat (60000) @(posedge clk); tb = $realtime; rdi(40, d);
+    ns = (tb - ta) / 222.0;
+    if ((d - n0) < 0.995 * ns || (d - n0) > 1.005 * ns) begin fails = fails + 1; $display("FAIL with OPT_RUN: %0d samples in %0d clocks, wanted one per 6", d - n0, $rtoi(ns * 6.0)); end
+    w(1, 0); repeat (200) @(posedge clk);
+    rdi(51, d); if (d !== 32'h0) begin fails = fails + 1; $display("FAIL OPT_SUM keeps %0d with ADC_RUN off, wanted 0", d); end
+    $display("phase 10 (optical lever slow channels): OPT_SUM 1234 beside the parallel ADC, %0d conversions of the AD1", nconv - nconv_before);
     $display("afm_top system test: %0d failures, %0d bad DAC frames, %0d conversions", fails, bad_frames, nconv);
     $finish;
   end
