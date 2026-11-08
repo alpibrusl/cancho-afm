@@ -68,7 +68,7 @@ check and the register limits in `serve.cho`, so a gateway mistake cannot bypass
 
 ```sh
 cancho build host/scan_twin.cho sim/*.cho host/regs.cho gen/ir.cho gen/pid_ir.cho gen/raster_ir.cho gen/lockin_ir.cho host/proto.cho host/twin_link.cho host/script.cho host/run_twin.cho \
-    host/session.cho host/image.cho host/metrics.cho host/features.cho host/drift.cho host/report.cho host/png.cho --std -o scan_twin
+    host/session.cho host/image.cho host/metrics.cho host/features.cho host/drift.cho host/report.cho host/png.cho host/force.cho --std -o scan_twin
 ./scan_twin 1 0 500 5 > ui/scan.json        # profile 1 (the high-speed cantilever), ideal Z scanner, 500 kHz, mode 5: the document
 ./scan_twin 1 0 500 6 > ui/scan.png         # mode 6: the levelled image
 cancho-ui check ui/scan.cui && cancho-ui build ui/scan.cui -o ui/scan.js
