@@ -20,7 +20,7 @@ fn test_the_whole_automatic_run_on_the_twin() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](32, 0.0);
+        let fl = alloc_slice[r](48, 0.0);
         board.reset(rf, st, fl);
         board.set_plant(fl, 32781.4, 500.0, 2000.0, 2000.0, 100.0, 600.0, 2.0);
         board.set_distance(fl, 11000.0, 198.4375);    // 21,000 pm at Z = 10,000; 198.4 pm per microstep

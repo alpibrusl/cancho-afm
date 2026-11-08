@@ -1,0 +1,135 @@
+import std.test;
+import board;
+import plant;
+import tune;
+import lockin;
+import proto;
+import script;
+import twin_link;
+import run_twin;
+import session;
+import approach;
+import pid;
+import raster;
+
+// docs/liquid.md, S9.3: a force figure and a soft sample in the twin. The force is a proxy (stiffness times the amplitude lost to the surface) and the damage
+// threshold is a parameter; none of it is a measurement of any lever or sample.
+
+fn close(got: float, want: float, tol: float) -> [] int {
+    var d = got - want;
+    if d < 0.0 { d = 0.0 - d; }
+    if d <= tol { return 1; }
+    return 0;
+}
+
+fn test_the_estimate_is_stiffness_times_the_amplitude_given_up() -> [] int {
+    test.assert(close(tune.force_estimate(0.15, 2000.0, 0.8), 60.0, 0.001) == 1);
+    test.assert(close(tune.force_estimate(0.15, 2000.0, 1.0), 0.0, 0.001) == 1);
+    // a lower setpoint (a harder tap) asks for more force; a higher one for less
+    test.assert(tune.force_estimate(0.15, 2000.0, 0.6) > tune.force_estimate(0.15, 2000.0, 0.8));
+    test.assert(tune.force_estimate(0.15, 2000.0, 0.9) < tune.force_estimate(0.15, 2000.0, 0.8));
+    // out of range fractions are clamped, not extrapolated
+    test.assert(close(tune.force_estimate(0.15, 2000.0, 1.5), 0.0, 0.001) == 1);
+    test.assert(close(tune.force_estimate(0.15, 2000.0, 0.0 - 1.0), 300.0, 0.001) == 1);
+    return 0;
+}
+
+// The whole run (profile 1) on a 400 kHz, Q 3 lever of stiffness k over the 100 pm grating, the sample's stiffness ks, a threshold in pN.
+// got: 0 the session's state, 1 pixels read, 2 the largest force in the scan (pN, rounded), 3 windows over the threshold, 4 the grating's spread in line 1 (pm).
+fn run_soft[&a](got: &!a [int], k: float, ks: float, thr: float) -> [] int {
+    var fault = 0 - 1;
+    region r {
+        let rf = alloc_slice[r](64, 0);
+        let st = alloc_slice[r](32, 0);
+        let fl = alloc_slice[r](48, 0.0);
+        board.reset(rf, st, fl);
+        board.set_plant(fl, 400000.0, 3.0, 2000.0, 2000.0, 100.0, 600.0, 2.0);
+        board.set_soft(fl, k, ks, thr);
+        board.set_distance(fl, 11000.0, 198.4375);
+        let ss = alloc_slice[r](32, 0);
+        ss[3] = 1;
+        let sf = alloc_slice[r](8, 0.0);
+        let sc = alloc_slice[r](4 * 200, 0);
+        let out = alloc_slice[r](128, 0);
+        let img = alloc_slice[r](64, 0 - 1);
+        let req = alloc_slice[r](16, byte_of(0));
+        let rsp = alloc_slice[r](16, byte_of(0));
+        var guard = 0;
+        var peak = 0.0;
+        var over = 0.0;
+        while ss[0] != 99 && ss[0] != 98 && guard < 40000 {
+            let n = session.build(ss, sf, sc);
+            run_twin.run(sc, n, rf, st, fl, out, req, rsp);
+            session.consume(ss, sf, out, img);
+            if fl[36] > peak { peak = fl[36]; }
+            if fl[37] > over { over = fl[37]; }
+            guard = guard + 1;
+        }
+        var lo = 1000000;
+        var hi = 0 - 1000000;
+        var i = 12;
+        while i < 24 {
+            if img[i] < lo { lo = img[i]; }
+            if img[i] > hi { hi = img[i]; }
+            i = i + 1;
+        }
+        got[0] = ss[0]; got[1] = ss[16]; got[2] = truncate(peak + 0.5); got[3] = truncate(over); got[4] = hi - lo;
+        fault = ss[2];
+    }
+    return fault;
+}
+
+fn test_a_rigid_sample_and_the_proxy_at_the_setpoint() -> [] int {
+    region r {
+        let got = alloc_slice[r](8, 0);
+        test.assert_eq(run_soft(got, 0.15, 0.0, 0.0), 0);
+        test.assert_eq(got[0], 99);
+        test.assert_eq(got[1], 36);
+        // the loop holds the amplitude at 0.8 of the free one: 0.15 N/m x 2,000 pm x 0.2 = 60 pN, give or take the loop's own swing
+        test.assert(got[2] >= 40);
+        test.assert(got[2] <= 120);
+        // a threshold of 0 is no threshold
+        test.assert_eq(got[3], 0);
+        // the grating is seen at about its 100 pm
+        test.assert(got[4] >= 70);
+        test.assert(got[4] <= 130);
+    }
+    return 0;
+}
+
+fn test_the_threshold_counts_damaging_windows() -> [] int {
+    region r {
+        let got = alloc_slice[r](8, 0);
+        test.assert_eq(run_soft(got, 0.15, 0.0, 30.0), 0);
+        test.assert(got[3] > 0);
+        let calm = alloc_slice[r](8, 0);
+        test.assert_eq(run_soft(calm, 0.15, 0.0, 1000.0), 0);
+        test.assert_eq(calm[3], 0);
+    }
+    return 0;
+}
+
+// a stiffer lever presses harder at the same setpoint
+fn test_a_stiffer_lever_presses_harder() -> [] int {
+    region r {
+        let soft = alloc_slice[r](8, 0);
+        let hard = alloc_slice[r](8, 0);
+        test.assert_eq(run_soft(soft, 0.15, 0.0, 0.0), 0);
+        test.assert_eq(run_soft(hard, 0.6, 0.0, 0.0), 0);
+        test.assert(hard[2] > 2 * soft[2]);
+    }
+    return 0;
+}
+
+// on a soft sample the raised parts are pressed down by force / stiffness, so the grating looks lower than it is
+fn test_a_soft_sample_looks_flatter() -> [] int {
+    region r {
+        let rigid = alloc_slice[r](8, 0);
+        let soft = alloc_slice[r](8, 0);
+        test.assert_eq(run_soft(rigid, 0.15, 0.0, 0.0), 0);
+        test.assert_eq(run_soft(soft, 0.15, 1.0, 0.0), 0);
+        test.assert_eq(soft[1], 36);
+        test.assert(soft[4] < rigid[4] - 20);
+    }
+    return 0;
+}

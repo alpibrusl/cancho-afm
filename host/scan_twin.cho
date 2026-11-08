@@ -294,7 +294,7 @@ fn scan_out[&h, &a](heap: &!h Heap, o: buffer.Buffer, pic: &a [int], mode: int, 
     return b;
 }
 
-// the profile: argument 1 (the scanner, argument 2, and for the high-speed profile the cantilever's resonance in kHz, argument 3, the same way; default 500; argument 4 = 1 prints the levelling check, 2 the metrics check, 5 the console's scan.json, 6 its levelled image as a PNG, 7 the raw trace as a PNG, 4 the drift check (arguments 5 and 6: the sample's drift along x in milli-pixels per tick and in height in milli-pm per tick; 7 to 10: a tilt along x in pm per pixel, a tilt along y in pm per line, a bow in pm and line offsets of up to that many pm), of docs/image-processing.md instead of the pixels), `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md); for the high-speed profile, arguments 11 to 13 make it a liquid lever (docs/liquid.md, S9.2): its Q in tenths (30 = 3.0; default 50), a forest of fluid-cell peaks whose nearest is this many percent of the lever's height (0 = none), and their spacing in kHz
+// the profile: argument 1 (the scanner, argument 2, and for the high-speed profile the cantilever's resonance in kHz, argument 3, the same way; default 500; argument 4 = 1 prints the levelling check, 2 the metrics check, 5 the console's scan.json, 6 its levelled image as a PNG, 7 the raw trace as a PNG, 4 the drift check (arguments 5 and 6: the sample's drift along x in milli-pixels per tick and in height in milli-pm per tick; 7 to 10: a tilt along x in pm per pixel, a tilt along y in pm per line, a bow in pm and line offsets of up to that many pm), of docs/image-processing.md instead of the pixels), `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md); for the high-speed profile, arguments 11 to 13 make it a liquid lever (docs/liquid.md, S9.2): its Q in tenths (30 = 3.0; default 50), a forest of fluid-cell peaks whose nearest is this many percent of the lever's height (0 = none), and their spacing in kHz; arguments 14 to 16: the lever's stiffness in hundredths of N/m (15 = 0.15; 0 = force not modelled), the soft sample's stiffness in hundredths of N/m (0 = rigid) and the damage threshold in pN (docs/liquid.md, S9.3), which add a force line to the output
 fn number_of[&t](text: &t [byte]) -> [] int {
     var n = 0;
     var i = 0;
@@ -323,6 +323,9 @@ fn main(world: World) -> [] int {
     var lq = 0;
     var fr = 0;
     var fsp = 0;
+    var lk = 0;
+    var lks = 0;
+    var lth = 0;
     borrow args as &g in {
         if arg_count(g) > 1 { prof = number_of(arg(g, 1)); }
         if arg_count(g) > 2 { scn = number_of(arg(g, 2)); }
@@ -337,6 +340,9 @@ fn main(world: World) -> [] int {
         if arg_count(g) > 11 { lq = number_of(arg(g, 11)); }
         if arg_count(g) > 12 { fr = number_of(arg(g, 12)); }
         if arg_count(g) > 13 { fsp = number_of(arg(g, 13)); }
+        if arg_count(g) > 14 { lk = number_of(arg(g, 14)); }
+        if arg_count(g) > 15 { lks = number_of(arg(g, 15)); }
+        if arg_count(g) > 16 { lth = number_of(arg(g, 16)); }
     }
     release(args); release(net); release(clock); release(signals); release(exec);
     borrow mut heap as &!h in {
@@ -344,9 +350,9 @@ fn main(world: World) -> [] int {
         region r {
             let rf = alloc_slice[r](64, 0);
             let st = alloc_slice[r](32, 0);
-            let fl = alloc_slice[r](32, 0.0);
+            let fl = alloc_slice[r](48, 0.0);
             board.reset(rf, st, fl);
-            if prof == 1 { var fc = 500000.0; if fk > 0 { fc = 1000.0 * float_of(fk); } var qq = 5.0; if lq > 0 { qq = float_of(lq) / 10.0; } board.set_plant(fl, fc, qq, 2000.0, 2000.0, 100.0, 1200.0, 2.0); board.set_forest(fl, float_of(fr) / 100.0, 1000.0 * float_of(fsp), 15.0, 3); }
+            if prof == 1 { var fc = 500000.0; if fk > 0 { fc = 1000.0 * float_of(fk); } var qq = 5.0; if lq > 0 { qq = float_of(lq) / 10.0; } board.set_plant(fl, fc, qq, 2000.0, 2000.0, 100.0, 1200.0, 2.0); board.set_forest(fl, float_of(fr) / 100.0, 1000.0 * float_of(fsp), 15.0, 3); board.set_soft(fl, float_of(lk) / 100.0, float_of(lks) / 100.0, float_of(lth)); }
             else { board.set_plant(fl, 32781.4, 500.0, 2000.0, 2000.0, 100.0, 1200.0, 2.0); }
             fl[10] = 150.0;
             // argument 2, the Z scanner: 0 ideal, 1 a good small stack (100 kHz, Q 3), 2 a slow one (20 kHz, Q 10), 3 the good one behind a 20 pm/us amplifier, 4 to 6 a Q = 3 stack at 30, 50, 70 kHz (docs/high-speed.md, H2)
@@ -421,6 +427,7 @@ fn main(world: World) -> [] int {
             if lv == 3 { o = particles_csv(h, o, pic); }
             if lv == 5 || lv == 6 || lv == 7 { o = scan_out(h, o, pic, lv, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27, prof); }
             if lv == 4 { o = drift_check(h, o, pic, rf, st, fl, session.pixdiv(prof), xd, zd); }
+            if lv != 3 && lv != 5 && lv != 6 && lv != 7 && lk > 0 { o = text(h, o, "force_pn_max "); o = num(h, o, truncate(fl[36] + 0.5)); o = text(h, o, " windows_over_threshold "); o = num(h, o, truncate(fl[37])); o = text(h, o, " indentation_pm "); o = num(h, o, truncate(fl[38] + 0.5)); o = text(h, o, "\n"); }
             if lv != 3 && lv != 5 && lv != 6 && lv != 7 { o = text(h, o, "frame_us "); o = num(h, o, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27); o = text(h, o, "\n"); }
         }
         var code = 0;

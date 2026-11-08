@@ -54,7 +54,7 @@ fn test_the_forest_does_not_fall_on_contact() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](32, 0.0);
+        let fl = alloc_slice[r](48, 0.0);
         board.reset(rf, st, fl);
         board.set_plant(fl, 300000.0, 3.0, 2000.0, 2000.0, 0.0, 0.0, 0.0);
         board.set_forest(fl, 0.4, 60000.0, 15.0, 3);
@@ -128,7 +128,7 @@ fn run_liquid[&a](got: &!a [int], q: float, rel: float, spacing: float) -> [] in
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](32, 0.0);
+        let fl = alloc_slice[r](48, 0.0);
         board.reset(rf, st, fl);
         board.set_plant(fl, 400000.0, q, 2000.0, 2000.0, 100.0, 600.0, 2.0);
         board.set_forest(fl, rel, spacing, 15.0, 3);
