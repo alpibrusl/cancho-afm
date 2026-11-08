@@ -37,7 +37,7 @@
 5. A **force and damage report** per image (from the twin's model, then from the measured setpoint), next to the height image, in `host/report.cho`.
 6. Bench programs for the new head, as `host/bench.cho` does for the first board: read `ID` first, restore what they write, print measured against expected.
 
-## The epic and its issues (draft; to file as S9 and S9.1 to S9.11)
+## The epic and its issues (draft; to file as S9 and S9.1 to S9.12)
 
 **Epic S9: a version that works in water (liquid, then biological samples).** Done when a measured image of a hard test sample is taken in water by the instrument, then one of a soft biological sample, with
 the tapping force reported. Depends on S6 (first image in air) and S8 (a small fast cantilever and its optical head, measured). Each issue below states its acceptance first; a claim that turns out false is corrected in the document that made it.
