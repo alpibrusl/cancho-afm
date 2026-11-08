@@ -1,0 +1,151 @@
+import std.test;
+import board;
+import plant;
+import tune;
+import lockin;
+import proto;
+import script;
+import twin_link;
+import run_twin;
+import session;
+import approach;
+import pid;
+import raster;
+
+// docs/liquid.md, S9.6: the whole automatic run in profile 2 (a cantilever in liquid) against the twin, through the real byte protocol, with no operator input; and the refusals.
+// The twin's lever: 500 kHz, Q 3, 2,000 pm free; the optical lever on (a sum of 2,000 counts). Every number is the twin's, none is measured.
+
+fn close(got: float, want: float, tol: float) -> [] int {
+    var d = got - want;
+    if d < 0.0 { d = 0.0 - d; }
+    if d <= tol { return 1; }
+    return 0;
+}
+
+// One whole run. forest: percent of the lever's height of the fluid cell's nearest peak (0 none); spacing in kHz; the optics (sum0 counts, alignment, noise, wander per window, loss per window).
+// got: 0 stage, 1 pixels read, 2 free figure, 3 contact Z, 4 sum at the start, 5 lowest sum since, 6 deflection's largest distance from mid-scale, 7 f0 in kHz, 8 Q in tenths. Returns the failure code.
+fn run_liquid[&a](got: &!a [int], forest: float, spacing: float, sum0: float, align: float, noise: float, wander: float, loss: float) -> [] int {
+    var fault = 0 - 1;
+    region r {
+        let rf = alloc_slice[r](64, 0);
+        let st = alloc_slice[r](32, 0);
+        let fl = alloc_slice[r](48, 0.0);
+        board.reset(rf, st, fl);
+        board.set_plant(fl, 500000.0, 3.0, 2000.0, 2000.0, 100.0, 1200.0, 2.0);
+        board.set_forest(fl, forest, spacing, 15.0, 3);
+        board.set_optics(fl, sum0, align, noise, wander, loss);
+        board.set_distance(fl, 11000.0, 198.4375);
+        let ss = alloc_slice[r](32, 0);
+        ss[3] = 2;
+        let sf = alloc_slice[r](8, 0.0);
+        let sc = alloc_slice[r](4 * 200, 0);
+        let out = alloc_slice[r](128, 0);
+        let img = alloc_slice[r](64, 0 - 1);
+        let req = alloc_slice[r](16, byte_of(0));
+        let rsp = alloc_slice[r](16, byte_of(0));
+        var guard = 0;
+        while ss[0] != 99 && ss[0] != 98 && guard < 40000 {
+            let n = session.build(ss, sf, sc);
+            run_twin.run(sc, n, rf, st, fl, out, req, rsp);
+            session.consume(ss, sf, out, img);
+            guard = guard + 1;
+        }
+        got[0] = ss[0]; got[1] = ss[16]; got[2] = ss[10]; got[3] = ss[9];
+        got[4] = ss[23]; got[5] = ss[24]; got[6] = ss[25];
+        got[7] = truncate(sf[0] / 1000.0 + 0.5); got[8] = truncate(sf[1] * 10.0 + 0.5);
+        fault = ss[2];
+    }
+    return fault;
+}
+
+fn test_the_liquid_profile_runs_whole_with_no_operator() -> [] int {
+    region r {
+        let got = alloc_slice[r](12, 0);
+        test.assert_eq(run_liquid(got, 0.0, 0.0, 2000.0, 1.0, 3.0, 0.0, 0.0), 0);
+        test.assert_eq(got[0], 99);
+        test.assert_eq(got[1], 36);
+        // the tune found the lever (500 kHz, Q about 3) and the light was read the whole way
+        test.assert(got[7] >= 490);
+        test.assert(got[7] <= 510);
+        test.assert(got[8] >= 20);
+        test.assert(got[8] <= 45);
+        test.assert(got[4] >= 1900);
+        test.assert(got[5] >= 1900);
+    }
+    return 0;
+}
+
+fn test_the_profile_is_gentler_than_the_fork_and_hs() -> [] int {
+    test.assert_eq(session.setpoint_pct(2), 90);
+    test.assert_eq(session.setpoint_pct(1), 80);
+    test.assert_eq(session.setpoint_pct(0), 80);
+    test.assert_eq(session.contact_pct(2), 94);
+    test.assert_eq(session.contact_pct(1), 90);
+    test.assert_eq(session.opt(2), 2);
+    test.assert_eq(session.opt(1), 0);
+    test.assert_eq(session.adc_bit(2), 384);
+    test.assert_eq(session.adc_bit(1), 128);
+    test.assert_eq(session.adc_bit(0), 0);
+    return 0;
+}
+
+fn test_no_optical_lever_is_refused_as_no_light() -> [] int {
+    region r {
+        let got = alloc_slice[r](12, 0);
+        test.assert_eq(run_liquid(got, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0), 81);
+        test.assert_eq(got[0], 98);
+        test.assert_eq(got[1], 0);
+    }
+    return 0;
+}
+
+fn test_a_dim_lever_is_refused_before_anything_moves() -> [] int {
+    region r {
+        let got = alloc_slice[r](12, 0);
+        // a tenth of the nominal light is 200 counts, under the 400 the profile asks for
+        test.assert_eq(run_liquid(got, 0.0, 0.0, 2000.0, 0.1, 0.0, 0.0, 0.0), 81);
+        test.assert_eq(got[1], 0);
+    }
+    return 0;
+}
+
+// the case S9.4 handed here: a beam that fades through the run used to end with code 0 and a wrong image
+fn test_a_fading_beam_is_refused_and_not_trusted() -> [] int {
+    region r {
+        let got = alloc_slice[r](12, 0);
+        test.assert_eq(run_liquid(got, 0.0, 0.0, 2000.0, 1.0, 0.0, 0.0, 0.00002), 82);
+        test.assert_eq(got[0], 98);
+        test.assert(got[5] * 100 < got[4] * 95);
+    }
+    return 0;
+}
+
+fn test_a_very_slow_fade_still_runs() -> [] int {
+    region r {
+        let got = alloc_slice[r](12, 0);
+        test.assert_eq(run_liquid(got, 0.0, 0.0, 2000.0, 1.0, 0.0, 0.0, 0.00000002), 0);
+        test.assert_eq(got[1], 36);
+        test.assert(got[5] * 100 >= got[4] * 95);
+    }
+    return 0;
+}
+
+fn test_a_deflection_that_leaves_the_range_is_refused() -> [] int {
+    region r {
+        let got = alloc_slice[r](12, 0);
+        test.assert_eq(run_liquid(got, 0.0, 0.0, 2000.0, 1.0, 0.0, 0.5, 0.0), 83);
+        test.assert_eq(got[0], 98);
+        test.assert(got[6] > 1000);
+    }
+    return 0;
+}
+
+fn test_an_ambiguous_forest_is_refused_with_its_own_tag() -> [] int {
+    region r {
+        let got = alloc_slice[r](12, 0);
+        test.assert_eq(run_liquid(got, 0.9, 140000.0, 2000.0, 1.0, 0.0, 0.0, 0.0), 25);
+        test.assert_eq(got[0], 98);
+        test.assert_eq(got[1], 0);
+    }
+    return 0;
+}

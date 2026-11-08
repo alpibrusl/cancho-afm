@@ -22,17 +22,31 @@ import lockin;
 //   sf floats: 0 f0, 1 Q, 2 peak figure, 3 alpha (fraction of a step the plant follows per window)
 // failure codes: 1 the board's identity or limits did not read back; 2x the tune refused (x = the reason of tune.analyse); 3 the approach
 // parameters were unsafe; 4x the approach faulted (x = its fault code); 5 the loop faulted after hand-off; 6 too many iterations; 7 a write was refused;
-// 9 the coarse motor was still busy or refused a command.
+// 9 the coarse motor was still busy or refused a command; 8x the optical lever (profile 2): 81 no light at the start (the sum signal under sum_min), 82 the light faded (the sum signal under
+// sum_floor_pct of its start), 83 the deflection's DC level left the converter's range.
+// More state for profile 2: ss[23] the sum signal at the start, ss[24] the lowest since, ss[25] the largest distance of the deflection from mid-scale (2,048).
 
 // ---- the program's choices ----
 // The program's choices that differ between the two instruments are functions of the profile p, kept in ss[3]: 0 the tuning fork (default), 1 a small high-speed
 // cantilever in the twin (docs/high-speed.md, H1: 0.5 MHz class; nothing of it is built or measured).
 // The high-speed profile reads the parallel AD9226 interface (CTRL bit 7, 128) and sets HALF so that one sample takes 2 x HALF = 6 clocks, the 4.5 MS/s of `sample_div`; the fork reads the Pmod AD1.
-pub fn adc_bit(p: int) -> [] int { if p == 1 { return 128; } return 0; }
-pub fn half(p: int) -> [] int { if p == 1 { return 3; } return 2; }
+// Profile 2 is the same fast cantilever in liquid (docs/liquid.md, S9.6): everything `fast` is shared with profile 1; what differs is that it also runs the AD1 for the optical lever
+// (CTRL bit 8, OPT_RUN) and reads OPT_SUM and OPT_DEFL at the end of every stage, a gentler tap (setpoint 90% and contact 94% of the free figure, against 80% and 90%), and refusals on the light.
+pub fn fast(p: int) -> [] int { if p >= 1 { return 1; } return 0; }
+pub fn opt(p: int) -> [] int { if p == 2 { return 2; } return 0; }             // reads appended to every stage: the sum signal, then the deflection
+pub fn setpoint_pct(p: int) -> [] int { if p == 2 { return 90; } return 80; }
+pub fn contact_pct(p: int) -> [] int { if p == 2 { return 94; } return 90; }
+pub fn adc_bit(p: int) -> [] int { if p == 2 { return 384; } if p == 1 { return 128; } return 0; }
+pub fn half(p: int) -> [] int { if fast(p) == 1 { return 3; } return 2; }
+// The optical lever's checks (ASSUMED limits, not measured): the sum signal at the start must be at least `sum_min` counts of the AD1's 4,095 (about a tenth: the lever is lit at all), may fall to
+// `sum_floor_pct` of its starting value before the run is refused (the light is fading: the amplitude follows the light, the setpoint is 90% of a free figure measured at the start, so a 5% fade
+// already halves the margin the loop taps with; the first guess of 70% let the approach fault first, at the amplitude, found by the twin), and the deflection's DC level must stay within `defl_span` counts of mid-scale 2,048 (beyond it the readings clip).
+pub fn sum_min() -> [] int { return 400; }
+pub fn sum_floor_pct() -> [] int { return 95; }
+pub fn defl_span() -> [] int { return 1000; }
 
-pub fn sample_div(p: int) -> [] int { if p == 1 { return 6; } return 103; }       // fork: 262 kS/s at 27 MHz, 8 samples per period of 32.768 kHz; hs: 4.5 MS/s, 8.8 per period of 508 kHz
-pub fn window(p: int) -> [] int { if p == 1 { return 18; } return 64; }          // samples per detector window: fork 0.24 ms, short so a loop step is quick; hs 18 samples = 4.0 us, 2.05 cycles at 508 kHz (a whole number of cycles: 16 gave a 12% ripple, docs/high-speed.md)
+pub fn sample_div(p: int) -> [] int { if fast(p) == 1 { return 6; } return 103; }       // fork: 262 kS/s at 27 MHz, 8 samples per period of 32.768 kHz; hs: 4.5 MS/s, 8.8 per period of 508 kHz
+pub fn window(p: int) -> [] int { if fast(p) == 1 { return 18; } return 64; }          // samples per detector window: fork 0.24 ms, short so a loop step is quick; hs 18 samples = 4.0 us, 2.05 cycles at 508 kHz (a whole number of cycles: 16 gave a 12% ripple, docs/high-speed.md)
 pub fn window_clocks(p: int) -> [] int { return window(p) * sample_div(p); }
 pub fn window_s(p: int) -> [] float { return float_of(window_clocks(p)) / 27000000.0; }
 // The window in use (ss[15]): the profile's own until the sweep is done, then, for the high-speed profile, the one of lockin.snap, whose drive (the tuning word, ss[18]) puts a whole number of cycles in it.
@@ -46,14 +60,14 @@ pub fn coarse_steps() -> [] int { return 30; }                   // microsteps p
 pub fn pm_per_step() -> [] int { return 198; }                   // ASSUMED: a 0.635 mm lead screw, 1.8 degrees, 1/16 microstepping; calibrate before trusting
 pub fn sweep_points() -> [] int { return 63; }
 pub fn sweep_f(p: int, i: int) -> [] float {
-    if p == 1 { return 100000.0 + 12700.0 * float_of(i); }      // hs: 100 to 899 kHz in 12.7 kHz steps (a Q = 5 line at 500 kHz is 100 kHz wide: eight points; the fork's sweep is about eight line widths too)
+    if fast(p) == 1 { return 100000.0 + 12700.0 * float_of(i); }      // hs: 100 to 899 kHz in 12.7 kHz steps (a Q = 5 line at 500 kHz is 100 kHz wide: eight points; the fork's sweep is about eight line widths too)
     return 32520.0 + 8.0 * float_of(i);                          // fork: +-250 Hz about 32,768 Hz in 8 Hz steps
 }
-pub fn settle_clocks(p: int) -> [] int { if p == 1 { return 1000; } return 540000; }   // fork: 20 ms, four time constants of a Q = 500 fork (a Q = 5,000 one needs ten times as long); hs: 37 us, eleven of a Q = 5 cantilever at 500 kHz
+pub fn settle_clocks(p: int) -> [] int { if fast(p) == 1 { return 1000; } return 540000; }   // fork: 20 ms, four time constants of a Q = 500 fork (a Q = 5,000 one needs ten times as long); hs: 37 us, eleven of a Q = 5 cantilever at 500 kHz
 pub fn tuning_word(p: int, f: float) -> [] int { return truncate(f / fs(p) * 4294967296.0 + 0.5); }
 pub fn npix() -> [] int { return 12; }
 pub fn nlines() -> [] int { return 3; }
-pub fn pixdiv(p: int) -> [] int { if p == 1 { return 20; } return 60; }   // loop steps per pixel: the loop needs about 20 to follow a feature (the fork run keeps three times that)
+pub fn pixdiv(p: int) -> [] int { if fast(p) == 1 { return 20; } return 60; }   // loop steps per pixel: the loop needs about 20 to follow a feature (the fork run keeps three times that)
 
 fn pow2(n: int) -> [] int {
     var r = 1;
@@ -63,7 +77,7 @@ fn pow2(n: int) -> [] int {
 }
 
 fn params[&a](ss: &a [int]) -> [] approach.P {
-    return approach.P { free_r: ss[10], free_pm: truncate(free_pm()), contact_pct: 90, dz: 192, dwell: 40, zmin: 0, zmax: zmax(), coarse: coarse_steps() * pm_per_step(), max_motor: 20 };
+    return approach.P { free_r: ss[10], free_pm: truncate(free_pm()), contact_pct: contact_pct(ss[3]), dz: 192, dwell: 40, zmin: 0, zmax: zmax(), coarse: coarse_steps() * pm_per_step(), max_motor: 20 };
 }
 
 // ---- building the script of a stage; returns the number of operations ----
@@ -87,6 +101,11 @@ pub fn build[&a, &b, &c](ss: &a [int], sf: &b [float], sc: &!c [int]) -> [] int 
         n = script.read(sc, n, regs.zmax());
         n = script.read(sc, n, regs.zinit());
         n = script.read(sc, n, regs.zretract());
+        if opt(p) > 0 {
+            // the optical lever's slow outputs run beside the fast ADC (docs/liquid.md, S9.5): turn it on, give the AD1 a few conversions, read the light
+            n = script.write(sc, n, regs.ctrl(), 16 + adc_bit(p));
+            n = script.wait(sc, n, 40 * window_clocks(p));
+        }
     }
     if stage == 1 {
         n = script.write(sc, n, regs.ctrl(), 56 + adc_bit(p));                      // manual + ADC + motor enable: Z held at the manual value, the detector running
@@ -157,6 +176,11 @@ pub fn build[&a, &b, &c](ss: &a [int], sf: &b [float], sc: &!c [int]) -> [] int 
         n = script.write(sc, n, regs.ctrl(), 0);
         n = script.read(sc, n, regs.status());
     }
+    // profile 2: the two optical readings close every stage but the last (which turns the ADC off), after its own reads, so every other read keeps its place
+    if opt(p) > 0 && stage <= 6 {
+        n = script.read(sc, n, regs.opt_sum());
+        n = script.read(sc, n, regs.opt_defl());
+    }
     return n;
 }
 
@@ -195,6 +219,21 @@ pub fn consume[&a, &b, &c, &d](ss: &!a [int], sf: &!b [float], out: &c [int], im
     let p = ss[3];
     ss[1] = ss[1] + 1;
     if ss[1] > 40000 { ss[2] = 6; ss[0] = 98; return 0; }
+    // profile 2: the light is looked at after every stage, before anything else is believed (its two readings are the last two of the stage's reads)
+    if opt(p) > 0 && stage <= 6 {
+        let sum = out[out[0] - 1];
+        let defl = out[out[0]];
+        var dev = defl - 2048;
+        if dev < 0 { dev = 0 - dev; }
+        if stage == 0 { ss[23] = sum; ss[24] = sum; }
+        if sum < ss[24] { ss[24] = sum; }
+        if dev > ss[25] { ss[25] = dev; }
+        var code = 0;
+        if stage == 0 && sum < sum_min() { code = 81; }
+        else if sum * 100 < ss[23] * sum_floor_pct() { code = 82; }
+        else if dev > defl_span() { code = 83; }
+        if code != 0 { ss[2] = code; ss[0] = 98; return 0; }
+    }
     if stage == 0 {
         ss[15] = window(p);
         // the identity, and the limits read back as written (the board must not be trusted to have taken them)
@@ -220,11 +259,11 @@ pub fn consume[&a, &b, &c, &d](ss: &!a [int], sf: &!b [float], out: &c [int], im
             } else {
                 sf[0] = t.f0; sf[1] = t.q; sf[2] = t.peak;
                 // the plant gain k (figure counts per pm) assumes the free amplitude above; with no calibration it is the one number the program takes on trust
-                if p == 1 {
+                if fast(p) == 1 {
                     let w = lockin.snap(t.f0, t.q, fs(p), 64);
                     ss[15] = w.n; ss[18] = w.tuning;
                 }
-                let g = tune.choose(t, t.peak / free_pm(), win_s(ss), 0.8);
+                let g = tune.choose(t, t.peak / free_pm(), win_s(ss), float_of(setpoint_pct(p)) / 100.0);
                 ss[11] = g.shift; ss[13] = g.kp; ss[14] = g.ki; sf[3] = g.alpha;
                 ss[0] = 2;
             }
@@ -232,7 +271,7 @@ pub fn consume[&a, &b, &c, &d](ss: &!a [int], sf: &!b [float], out: &c [int], im
     }
     if stage == 2 {
         ss[10] = out[1];
-        ss[12] = (out[1] * 8 / 10) / pow2(ss[11]);
+        ss[12] = (out[1] * setpoint_pct(p) / 100) / pow2(ss[11]);
         if approach.check(params(ss), sf[3]) != 0 {
             ss[2] = 3; ss[0] = 98;
         } else {
@@ -244,11 +283,12 @@ pub fn consume[&a, &b, &c, &d](ss: &!a [int], sf: &!b [float], out: &c [int], im
     }
     if stage == 3 {
         var motor_ok = 1;
-        if out[0] == 2 && out[1] % 2 == 0 && out[1] / 4 % 2 == 0 { motor_ok = 1; }
-        if out[0] == 2 && (out[1] % 2 == 1 || out[1] / 4 % 2 == 1) { motor_ok = 0; }
+        let o = opt(p);
+        if out[0] - o == 2 && out[1] % 2 == 0 && out[1] / 4 % 2 == 0 { motor_ok = 1; }
+        if out[0] - o == 2 && (out[1] % 2 == 1 || out[1] / 4 % 2 == 1) { motor_ok = 0; }
         ss[20] = 0;
         let ap = params(ss);
-        let a = approach.next(approach.A { phase: ss[4], z: ss[5], motor: ss[6], dwell: ss[7], fault: ss[8] }, out[out[0]], ap);
+        let a = approach.next(approach.A { phase: ss[4], z: ss[5], motor: ss[6], dwell: ss[7], fault: ss[8] }, out[out[0] - o], ap);
         if a.motor > ss[6] { ss[20] = a.motor - ss[6]; ss[21] = ss[21] + (a.motor - ss[6]); }
         ss[4] = a.phase; ss[5] = a.z; ss[6] = a.motor; ss[7] = a.dwell; ss[8] = a.fault;
         if a.phase == 2 { ss[9] = a.z; ss[0] = 4; }
