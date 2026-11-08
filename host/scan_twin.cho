@@ -224,7 +224,7 @@ fn sdec[&h](heap: &!h Heap, o: buffer.Buffer, v: float) -> [heap] buffer.Buffer 
 
 // The console's document for one scan (docs/image-processing.md, I5), mode 5: one line of JSON, flat, every value a number or a string the page prints as it is; mode 6: the levelled image as a PNG.
 // The analysis is `report.run`; `frame_us` is the scan's duration in the twin's time. "source" is "twin": a prediction of this software.
-fn scan_out[&h, &a](heap: &!h Heap, o: buffer.Buffer, pic: &a [int], mode: int, frame_us: int, prof: int) -> [heap] buffer.Buffer {
+fn scan_out[&h, &a](heap: &!h Heap, o: buffer.Buffer, pic: &a [int], mode: int, frame_us: int, prof: int, fk: int, fth: int) -> [heap] buffer.Buffer {
     var b = o;
     region r1 {
         let t = alloc_slice[r1](4096, 0.0);
@@ -255,7 +255,15 @@ fn scan_out[&h, &a](heap: &!h Heap, o: buffer.Buffer, pic: &a [int], mode: int, 
                     }
                     b = text(heap, b, "\",\"drift_text\":\"x "); b = sdec(heap, b, rp.dv * 1000.0); b = text(heap, b, " milli-px/tick, height "); b = sdec(heap, b, rp.dw * 1000.0); b = text(heap, b, " milli-pm/tick, loop lag ");
                     b = sdec(heap, b, rp.dshift); b = text(heap, b, " px; image "); if rp.corrected == 1 { b = text(heap, b, "drift-corrected"); } else { if rp.corrected == 2 { b = text(heap, b, "trace only (loop lag over a pixel: drift cannot be told from it)"); } else { b = text(heap, b, "trace only (drift under the 5 milli-px/tick floor)"); } }
-                    b = text(heap, b, "\",\"z_min_pm\":"); b = sdec(heap, b, rp.lo); b = text(heap, b, ",\"z_max_pm\":"); b = sdec(heap, b, rp.hi); b = text(heap, b, "}\n");
+                    b = text(heap, b, "\",\"z_min_pm\":"); b = sdec(heap, b, rp.lo); b = text(heap, b, ",\"z_max_pm\":"); b = sdec(heap, b, rp.hi);
+                    if fk > 0 {
+                        // the force next to the image (docs/liquid.md, S9.7): the per-pixel proxy of S9.3, its largest value, the pixels over the stated threshold, and what it is
+                        var fmx = 0; var fov = 0; var fnn = 0; var kf = 0;
+                        while kf < 4096 { if tr_of(pic[kf]) > 0 { fnn = fnn + 1; if force_of(pic[kf]) > fmx { fmx = force_of(pic[kf]); } if fth > 0 && force_of(pic[kf]) > fth { fov = fov + 1; } } kf = kf + 1; }
+                        b = text(heap, b, ",\"force_pn_max\":"); b = num(heap, b, fmx); b = text(heap, b, ",\"force_pixels_over\":"); b = num(heap, b, fov); b = text(heap, b, ",\"force_threshold_pn\":"); b = num(heap, b, fth);
+                        b = text(heap, b, ",\"force_text\":\"proxy: stiffness "); b = num(heap, b, fk); b = text(heap, b, " hundredths of N/m times the amplitude given up, once per pixel; the twin's guess, not a measured force, and it misses transient peaks; a damage threshold is a parameter, not a finding\"");
+                    }
+                    b = text(heap, b, "}\n");
                 } else {
                     // the levelled image through a 256-entry palette (dark purple, blue, teal, green, yellow: five stops), lowest to highest height
                     let pal = alloc_slice[r3](768, byte_of(0));
@@ -450,7 +458,7 @@ fn main(world: World) -> [] int {
             if lv == 1 { o = analyse(h, o, pic); }
             if lv == 2 { o = metrics_check(h, o, pic, rf, st, fl); }
             if lv == 3 { o = particles_csv(h, o, pic); }
-            if lv == 5 || lv == 6 || lv == 7 { o = scan_out(h, o, pic, lv, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27, prof); }
+            if lv == 5 || lv == 6 || lv == 7 { o = scan_out(h, o, pic, lv, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27, prof, lk, lth); }
             if lv == 4 { o = drift_check(h, o, pic, rf, st, fl, session.pixdiv(prof), xd, zd); }
             if lv != 3 && lv != 5 && lv != 6 && lv != 7 && lk > 0 { o = text(h, o, "force_pn_max "); o = num(h, o, truncate(fl[36] + 0.5)); o = text(h, o, " windows_over_threshold "); o = num(h, o, truncate(fl[37])); o = text(h, o, " indentation_pm "); o = num(h, o, truncate(fl[38] + 0.5)); o = text(h, o, "\n"); var fmax = 0; var fover = 0; var fn_ = 0; var kk = 0; while kk < 4096 { if tr_of(pic[kk]) > 0 { fn_ = fn_ + 1; if force_of(pic[kk]) > fmax { fmax = force_of(pic[kk]); } if lth > 0 && force_of(pic[kk]) > lth { fover = fover + 1; } } kk = kk + 1; } o = text(h, o, "force_map_max "); o = num(h, o, fmax); o = text(h, o, " pixels_over_threshold "); o = num(h, o, fover); o = text(h, o, " of "); o = num(h, o, fn_); o = text(h, o, "\n"); }
             if lv != 3 && lv != 5 && lv != 6 && lv != 7 { o = text(h, o, "frame_us "); o = num(h, o, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27); o = text(h, o, "\n"); }

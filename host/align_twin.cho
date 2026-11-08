@@ -1,0 +1,90 @@
+edition 7;
+
+import std.buffer;
+import board;
+import script;
+import run_twin;
+import session;
+import regs;
+import align;
+
+// Runs the alignment stage (host/align.cho, docs/liquid.md S9.7) against the twin's optical lever and prints every step: the screw position the operator is asked to move to and the
+// sum signal read there, then the verdict. The twin's screw is a hump of half-width 2 positions about position 6 of 11, its top at 100% of the light (a guess at a shape, not a head).
+// Arguments: the hump's position x0 (default 6), its height in percent (default 100). `cancho run host/align_twin.cho host/align.cho host/session.cho host/script.cho host/run_twin.cho host/proto.cho host/twin_link.cho host/regs.cho sim/*.cho --std 6 100`
+fn text[&h, &r](heap: &!h Heap, b: buffer.Buffer, s: &r [byte]) -> [heap] buffer.Buffer { return buffer.append(heap, b, s); }
+
+fn num[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer {
+    if n < 0 { return buffer.push_nat(heap, buffer.append(heap, b, "-"), 0 - n); }
+    return buffer.push_nat(heap, b, n);
+}
+
+fn number_of[&t](text: &t [byte]) -> [] int {
+    var n = 0;
+    var i = 0;
+    while i < len(text) {
+        let c = int_of(text[i]);
+        if c < 48 || c > 57 { return 0; }
+        n = n * 10 + (c - 48);
+        i = i + 1;
+    }
+    return n;
+}
+
+fn share(pos: int, x0: float, w: float) -> [] float {
+    let d = (float_of(pos) - x0) / w;
+    return 1.0 / (1.0 + d * d);
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(net); release(clock); release(signals); release(exec);
+    var x0 = 6;
+    var top = 100;
+    borrow args as &g in {
+        if arg_count(g) > 1 { x0 = number_of(arg(g, 1)); }
+        if arg_count(g) > 2 { top = number_of(arg(g, 2)); }
+    }
+    release(args);
+    var code = 0;
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 4096);
+        region r {
+            let rf = alloc_slice[r](64, 0);
+            let st = alloc_slice[r](32, 0);
+            let fl = alloc_slice[r](48, 0.0);
+            board.reset(rf, st, fl);
+            board.set_plant(fl, 500000.0, 3.0, 2000.0, 2000.0, 100.0, 1200.0, 2.0);
+            board.set_optics(fl, 2000.0, 0.0, 0.0, 0.0, 0.0);
+            let sc = alloc_slice[r](4 * 20, 0);
+            let out = alloc_slice[r](16, 0);
+            let req = alloc_slice[r](16, byte_of(0));
+            let rsp = alloc_slice[r](16, byte_of(0));
+            var m = 0;
+            m = script.write(sc, m, regs.sample_div(), session.sample_div(2));
+            m = script.write(sc, m, regs.window(), session.window(2));
+            m = script.write(sc, m, regs.half(), session.half(2));
+            m = script.write(sc, m, regs.ctrl(), 16 + session.adc_bit(2));
+            run_twin.run(sc, m, rf, st, fl, out, req, rsp);
+            o = text(h, o, "alignment against the twin's optical lever (a guess at a screw's shape; not a head)\n");
+            var s = align.start(11);
+            var guard = 0;
+            while s.phase < 2 && guard < 1000 {
+                o = text(h, o, "step "); o = num(h, o, s.steps + 1); o = text(h, o, ": move the screw to position "); o = num(h, o, s.pos);
+                board.set_optics(fl, 2000.0, float_of(top) / 100.0 * share(s.pos, float_of(x0), 2.0), 0.0, 0.0, 0.0);
+                let k = script.wait(sc, 0, 40 * session.window_clocks(2));
+                let k2 = script.read(sc, k, regs.opt_sum());
+                run_twin.run(sc, k2, rf, st, fl, out, req, rsp);
+                o = text(h, o, ", sum "); o = num(h, o, out[1]); o = text(h, o, "\n");
+                s = align.next(s, out[1], 400);
+                guard = guard + 1;
+            }
+            if s.phase == 2 { o = text(h, o, "aligned: leave the screw at position "); o = num(h, o, s.pos); o = text(h, o, ", sum "); o = num(h, o, s.best_sum); o = text(h, o, "\n"); }
+            else { o = text(h, o, "refused, reason "); o = num(h, o, s.why); o = text(h, o, " (1 no light, 2 peak at an end of the range, 3 reading not repeatable)\n"); code = 1; }
+        }
+        borrow mut io as &!w in { borrow o as &b in { buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(heap);
+    release(io);
+    return code;
+}
