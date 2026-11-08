@@ -34,6 +34,8 @@ Two bare stainless **[general]** electrodes 20 mm apart on the tray floor, one a
 
 ## The leak test (protocol; NOT RUN)
 
+A printable form for it is in [`liquid-leak-checklist.md`](liquid-leak-checklist.md).
+
 Purpose: show, with **nothing powered**, that the droplet stays where it is put and that anything that gets out lands in the tray.
 1. Set up the holder plate, a lever chip **blank** (no lever needed), the stage and skirt over the **unpowered** scanner, with a **dummy scanner** (a lump of the same size) if the real one is not to be wetted; the tray below, **weighed**.
 2. Put in 100 uL of **plain water with food colouring** **[general]** by pipette.
