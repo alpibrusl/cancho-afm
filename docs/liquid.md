@@ -67,3 +67,14 @@ a route to biology, and it needs a tip and a holder that are not designed **[unk
 3. **Wet lab and biosafety** are not electronics and not in the author's stated scope; S9.12 may need a collaborator.
 4. **Electrical safety** next to a conductive liquid: the present amplifier is built for a dry piezo.
 5. **Overlap with S8**: the optical head and the fast Z scanner belong to S8; S9 must not redo them, only extend them for liquid.
+
+## What S9.2 found (twin, 2026-11-08; predictions, not measurements)
+
+Built: `plant.forest` and `board.set_forest` (fl 28 to 31), tune refusal tag 5 (a second, separate peak at 0.7 of the highest or more), `scan_twin` arguments 11 to 13 (Q in tenths, forest height in percent, spacing in kHz), `tests/liquid_test.cho` (8 tests). The gate passed (all cancho tests, `gen/check.sh`, the register checks).
+
+* A 400 kHz lever of **Q 3** with a forest (nearest peak 20% of the lever's, 70 kHz apart, Q 15) goes through the whole procedure in the twin (tune, approach, scan, 36 of 36 pixels), with the tuned f0 within 5% of 400 kHz.
+* The forest does not fall when the tip touches: the lever's part goes to zero, the forest's stays, so contrast against the free amplitude is smaller than in air. That is by construction (the forest is the cell's motion), the assumption to test in S9.11.
+* With a forest as tall as the lever (nearest peak 90%, 140 kHz apart) the run **refuses with failure code 25** (20 + tag 5) and writes nothing to the scanner.
+* **A finding that corrected my first version:** the forest raises the sweep's floor, so `analyse` first said "no resonance" (tag 2, peak under 5 times the floor) for it, which is the wrong reason. The ambiguity test now runs first when the peak is at least 2 times the floor; a flat or noise-only sweep is still tag 2.
+* **Not found:** whether tag 5 is the right threshold for a real cell. It is 0.7 because that is minus 3 dB, not because anything was measured. The 1/k fall-off and the spacings are guesses. Q 2 (the bottom of the stated range) was not run through the whole procedure, only Q 3.
+* `scan_twin` keeps going after a refused session and prints a scan of nothing (all 10000 pm); it reports the failure code on its first line. Left as it was.

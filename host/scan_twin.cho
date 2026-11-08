@@ -294,7 +294,7 @@ fn scan_out[&h, &a](heap: &!h Heap, o: buffer.Buffer, pic: &a [int], mode: int, 
     return b;
 }
 
-// the profile: argument 1 (the scanner, argument 2, and for the high-speed profile the cantilever's resonance in kHz, argument 3, the same way; default 500; argument 4 = 1 prints the levelling check, 2 the metrics check, 5 the console's scan.json, 6 its levelled image as a PNG, 7 the raw trace as a PNG, 4 the drift check (arguments 5 and 6: the sample's drift along x in milli-pixels per tick and in height in milli-pm per tick; 7 to 10: a tilt along x in pm per pixel, a tilt along y in pm per line, a bow in pm and line offsets of up to that many pm), of docs/image-processing.md instead of the pixels), `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md)
+// the profile: argument 1 (the scanner, argument 2, and for the high-speed profile the cantilever's resonance in kHz, argument 3, the same way; default 500; argument 4 = 1 prints the levelling check, 2 the metrics check, 5 the console's scan.json, 6 its levelled image as a PNG, 7 the raw trace as a PNG, 4 the drift check (arguments 5 and 6: the sample's drift along x in milli-pixels per tick and in height in milli-pm per tick; 7 to 10: a tilt along x in pm per pixel, a tilt along y in pm per line, a bow in pm and line offsets of up to that many pm), of docs/image-processing.md instead of the pixels), `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md); for the high-speed profile, arguments 11 to 13 make it a liquid lever (docs/liquid.md, S9.2): its Q in tenths (30 = 3.0; default 50), a forest of fluid-cell peaks whose nearest is this many percent of the lever's height (0 = none), and their spacing in kHz
 fn number_of[&t](text: &t [byte]) -> [] int {
     var n = 0;
     var i = 0;
@@ -320,6 +320,9 @@ fn main(world: World) -> [] int {
     var ty = 0;
     var bw = 0;
     var lo7 = 0;
+    var lq = 0;
+    var fr = 0;
+    var fsp = 0;
     borrow args as &g in {
         if arg_count(g) > 1 { prof = number_of(arg(g, 1)); }
         if arg_count(g) > 2 { scn = number_of(arg(g, 2)); }
@@ -331,6 +334,9 @@ fn main(world: World) -> [] int {
         if arg_count(g) > 8 { ty = number_of(arg(g, 8)); }
         if arg_count(g) > 9 { bw = number_of(arg(g, 9)); }
         if arg_count(g) > 10 { lo7 = number_of(arg(g, 10)); }
+        if arg_count(g) > 11 { lq = number_of(arg(g, 11)); }
+        if arg_count(g) > 12 { fr = number_of(arg(g, 12)); }
+        if arg_count(g) > 13 { fsp = number_of(arg(g, 13)); }
     }
     release(args); release(net); release(clock); release(signals); release(exec);
     borrow mut heap as &!h in {
@@ -340,7 +346,7 @@ fn main(world: World) -> [] int {
             let st = alloc_slice[r](32, 0);
             let fl = alloc_slice[r](32, 0.0);
             board.reset(rf, st, fl);
-            if prof == 1 { var fc = 500000.0; if fk > 0 { fc = 1000.0 * float_of(fk); } board.set_plant(fl, fc, 5.0, 2000.0, 2000.0, 100.0, 1200.0, 2.0); }
+            if prof == 1 { var fc = 500000.0; if fk > 0 { fc = 1000.0 * float_of(fk); } var qq = 5.0; if lq > 0 { qq = float_of(lq) / 10.0; } board.set_plant(fl, fc, qq, 2000.0, 2000.0, 100.0, 1200.0, 2.0); board.set_forest(fl, float_of(fr) / 100.0, 1000.0 * float_of(fsp), 15.0, 3); }
             else { board.set_plant(fl, 32781.4, 500.0, 2000.0, 2000.0, 100.0, 1200.0, 2.0); }
             fl[10] = 150.0;
             // argument 2, the Z scanner: 0 ideal, 1 a good small stack (100 kHz, Q 3), 2 a slow one (20 kHz, Q 10), 3 the good one behind a 20 pm/us amplifier, 4 to 6 a Q = 3 stack at 30, 50, 70 kHz (docs/high-speed.md, H2)
