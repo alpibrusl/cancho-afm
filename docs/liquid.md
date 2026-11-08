@@ -190,3 +190,7 @@ Tags as above, plus **[search]**: a number from a web search on 2026-11-08, a li
 2. Soft sample: a **supported lipid bilayer on mica**.
 3. Target force: **at or under 100 pN**, reported, never assumed.
 4. **No wet-lab collaborator is named, so S9.12 waits** until one is. Nothing in S9.8 to S9.11 needs one; S9.10 must say what the project will not handle without one.
+
+## What S9.8 found (hardware plan, 2026-11-08; a plan, not a build)
+
+`docs/liquid-optics.md` and `docs/liquid-optics.svg`: a drawing of the head (laser, mirror, one lens above a glass window, quadrant photodiode, everything electrical dry), a parts list with each price tagged (**none read on its page today**: the earlier ones from `docs/hs-order.md`, the others snippets or blanks), the signal chain's numbers computed with their formulas shown (a 3 um spot on a 2 um lever; about 1% of the beam per nanometre of tip deflection on a photodiode 30 mm away), the conditioning S9.5 left open (sum to about 1.6 V, deflection on a 1.65 V offset, an AC path for the AD9226) and an alignment method, by hand then by `host/align.cho`. The item `docs/hs-order.md` calls the largest unsolved now has a drawing and a method **on paper**. What it does not have: a mechanical design, a noise measurement, a lens that has met a 2 um lever, a read price, or any build.
