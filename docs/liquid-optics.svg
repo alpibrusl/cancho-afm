@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 470" font-family="sans-serif" font-size="12">
+<rect width="720" height="470" fill="#fff"/>
+<text x="360" y="22" text-anchor="middle" font-size="14" font-weight="bold">Optical head over a fluid cell, side view (a plan, not built; not to scale)</text>
+<!-- electronics dry zone -->
+<rect x="20" y="40" width="680" height="200" fill="#eef6ff" stroke="#4477aa" stroke-dasharray="6 4"/>
+<text x="30" y="58" fill="#225588">DRY: laser, lens, quadrant photodiode, 4 transimpedance amplifiers, conditioning. Nothing electrical below the window.</text>
+<!-- laser -->
+<rect x="60" y="90" width="90" height="34" fill="#ddd" stroke="#333"/><text x="105" y="111" text-anchor="middle">laser 650 nm</text>
+<text x="105" y="140" text-anchor="middle" fill="#555">2-axis tilt mount</text>
+<!-- beams -->
+<line x1="150" y1="107" x2="330" y2="107" stroke="#d22" stroke-width="2"/>
+<line x1="330" y1="107" x2="330" y2="205" stroke="#d22" stroke-width="2"/>
+<rect x="318" y="100" width="24" height="14" fill="#bbb" stroke="#333" transform="rotate(45 330 107)"/>
+<text x="338" y="95" fill="#333">mirror</text>
+<!-- lens -->
+<ellipse cx="330" cy="215" rx="26" ry="9" fill="#cfe8ff" stroke="#333"/>
+<text x="372" y="218">aspheric lens f 4.5 mm (focus: Z stage)</text>
+<!-- return beam up to PD -->
+<line x1="352" y1="205" x2="600" y2="140" stroke="#d22" stroke-width="2" stroke-dasharray="5 3"/>
+<rect x="590" y="105" width="50" height="40" fill="#ddd" stroke="#333"/><text x="615" y="128" text-anchor="middle">quad PD</text>
+<text x="615" y="160" text-anchor="middle" fill="#555">XY mount</text>
+<!-- window and cell -->
+<line x1="150" y1="262" x2="560" y2="262" stroke="#333" stroke-width="3"/><text x="565" y="266">cover glass window (0.17 mm)</text>
+<rect x="150" y="262" width="410" height="130" fill="#d6f0ff" stroke="#333"/>
+<text x="165" y="286" fill="#225588">water or buffer</text>
+<!-- lever chip -->
+<rect x="290" y="300" width="70" height="10" fill="#999" stroke="#333"/><text x="325" y="330" text-anchor="middle">lever chip, holder</text>
+<line x1="360" y1="305" x2="395" y2="318" stroke="#222" stroke-width="3"/><text x="400" y="318">lever (7 x 2 um)</text>
+<!-- sample -->
+<rect x="360" y="345" width="90" height="10" fill="#a55" stroke="#333"/><text x="455" y="354">sample on mica</text>
+<rect x="340" y="400" width="130" height="30" fill="#ddd" stroke="#333"/><text x="405" y="419" text-anchor="middle">piezo scanner (sealed)</text>
+<text x="360" y="455" text-anchor="middle" fill="#a22">Piezo electrodes, amplifier and wiring sealed away from the liquid (S9.9). O-ring seal of the cell: S9.9.</text>
+</svg>
