@@ -184,3 +184,9 @@ Tags as above, plus **[search]**: a number from a web search on 2026-11-08, a li
 2. Soft sample: supported lipid bilayer on mica as proposed, or another?
 3. Is 100 pN the target, or something stricter for the first soft image?
 4. Is the wet-lab collaborator named, or does S9.12 wait?
+
+**Decided, 2026-11-08 (the owner answered "go with your recommendation"; the recommendation is the first option of each item above, with the order below for item 1):**
+1. Hard sample: **freshly cleaved mica first** (it fits the twin's 10 nm Z range and tests noise and the loop), **then the 20 nm step grating** once the Z range is raised or a lower-step grating is used. The Z range is a hardware question for S9.8/S9.11 and is not decided.
+2. Soft sample: a **supported lipid bilayer on mica**.
+3. Target force: **at or under 100 pN**, reported, never assumed.
+4. **No wet-lab collaborator is named, so S9.12 waits** until one is. Nothing in S9.8 to S9.11 needs one; S9.10 must say what the project will not handle without one.
