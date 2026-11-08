@@ -52,10 +52,12 @@ pub fn analyse[&a, &b](f: &a [float], r: &b [float], n: int) -> [] T {
     let peak = r[m];
     var base = floor;
     if base < 1.0 { base = 1.0; }
-    // a clear second peak is named before "no resonance": a forest raises the floor and would otherwise be reported as nothing there (a flat or noise-only sweep, under 2 times its floor, is still tag 2)
-    if peak >= 2.0 * base && second_peak(r, n, m, peak) == 1 { return fail(5); }
-    if peak < 5.0 * base {
-        return fail(2);
+    // a clear second peak is named before "no resonance": a forest raises the floor and would otherwise be reported as nothing there. Two guards keep a dark or noise-only sweep
+    // at tag 2: the peak is at least 2 times the floor, and at least 100 counts of figure (an absolute noise guard, as the 1.0 clamp above is: a free figure is thousands, so 100 is
+    // under 1%; the first version had no absolute guard and called a dark photodiode's noise "ambiguous", found by S9.4)
+    if peak >= 2.0 * base && peak >= 100.0 && second_peak(r, n, m, peak) == 1 { return fail(5); }
+    if peak < 5.0 * base || peak < 100.0 {
+        return fail(2);                    // no resonance; under 100 counts of figure is the detector's own noise, not a signal (a dark photodiode, S9.4: noise alone used to pass as a peak)
     }
     let h = f[m + 1] - f[m];
     let denom = r[m - 1] - 2.0 * r[m] + r[m + 1];

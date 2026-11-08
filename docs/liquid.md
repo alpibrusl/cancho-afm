@@ -92,3 +92,30 @@ Built: `board.set_soft` (fl 32 to 38), `tune.force_estimate`, `scan_twin` argume
 * **The per-pixel map (closes #35), 2026-11-08:** `host/force.cho` works out a force for every pixel from what the host can read: the stiffness it is told, the free amplitude figure and the `AMP` register read at the pixel (`scan_twin` packs it above the heights; arguments 14 to 16 turn it on and it prints `force_map_max` and `pixels_over_threshold`). Same 400 kHz, Q 3 lever and 0.15 N/m: the host's largest pixel is **62 pN** against the 60 pN the setpoint asks for; with 0.6 N/m, **247 pN**.
 * **A finding:** the host's per-pixel figure is **lower than the twin's own largest window** (62 against 88 pN; 247 against 354 pN). The loop is near its setpoint when the pixel is read, and the larger forces are transients at the terrace edge and the particles, which a figure taken once per pixel misses. With a 70 pN threshold the twin counts 116 windows over it and the host's map flags no pixel. So a pixel-sampled force is a figure of the *typical* tap, not the peak; a damage claim needs the peak. How to measure that on a real board (a faster read, or a peak-hold in the gateware) is not designed.
 * The proxy also **understates** force when a forest is present (`host/force.cho`): the free figure includes the part that does not fall at contact.
+
+## What S9.4 found (twin, 2026-11-08; predictions, not measurements)
+
+Built: `board.set_optics` (fl 39 to 43), `board.light`, `board.sum_now` and `board.deflection_now` (what S9.5 will make registers), `scan_twin` arguments 17 to 20, `tests/optics_test.cho` (7 tests). The optical lever is a guess at the shape: a sum signal at best alignment, the share of light reaching the photodiode (alignment), optical noise scaled by the light, a deflection level that wanders by a fixed number of counts per detector window, and light lost at a fixed fraction per window. Off by default: every earlier result is unchanged.
+
+400 kHz, Q 3 lever, full procedure in the twin (`scan_twin 1 0 400 ...`):
+
+| Optics | Result |
+|---|---|
+| noise 3, 10 or 30 counts | runs to code 0 (the image was not checked beyond that) |
+| 50% of the light | runs, the free figure halves (7,064 against 14,136) |
+| 2% of the light | runs, free figure 287 (the detector still finds the lever) |
+| no light (dark) | **refused, code 22 (no resonance)** |
+| baseline wander up to 0.05 counts per window | runs |
+| wander of 0.1 or 0.2 | **refused, code 43** (see below) |
+| light loss 2 ppm per window | runs |
+| light loss 10 ppm per window | **runs to code 0, but finishes with Z pinned at 0 pm (a silent wrong result)** |
+| light loss 20 ppm per window | refused, code 43 |
+| light loss 200 ppm per window | **runs with code 0, contact at 8,080 pm, Z pinned at 0: garbage** |
+
+Things the twin found that were wrong in the software, now fixed:
+
+* **A dark photodiode was accepted as a resonance.** The "no resonance" test was a peak 5 times the floor with the floor clamped to 1, so noise of a few counts passed; the approach then faulted later (code 43). `tune.analyse` now also needs a peak of at least **100 counts of figure** (a free figure is thousands, so this is under 1%; an absolute guard, not a derived one) and a dark sweep is code 22.
+* **My own S9.2 test called a dark sweep "ambiguous"** (tag 5) because its gate was on the sweep's minimum; the claim two sections up ("a flat or noise-only sweep is still tag 2") was untested and false until this change. The ambiguity test now needs the same 100-count guard; a test covers a noise-only sweep.
+* **"Contact" at Z fully retracted** (the reading dropped by itself, nothing moved) was accepted and the run scanned nothing with code 0. `approach.next` now refuses it as fault 3 (code 43).
+
+**Not fixed, left for S9.6 (#38):** a slow loss of light that makes the loop drive Z to the bottom of its range still ends with code 0 and a wrong image. Nothing the host reads now says the light is fading; the sum signal does (`board.sum_now`), but there is no register for it until S9.5 and no check on it until S9.6. Until then, a run with code 0 under a fading beam is not to be trusted. Also not modelled: pointing noise, a deflection offset that clips against the photodiode's own limits, thermal drift of the lever, and the real noise of any photodiode and amplifier.

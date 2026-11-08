@@ -49,6 +49,9 @@ pub fn next(s: A, r: int, p: P) -> [] A {
         return A { phase: s.phase, z: s.z, motor: s.motor, dwell: s.dwell - 1, fault: 0 };
     }
     if r * 100 < p.free_r * p.contact_pct {
+        // contact with Z still fully retracted is not contact: nothing has moved toward the surface, so the reading changed by itself (a wandering baseline, a lost light, a drifting
+        // drive: docs/liquid.md, S9.4, where the twin found "contact" at Z = 10,000 pm and scanned nothing). Refuse, as for a lost signal (fault 3).
+        if s.z >= p.zmax { return A { phase: 3, z: p.zmax, motor: s.motor, dwell: 0, fault: 3 }; }
         return A { phase: 2, z: s.z, motor: s.motor, dwell: 0, fault: 0 };
     }
     if s.phase == 0 {
