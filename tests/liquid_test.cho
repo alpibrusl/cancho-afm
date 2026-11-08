@@ -1,0 +1,177 @@
+import std.test;
+import board;
+import plant;
+import tune;
+import lockin;
+import proto;
+import script;
+import twin_link;
+import run_twin;
+import session;
+import approach;
+import pid;
+import raster;
+
+// docs/liquid.md, S9.2: the twin in liquid. A low-Q lever, and a forest of fluid-cell peaks that does not fall when the tip meets the sample.
+// Everything here is the twin's own model: a guess at the shape, not a measurement of any lever or cell.
+
+fn close(got: float, want: float, tol: float) -> [] int {
+    var d = got - want;
+    if d < 0.0 { d = 0.0 - d; }
+    if d <= tol { return 1; }
+    return 0;
+}
+
+// a 300 kHz lever of Q 3 swept 100 to 899 kHz in 12.7 kHz steps (the high-speed sweep of host/session.cho), 16 counts per pm, with a forest of Q 15
+fn sweep[&a, &b](f: &!a [float], r: &!b [float], rel: float, spacing: float) -> [] int {
+    var i = 0;
+    while i < 63 {
+        let fi = 100000.0 + 12700.0 * float_of(i);
+        f[i] = fi;
+        r[i] = 16.0 * (plant.response(fi, 300000.0, 3.0, 2000.0) + plant.forest(fi, 300000.0, 2000.0, rel, spacing, 15.0, 3));
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn test_no_forest_is_no_change() -> [] int {
+    test.assert(close(plant.forest(300000.0, 300000.0, 2000.0, 0.0, 60000.0, 15.0, 3), 0.0, 0.0) == 1);
+    test.assert(close(plant.forest(340000.0, 300000.0, 2000.0, 0.0, 60000.0, 15.0, 3), 0.0, 0.0) == 1);
+    return 0;
+}
+
+fn test_the_forest_has_its_peaks_where_it_is_told() -> [] int {
+    // the nearest peak, at f0 + spacing, stands at rel * a0 (plus the tails of the others and of nothing else)
+    let at = plant.forest(360000.0, 300000.0, 2000.0, 0.5, 60000.0, 15.0, 3);
+    test.assert(at > 990.0);
+    test.assert(at < 1300.0);
+    // far from every peak it is small
+    test.assert(plant.forest(30000.0, 300000.0, 2000.0, 0.5, 60000.0, 15.0, 3) < 300.0);
+    return 0;
+}
+
+fn test_the_forest_does_not_fall_on_contact() -> [] int {
+    region r {
+        let rf = alloc_slice[r](64, 0);
+        let st = alloc_slice[r](32, 0);
+        let fl = alloc_slice[r](32, 0.0);
+        board.reset(rf, st, fl);
+        board.set_plant(fl, 300000.0, 3.0, 2000.0, 2000.0, 0.0, 0.0, 0.0);
+        board.set_forest(fl, 0.4, 60000.0, 15.0, 3);
+        // free: the lever's response at its own frequency, plus the forest there
+        let fref = 300000.0;
+        let bg = plant.forest(fref, 300000.0, 2000.0, 0.4, 60000.0, 15.0, 3);
+        let free = plant.response(fref, 300000.0, 3.0, 2000.0) * plant.contact(5000.0, 2000.0) + bg;
+        let touching = plant.response(fref, 300000.0, 3.0, 2000.0) * plant.contact(0.0, 2000.0) + bg;
+        test.assert(close(free, 2000.0 + bg, 0.001) == 1);
+        // in contact the lever's part is gone and the forest's is not
+        test.assert(close(touching, bg, 0.001) == 1);
+        test.assert(bg > 0.0);
+        // and the board has the same forest in its slots
+        test.assert(close(fl[28], 0.4, 0.0) == 1);
+        test.assert(close(fl[31], 3.0, 0.0) == 1);
+    }
+    return 0;
+}
+
+fn test_tune_finds_a_low_q_lever_with_a_small_forest() -> [] int {
+    region r {
+        let f = alloc_slice[r](63, 0.0);
+        let d = alloc_slice[r](63, 0.0);
+        sweep(f, d, 0.2, 70000.0);
+        let t = tune.analyse(f, d, 63);
+        test.assert_eq(t.ok, 1);
+        test.assert(close(t.f0, 300000.0, 15000.0) == 1);
+    }
+    return 0;
+}
+
+// a forest as tall as the lever (a peak 90% as high 70 kHz away): the tallest is not known to be the lever, so the sweep is refused with tag 5
+fn test_tune_refuses_an_ambiguous_forest_with_a_tagged_reason() -> [] int {
+    region r {
+        let f = alloc_slice[r](63, 0.0);
+        let d = alloc_slice[r](63, 0.0);
+        sweep(f, d, 0.9, 140000.0);
+        let t = tune.analyse(f, d, 63);
+        test.assert_eq(t.ok, 0);
+        test.assert_eq(t.why, 5);
+    }
+    return 0;
+}
+
+// the refusal does not fire on an ordinary single peak at any of the Qs of liquid
+fn test_a_single_peak_is_never_called_ambiguous() -> [] int {
+    region r {
+        let f = alloc_slice[r](63, 0.0);
+        let d = alloc_slice[r](63, 0.0);
+        var q = 2.0;
+        while q <= 10.0 {
+            var i = 0;
+            while i < 63 {
+                let fi = 100000.0 + 12700.0 * float_of(i);
+                f[i] = fi;
+                d[i] = 16.0 * plant.response(fi, 400000.0, q, 2000.0);
+                i = i + 1;
+            }
+            let t = tune.analyse(f, d, 63);
+            test.assert(t.why != 5);
+            q = q + 2.0;
+        }
+    }
+    return 0;
+}
+
+// The whole automatic run (profile 1, the small cantilever's electronics) against a liquid lever: f0 400 kHz, Q `q`, a forest of relative height `rel`. Returns ss[2] (0 = the
+// run finished) and, through `got`, [ss[0], ss[16] pixels read, tuned f0 in kHz].
+fn run_liquid[&a](got: &!a [int], q: float, rel: float, spacing: float) -> [] int {
+    var fault = 0 - 1;
+    region r {
+        let rf = alloc_slice[r](64, 0);
+        let st = alloc_slice[r](32, 0);
+        let fl = alloc_slice[r](32, 0.0);
+        board.reset(rf, st, fl);
+        board.set_plant(fl, 400000.0, q, 2000.0, 2000.0, 100.0, 600.0, 2.0);
+        board.set_forest(fl, rel, spacing, 15.0, 3);
+        board.set_distance(fl, 11000.0, 198.4375);
+        let ss = alloc_slice[r](32, 0);
+        ss[3] = 1;
+        let sf = alloc_slice[r](8, 0.0);
+        let sc = alloc_slice[r](4 * 200, 0);
+        let out = alloc_slice[r](128, 0);
+        let img = alloc_slice[r](64, 0 - 1);
+        let req = alloc_slice[r](16, byte_of(0));
+        let rsp = alloc_slice[r](16, byte_of(0));
+        var guard = 0;
+        while ss[0] != 99 && ss[0] != 98 && guard < 40000 {
+            let n = session.build(ss, sf, sc);
+            run_twin.run(sc, n, rf, st, fl, out, req, rsp);
+            session.consume(ss, sf, out, img);
+            guard = guard + 1;
+        }
+        got[0] = ss[0]; got[1] = ss[16]; got[2] = truncate(sf[0] / 1000.0);
+        fault = ss[2];
+    }
+    return fault;
+}
+
+fn test_the_whole_run_in_liquid_with_a_small_forest() -> [] int {
+    region r {
+        let got = alloc_slice[r](4, 0);
+        test.assert_eq(run_liquid(got, 3.0, 0.2, 70000.0), 0);
+        test.assert_eq(got[0], 99);
+        test.assert_eq(got[1], 36);
+        test.assert(got[2] > 380);
+        test.assert(got[2] < 420);
+    }
+    return 0;
+}
+
+fn test_the_whole_run_refuses_an_ambiguous_forest_with_tag_25() -> [] int {
+    region r {
+        let got = alloc_slice[r](4, 0);
+        test.assert_eq(run_liquid(got, 3.0, 0.9, 140000.0), 25);
+        test.assert_eq(got[0], 98);
+        test.assert_eq(got[1], 0);
+    }
+    return 0;
+}

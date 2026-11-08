@@ -6,7 +6,9 @@ module plant;
 //   * a driven resonator: amplitude (pm) at drive frequency f is a0 / sqrt(1 + (2 Q (f - f0) / f0)^2), a Lorentzian near resonance;
 //   * a tip near a surface: the amplitude is multiplied by gap/free for gaps under the free amplitude (the law of sim/loop.cho);
 //   * a first-order lag of the amplitude behind its target, per detector window: alpha = window time / tau, tau = Q / (pi f0);
-//   * the detector's figure: R = k * amplitude (k = figure counts per pm, a calibration constant).
+//   * the detector's figure: R = k * amplitude (k = figure counts per pm, a calibration constant);
+//   * a "forest" of fluid-cell peaks (`forest`, docs/liquid.md, S9.2): in liquid an acoustically driven lever sits among peaks of the cell and the holder. They add to
+//     the detected amplitude and, being the cell's motion and not the tip's, do NOT fall when the tip meets the sample. A guess at the shape, not a measurement of any cell.
 
 pub fn response(f: float, f0: float, q: float, a0: float) -> [] float {
     let x = 2.0 * q * (f - f0) / f0;
@@ -29,4 +31,17 @@ pub fn lag(prev: float, target: float, alpha: float) -> [] float {
 
 pub fn tau(f0: float, q: float) -> [] float {
     return q / (3.141592653589793 * f0);
+}
+
+// The forest: 2n peaks at f0 +- k spacing (k = 1 to n), each a Lorentzian of quality q and height rel * a0 / k, summed. rel = 0 gives 0 (air, and every earlier result).
+// NOT A MEASUREMENT OF ANY FLUID CELL: the 1 / k fall-off, the spacing and q are parameters to be set from a real sweep in S9.11.
+pub fn forest(f: float, f0: float, a0: float, rel: float, spacing: float, q: float, n: int) -> [] float {
+    var s = 0.0;
+    var k = 1;
+    while k <= n && rel > 0.0 {
+        let h = rel * a0 / float_of(k);
+        s = s + response(f, f0 + spacing * float_of(k), q, h) + response(f, f0 - spacing * float_of(k), q, h);
+        k = k + 1;
+    }
+    return s;
 }

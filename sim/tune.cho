@@ -10,11 +10,31 @@ module tune;
 //   choose:  from that, the drive frequency, the setpoint (a fraction of the free amplitude) and the loop gains, with the rule written out.
 
 // why: 0 ok; 1 the peak is at an edge of the sweep (widen or shift it); 2 no resonance (the peak is not well above the floor);
-//      3 the sweep does not bracket both half-power points; 4 the three points at the peak are degenerate
+//      3 the sweep does not bracket both half-power points; 4 the three points at the peak are degenerate;
+//      5 ambiguous: a second, separate peak at 0.7 of the highest or more (docs/liquid.md, S9.2: in liquid the cell's own peaks can sit next to the lever's; the tallest
+//        is not known to be the lever, so the sweep is refused rather than a peak guessed)
 pub struct T { ok: int, why: int, f0: float, q: float, peak: float }
 
 fn fail(why: int) -> [] T {
     return T { ok: 0, why: why, f0: 0.0, q: 0.0, peak: 0.0 };
+}
+
+// 1 when the sweep has a local maximum of at least 0.7 of `peak` that is not the peak's own hump: separated from it by a dip below 0.7 of the lower of the two.
+fn second_peak[&b](r: &b [float], n: int, m: int, peak: float) -> [] int {
+    var j = 1;
+    while j < n - 1 {
+        if r[j] > r[j - 1] && r[j] >= r[j + 1] && j != m && r[j] >= 0.7 * peak {
+            var lo = r[j];
+            var a = m;
+            var b = j;
+            if j < m { a = j; b = m; }
+            var i = a;
+            while i <= b { if r[i] < lo { lo = r[i]; } i = i + 1; }
+            if lo < 0.7 * r[j] { return 1; }
+        }
+        j = j + 1;
+    }
+    return 0;
 }
 
 pub fn analyse[&a, &b](f: &a [float], r: &b [float], n: int) -> [] T {
@@ -32,6 +52,8 @@ pub fn analyse[&a, &b](f: &a [float], r: &b [float], n: int) -> [] T {
     let peak = r[m];
     var base = floor;
     if base < 1.0 { base = 1.0; }
+    // a clear second peak is named before "no resonance": a forest raises the floor and would otherwise be reported as nothing there (a flat or noise-only sweep, under 2 times its floor, is still tag 2)
+    if peak >= 2.0 * base && second_peak(r, n, m, peak) == 1 { return fail(5); }
     if peak < 5.0 * base {
         return fail(2);
     }
