@@ -1,0 +1,135 @@
+import std.test;
+import board;
+import script;
+import twin_link;
+import run_twin;
+import align;
+import regs;
+import session;
+
+// docs/liquid.md, S9.7: the alignment stage, first on synthetic readings, then against the twin's optical lever through the byte protocol.
+
+// the twin's screw: the share of the light reaching the photodiode at position `pos` is a Lorentzian hump of half-width `w` positions about `x0` (the twin's guess at the shape)
+fn share(pos: int, x0: float, w: float) -> [] float {
+    let d = (float_of(pos) - x0) / w;
+    return 1.0 / (1.0 + d * d);
+}
+
+// one alignment against the twin. got: 0 phase, 1 position left at, 2 light there, 3 why, 4 steps taken. peak: the hump's share at its top (1 = fully aligned).
+fn run_align[&a](got: &!a [int], n: int, x0: float, w: float, peak: float) -> [] int {
+    region r {
+        let rf = alloc_slice[r](64, 0);
+        let st = alloc_slice[r](32, 0);
+        let fl = alloc_slice[r](48, 0.0);
+        board.reset(rf, st, fl);
+        board.set_plant(fl, 500000.0, 3.0, 2000.0, 2000.0, 100.0, 1200.0, 2.0);
+        board.set_optics(fl, 2000.0, 0.0, 0.0, 0.0, 0.0);
+        let sc = alloc_slice[r](4 * 20, 0);
+        let out = alloc_slice[r](16, 0);
+        let req = alloc_slice[r](16, byte_of(0));
+        let rsp = alloc_slice[r](16, byte_of(0));
+        var m = 0;
+        m = script.write(sc, m, regs.sample_div(), session.sample_div(2));
+        m = script.write(sc, m, regs.window(), session.window(2));
+        m = script.write(sc, m, regs.half(), session.half(2));
+        m = script.write(sc, m, regs.ctrl(), 16 + session.adc_bit(2));
+        run_twin.run(sc, m, rf, st, fl, out, req, rsp);
+        var s = align.start(n);
+        var guard = 0;
+        while s.phase < 2 && guard < 1000 {
+            // the operator moves the screw to s.pos: the twin's share changes; then the AD1 gets a few conversions and the sum is read
+            board.set_optics(fl, 2000.0, peak * share(s.pos, x0, w), 0.0, 0.0, 0.0);
+            let k = script.wait(sc, 0, 40 * session.window_clocks(2));
+            let k2 = script.read(sc, k, regs.opt_sum());
+            run_twin.run(sc, k2, rf, st, fl, out, req, rsp);
+            s = align.next(s, out[1], 400);
+            guard = guard + 1;
+        }
+        got[0] = s.phase; got[1] = s.pos; got[2] = s.best_sum; got[3] = s.why; got[4] = s.steps;
+    }
+    return 0;
+}
+
+fn test_the_alignment_finds_the_peak_on_synthetic_readings() -> [] int {
+    var s = align.start(9);
+    var guard = 0;
+    while s.phase < 2 && guard < 100 {
+        var v = 1000 - 150 * (s.pos - 4) * (s.pos - 4);
+        if v < 0 { v = 0; }
+        s = align.next(s, v, 400);
+        guard = guard + 1;
+    }
+    test.assert_eq(s.phase, 2);
+    test.assert_eq(s.pos, 4);
+    test.assert_eq(s.best_sum, 1000);
+    // nine readings, one more to verify
+    test.assert_eq(s.steps, 10);
+    return 0;
+}
+
+fn test_no_light_anywhere_is_refused_with_1() -> [] int {
+    var s = align.start(5);
+    var guard = 0;
+    while s.phase < 2 && guard < 100 { s = align.next(s, 50, 400); guard = guard + 1; }
+    test.assert_eq(s.phase, 3);
+    test.assert_eq(s.why, 1);
+    return 0;
+}
+
+fn test_a_peak_at_the_edge_is_refused_with_2() -> [] int {
+    var s = align.start(5);
+    var guard = 0;
+    while s.phase < 2 && guard < 100 { s = align.next(s, 500 + 100 * s.pos, 400); guard = guard + 1; }
+    test.assert_eq(s.phase, 3);
+    test.assert_eq(s.why, 2);
+    return 0;
+}
+
+fn test_a_reading_that_does_not_repeat_is_refused_with_3() -> [] int {
+    var s = align.start(5);
+    var guard = 0;
+    while s.phase < 2 && guard < 100 {
+        var v = 1000 - 200 * (s.pos - 2) * (s.pos - 2);
+        if s.phase == 1 { v = 300; }
+        s = align.next(s, v, 400);
+        guard = guard + 1;
+    }
+    test.assert_eq(s.phase, 3);
+    test.assert_eq(s.why, 3);
+    return 0;
+}
+
+fn test_the_twin_aligns_through_the_registers() -> [] int {
+    region r {
+        let got = alloc_slice[r](8, 0);
+        run_align(got, 11, 6.0, 2.0, 1.0);
+        test.assert_eq(got[0], 2);
+        test.assert_eq(got[1], 6);
+        test.assert(got[2] >= 1900);
+        // 11 positions and one to verify
+        test.assert_eq(got[4], 12);
+        // a hump 60% as high is found as well, and the light there is 60% of the full
+        let low = alloc_slice[r](8, 0);
+        run_align(low, 11, 3.0, 2.0, 0.6);
+        test.assert_eq(low[0], 2);
+        test.assert_eq(low[1], 3);
+        test.assert(low[2] >= 1100);
+        test.assert(low[2] <= 1300);
+    }
+    return 0;
+}
+
+fn test_the_twin_refuses_a_lever_the_light_does_not_reach() -> [] int {
+    region r {
+        let got = alloc_slice[r](8, 0);
+        run_align(got, 11, 6.0, 2.0, 0.05);
+        test.assert_eq(got[0], 3);
+        test.assert_eq(got[3], 1);
+        // and a range that ends before the hump
+        let edge = alloc_slice[r](8, 0);
+        run_align(edge, 6, 9.0, 2.0, 1.0);
+        test.assert_eq(edge[0], 3);
+        test.assert_eq(edge[3], 2);
+    }
+    return 0;
+}

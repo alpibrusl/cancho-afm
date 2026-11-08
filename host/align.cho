@@ -1,0 +1,41 @@
+edition 5;
+
+module align;
+
+// `align` -- finding where the laser spot sits on the lever, from the sum signal alone (docs/liquid.md, S9.7). A state machine with no I/O, like `approach`: each reading of OPT_SUM
+// goes in, the next position of the alignment screw (or mirror) comes out, and the OPERATOR moves it and takes the reading; this program only decides. NOT TESTED ON ANY REAL HEAD.
+//
+//   phase 0 scanning the screw through its n positions, one reading each (the best so far is kept);
+//   phase 1 back at the best position for a second reading (a spot that is on the lever reads the same twice);
+//   phase 2 aligned: `pos` is the position to leave the screw at, `best_sum` the light there;
+//   phase 3 refused, `why`: 1 no light at any position (the best is under `min`: the laser is off, or not reaching the lever), 2 the best is at an end of the range (the peak may be beyond:
+//           widen the range), 3 the second reading at the best position is under 90% of the first (the reading is not repeatable: something is moving).
+// It uses only the SUM. A quadrant difference (centring the spot on the lever across, not just along, the screw's axis) needs the deflection of a second axis and is NOT done here.
+pub struct S { phase: int, pos: int, n: int, best: int, best_sum: int, why: int, steps: int }
+
+pub fn start(n: int) -> [] S {
+    return S { phase: 0, pos: 0, n: n, best: 0, best_sum: 0 - 1, why: 0, steps: 0 };
+}
+
+fn refuse(s: S, why: int) -> [] S {
+    return S { phase: 3, pos: s.pos, n: s.n, best: s.best, best_sum: s.best_sum, why: why, steps: s.steps + 1 };
+}
+
+// `sum` is the reading at `s.pos`; the result's `pos` is where to go next.
+pub fn next(s: S, sum: int, min: int) -> [] S {
+    if s.phase >= 2 { return s; }
+    if s.phase == 1 {
+        if sum * 100 < s.best_sum * 90 { return refuse(s, 3); }
+        return S { phase: 2, pos: s.best, n: s.n, best: s.best, best_sum: s.best_sum, why: 0, steps: s.steps + 1 };
+    }
+    var best = s.best;
+    var bs = s.best_sum;
+    if sum > bs { best = s.pos; bs = sum; }
+    if s.pos + 1 < s.n {
+        return S { phase: 0, pos: s.pos + 1, n: s.n, best: best, best_sum: bs, why: 0, steps: s.steps + 1 };
+    }
+    let t = S { phase: 0, pos: s.pos, n: s.n, best: best, best_sum: bs, why: 0, steps: s.steps };
+    if bs < min { return refuse(t, 1); }
+    if best == 0 || best == s.n - 1 { return refuse(t, 2); }
+    return S { phase: 1, pos: best, n: s.n, best: best, best_sum: bs, why: 0, steps: s.steps + 1 };
+}

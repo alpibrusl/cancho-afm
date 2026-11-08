@@ -5,7 +5,7 @@ set -e
 cd "$(dirname "$0")"
 CANCHO=${CANCHO:-../cancho/target/release/cancho}
 export CANCHO
-MODS="$(ls sim/*.cho) host/regs.cho gen/ir.cho gen/pid_ir.cho gen/raster_ir.cho gen/lockin_ir.cho host/proto.cho host/twin_link.cho host/script.cho host/run_twin.cho host/session.cho host/image.cho host/metrics.cho host/features.cho host/drift.cho host/report.cho host/png.cho host/force.cho"
+MODS="$(ls sim/*.cho) host/regs.cho gen/ir.cho gen/pid_ir.cho gen/raster_ir.cho gen/lockin_ir.cho host/proto.cho host/twin_link.cho host/script.cho host/run_twin.cho host/session.cho host/image.cho host/metrics.cho host/features.cho host/drift.cho host/report.cho host/png.cho host/force.cho host/align.cho"
 fail=0
 for t in tests/*_test.cho; do
   out=$($CANCHO test "$t" $MODS --std 2>&1) || true
@@ -43,6 +43,8 @@ if [ -n "${KICAD_CLI:-}" ]; then
   sh hw/kicad/check.sh > /dev/null
   echo "hw/kicad schematic: generator, ERC and nets against the simulation: passed"
 fi
+# the alignment steps and the force in the report, against the twin (S9.7); needs only the compiler
+sh tests/liquid_flow.sh
 # the scan -> particles.csv -> cancho-table flow (I3) needs a built `table`; it runs only when TABLE names one
 if [ -n "${TABLE:-}" ]; then
   sh tests/particles_flow.sh
