@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 : "${CANCHO:?set CANCHO}"; : "${TABLE:?set TABLE}"
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
-"$CANCHO" build host/scan_twin.cho $(ls sim/*.cho) host/regs.cho gen/ir.cho gen/pid_ir.cho gen/raster_ir.cho gen/lockin_ir.cho host/proto.cho host/twin_link.cho host/script.cho host/run_twin.cho host/session.cho host/image.cho host/metrics.cho host/features.cho host/drift.cho host/report.cho host/png.cho --std -o "$W/scan_twin" > /dev/null
+"$CANCHO" build host/scan_twin.cho $(ls sim/*.cho) host/regs.cho gen/ir.cho gen/pid_ir.cho gen/raster_ir.cho gen/lockin_ir.cho host/proto.cho host/twin_link.cho host/script.cho host/run_twin.cho host/session.cho host/image.cho host/metrics.cho host/features.cho host/drift.cho host/report.cho host/png.cho host/force.cho --std -o "$W/scan_twin" > /dev/null
 # the high-speed profile, 500 kHz cantilever, ideal Z scanner; the mode that prints particles.csv
 "$W/scan_twin" 1 0 500 3 > "$W/particles.csv"
 head -1 "$W/particles.csv" | grep -qx 'x,y,height_pm,area_px'

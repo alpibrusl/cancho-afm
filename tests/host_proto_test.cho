@@ -28,7 +28,7 @@ fn test_the_twin_answers_like_the_bridge() -> [] int {
     region r {
         let rf = alloc_slice[r](64, 0);
         let st = alloc_slice[r](32, 0);
-        let fl = alloc_slice[r](32, 0.0);
+        let fl = alloc_slice[r](48, 0.0);
         board.reset(rf, st, fl);
         let req = alloc_slice[r](16, byte_of(0));
         let rsp = alloc_slice[r](16, byte_of(0));

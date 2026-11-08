@@ -1,0 +1,34 @@
+edition 7;
+
+module force;
+
+import tune;
+
+// `force` -- a tapping-force figure for every pixel, from what the host can read (docs/liquid.md, S9.3). A pixel's force is the proxy of `tune.force_estimate` evaluated at the
+// amplitude the loop was holding at that pixel: stiffness times the amplitude given up (N/m times pm is pN). It needs the lever's stiffness, which the program is TOLD and
+// does not measure, the free amplitude figure, and the AMP register read at the pixel. When the drive also reaches the detector through something that does not fall at
+// contact (the forest of docs/liquid.md, S9.2) the free figure includes it and the proxy UNDERSTATES the force by that share. NOT A MEASURED FORCE.
+
+pub fn pixel(k: float, free_pm: float, free_fig: float, amp_fig: float) -> [] float {
+    if free_fig <= 0.0 { return 0.0; }
+    return tune.force_estimate(k, free_pm, amp_fig / free_fig);
+}
+
+// the map's largest value, the pixels over `thr` pN (thr 0 = none counted), and their number counted (the entries read, those >= 0; unread ones are -1)
+pub struct Sum { max: float, over: int, n: int }
+
+pub fn summarise[&a](f: &a [float], count: int, thr: float) -> [] Sum {
+    var mx = 0.0;
+    var over = 0;
+    var n = 0;
+    var i = 0;
+    while i < count {
+        if f[i] >= 0.0 {
+            n = n + 1;
+            if f[i] > mx { mx = f[i]; }
+            if thr > 0.0 && f[i] > thr { over = over + 1; }
+        }
+        i = i + 1;
+    }
+    return Sum { max: mx, over: over, n: n };
+}
