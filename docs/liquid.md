@@ -133,3 +133,20 @@ Things the twin found that were wrong in the software, now fixed:
 It is **not** a code-for-code comparison of the twin's `OPT_DEFL` with the Verilog's (the AD1 model in the testbench is a fork, not an optical lever), and the twin updates the two registers every fast sample while the hardware updates them at the AD1's rate.
 
 **Not known, not built:** the AD1 inputs take 0 to 3.3 V, so the photodiode amplifier's sum and deflection outputs must be conditioned to that range and a mid-scale DC level for the deflection **[unknown, part of S9.8]**; the SPI clock running beside the 4.5 MS/s fast ADC may add noise to it, **not measured** (a reason `OPT_RUN` is off by default and S9.11 should compare the fast channel's noise with it on and off); no host program reads the two registers yet (S9.6, #38).
+
+## What S9.6 found (software, against the twin, 2026-11-08; predictions, not measurements)
+
+**Profile 2, `liquid`, in `host/session.cho`.** It shares the whole fast-cantilever setup of profile 1 (parallel ADC, 6 clocks a sample, the swept 100 to 899 kHz range, the snapped window; a new function `fast(p)` replaces the old `p == 1` tests). What differs, all in functions of the profile so profiles 0 and 1 are unchanged:
+* it turns the optical lever on (`CTRL` bit 8, `adc_bit(2)` is 384) at the end of stage 0 and **reads `OPT_SUM` and `OPT_DEFL` at the end of every stage** (so every other read keeps its place);
+* a gentler tap: setpoint 90% of the free figure (80% before) and contact declared at 94% (90% before). These two numbers are **choices, not findings**: nothing here says what a soft sample tolerates (S9.3: the threshold is a parameter), and the force is not reported until S9.7;
+* refusals on the light, checked after every stage before anything else in it is believed: **81** the sum signal at the start under 400 counts of the AD1's 4,095 (no optical lever, or an unlit one); **82** the sum signal fell under 95% of its starting value; **83** the deflection's DC level left the 2,048 +- 1,000 range. They sit next to the ones that already existed: 22 (dark sweep), 25 (ambiguous forest, S9.2), 43 (contact at full retract, S9.4). The limits (`sum_min`, `sum_floor_pct`, `defl_span`) are **assumed**; the twin's sum has no noise, so none of them has met a real photodiode.
+
+**The fading beam (handed over by S9.4) is now refused**, with one correction to my own first version: I set the floor at 70% and the twin showed the approach faulting first (43), because the amplitude follows the light and the approach declares contact at 94% of the free figure, so a 6% fade is already a "contact" at full retract. A 5% floor is what the setpoint margin justifies (the loop taps with a 10% margin under the setpoint; a 5% fade halves it), so it is 95%. The run now ends with 82 and a state where `ss[24]` (the lowest sum seen) says why. A very slow fade (2e-8 per window) still runs.
+
+**Tested (`tests/liquid_session_test.cho`, 8 tests):** the whole run with no operator (36 pixels, f0 and Q found, the light read the whole way); no optical lever (81); a lever with a tenth of the light (81, nothing moves); a fading beam (82); a very slow fade (runs); a wandering deflection (83); an ambiguous forest (25); the profile's own constants. `host/scan_twin.cho` takes profile 2 (the optical lever always on, defaults a sum of 2,000 and no noise): a default run finishes with code 0, a half-aligned one with half the free figure (6,198 against 12,394 counts), a fading one with 82.
+
+**Not done, said plainly:**
+* the last stage turns the ADC off (which clears the optical registers), so the final light check is the last pixel read, not a reading after the scan;
+* no check on the loop's Z being pinned at an end of its range (the hand-off reads Z, nothing judges it);
+* the limits above were chosen from the twin's own numbers; the real photodiode's noise and the lever's real approach are the places they will move;
+* the force is not computed in the session: S9.7 puts it next to the image.

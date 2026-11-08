@@ -239,7 +239,7 @@ fn scan_out[&h, &a](heap: &!h Heap, o: buffer.Buffer, pic: &a [int], mode: int, 
                 let parts = alloc_slice[r3](4 * 16, 0.0);
                 let rp = report.run(t, r, 64, 64, 0.005, lev, parts, 16);
                 if mode == 5 {
-                    b = text(heap, b, "{\"source\":\"twin\",\"profile\":\""); if prof == 1 { b = text(heap, b, "high-speed cantilever"); } else { b = text(heap, b, "tuning fork"); }
+                    b = text(heap, b, "{\"source\":\"twin\",\"profile\":\""); if prof == 2 { b = text(heap, b, "liquid cantilever"); } else if prof == 1 { b = text(heap, b, "high-speed cantilever"); } else { b = text(heap, b, "tuning fork"); }
                     b = text(heap, b, "\",\"size\":\"64 x 64\",\"frame_s\":"); b = sdec(heap, b, float_of(frame_us) / 1000000.0);
                     b = text(heap, b, ",\"ra_pm\":"); b = sdec(heap, b, rp.ra); b = text(heap, b, ",\"rq_pm\":"); b = sdec(heap, b, rp.rq); b = text(heap, b, ",\"rz_pm\":"); b = sdec(heap, b, rp.rz);
                     b = text(heap, b, ",\"step_line\":"); b = num(heap, b, rp.step_line); b = text(heap, b, ",\"step_pm\":"); b = sdec(heap, b, rp.step_pm);
@@ -303,7 +303,7 @@ fn scan_out[&h, &a](heap: &!h Heap, o: buffer.Buffer, pic: &a [int], mode: int, 
     return b;
 }
 
-// the profile: argument 1 (the scanner, argument 2, and for the high-speed profile the cantilever's resonance in kHz, argument 3, the same way; default 500; argument 4 = 1 prints the levelling check, 2 the metrics check, 5 the console's scan.json, 6 its levelled image as a PNG, 7 the raw trace as a PNG, 4 the drift check (arguments 5 and 6: the sample's drift along x in milli-pixels per tick and in height in milli-pm per tick; 7 to 10: a tilt along x in pm per pixel, a tilt along y in pm per line, a bow in pm and line offsets of up to that many pm), of docs/image-processing.md instead of the pixels), `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md); for the high-speed profile, arguments 11 to 13 make it a liquid lever (docs/liquid.md, S9.2): its Q in tenths (30 = 3.0; default 50), a forest of fluid-cell peaks whose nearest is this many percent of the lever's height (0 = none), and their spacing in kHz; arguments 14 to 16: the lever's stiffness in hundredths of N/m (15 = 0.15; 0 = force not modelled), the soft sample's stiffness in hundredths of N/m (0 = rigid) and the damage threshold in pN (docs/liquid.md, S9.3), which add a force line to the output; arguments 17 to 20 turn on the optical lever (docs/liquid.md, S9.4): its noise in ADC counts, the share of light reaching the photodiode in percent (default 100), the deflection's DC wander in thousandths of a count per detector window and the light lost in millionths per window
+// the profile: argument 1 (the scanner, argument 2, and for the high-speed profile the cantilever's resonance in kHz, argument 3, the same way; default 500; argument 4 = 1 prints the levelling check, 2 the metrics check, 5 the console's scan.json, 6 its levelled image as a PNG, 7 the raw trace as a PNG, 4 the drift check (arguments 5 and 6: the sample's drift along x in milli-pixels per tick and in height in milli-pm per tick; 7 to 10: a tilt along x in pm per pixel, a tilt along y in pm per line, a bow in pm and line offsets of up to that many pm), of docs/image-processing.md instead of the pixels), `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md), `2` the same lever in liquid (docs/liquid.md, S9.6: the optical lever is always on, its defaults a sum of 2,000 counts and no noise, and the run reads its light); for profiles 1 and 2, arguments 11 to 13 make it a liquid lever (docs/liquid.md, S9.2): its Q in tenths (30 = 3.0; default 50), a forest of fluid-cell peaks whose nearest is this many percent of the lever's height (0 = none), and their spacing in kHz; arguments 14 to 16: the lever's stiffness in hundredths of N/m (15 = 0.15; 0 = force not modelled), the soft sample's stiffness in hundredths of N/m (0 = rigid) and the damage threshold in pN (docs/liquid.md, S9.3), which add a force line to the output; arguments 17 to 20 turn on the optical lever (docs/liquid.md, S9.4): its noise in ADC counts, the share of light reaching the photodiode in percent (default 100), the deflection's DC wander in thousandths of a count per detector window and the light lost in millionths per window
 fn number_of[&t](text: &t [byte]) -> [] int {
     var n = 0;
     var i = 0;
@@ -369,10 +369,10 @@ fn main(world: World) -> [] int {
             let st = alloc_slice[r](32, 0);
             let fl = alloc_slice[r](48, 0.0);
             board.reset(rf, st, fl);
-            if prof == 1 { var fc = 500000.0; if fk > 0 { fc = 1000.0 * float_of(fk); } var qq = 5.0; if lq > 0 { qq = float_of(lq) / 10.0; } board.set_plant(fl, fc, qq, 2000.0, 2000.0, 100.0, 1200.0, 2.0); board.set_forest(fl, float_of(fr) / 100.0, 1000.0 * float_of(fsp), 15.0, 3); board.set_soft(fl, float_of(lk) / 100.0, float_of(lks) / 100.0, float_of(lth)); }
+            if prof >= 1 { var fc = 500000.0; if fk > 0 { fc = 1000.0 * float_of(fk); } var qq = 5.0; if lq > 0 { qq = float_of(lq) / 10.0; } board.set_plant(fl, fc, qq, 2000.0, 2000.0, 100.0, 1200.0, 2.0); board.set_forest(fl, float_of(fr) / 100.0, 1000.0 * float_of(fsp), 15.0, 3); board.set_soft(fl, float_of(lk) / 100.0, float_of(lks) / 100.0, float_of(lth)); }
             else { board.set_plant(fl, 32781.4, 500.0, 2000.0, 2000.0, 100.0, 1200.0, 2.0); }
             fl[10] = 150.0;
-            if on > 0 || oa != 100 || ow > 0 || ol > 0 { board.set_optics(fl, 2000.0, float_of(oa) / 100.0, float_of(on), float_of(ow) / 1000.0, float_of(ol) / 1000000.0); }
+            if on > 0 || oa != 100 || ow > 0 || ol > 0 || prof == 2 { board.set_optics(fl, 2000.0, float_of(oa) / 100.0, float_of(on), float_of(ow) / 1000.0, float_of(ol) / 1000000.0); }
             // argument 2, the Z scanner: 0 ideal, 1 a good small stack (100 kHz, Q 3), 2 a slow one (20 kHz, Q 10), 3 the good one behind a 20 pm/us amplifier, 4 to 6 a Q = 3 stack at 30, 50, 70 kHz (docs/high-speed.md, H2)
             if scn == 1 { board.set_scanner(fl, 100000.0, 3.0, 0.0); }
             if scn == 2 { board.set_scanner(fl, 20000.0, 10.0, 0.0); }
@@ -413,7 +413,9 @@ fn main(world: World) -> [] int {
             n = script.write(sc, n, regs.dx(), 100);
             n = script.write(sc, n, regs.dy(), 100);
             n = script.write(sc, n, regs.pixdiv(), session.pixdiv(prof));
-            n = script.write(sc, n, regs.ctrl(), 21);
+            var cbits = 21;
+            if prof == 2 { cbits = 21 + session.adc_bit(prof); }     // profile 2 keeps the parallel ADC and the optical lever on; profile 1 is left as it was
+            n = script.write(sc, n, regs.ctrl(), cbits);
             failures = failures + run_twin.run(sc, n, rf, st, fl, out, req, rsp);
             var calls = 0;
             var done = 0;
