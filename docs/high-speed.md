@@ -140,6 +140,42 @@ Not done: wiring it into `afm_top` (a register to choose between the SPI and the
 
 Image processing of the result (levelling, roughness, step height, pitch, particles) is designed in `docs/image-processing.md`.
 
+## What HS1 found (twin, 2026-11-09; predictions, not measurements)
+
+Issue #64. The frame rate the twin predicts when the loop steps per pixel (`pixdiv`) are cut, with the Z scanner's resonance as the second axis. 64 x 64, trace and retrace, a 1,000 pm step in the made-up sample, the loop's gains as the session chooses them, no noise. **One run per cell; the twin is deterministic here.** Profile 1 is the cantilever at the twin's default Q of 5; profile 2 is the liquid one at Q 3. The figure of merit is the **trace-minus-retrace rms over columns 2 to 61** (pm): it grows when the loop lags the surface. (It is not the 87 pm of H1 above: that was another sample, with a 150 pm step, over all columns. The two are not comparable.)
+
+| loop steps per pixel | frame time | frames/s | profile 1: ideal / 70 kHz / 50 kHz / 30 kHz scanner (pm) | profile 2: ideal / 70 / 50 / 30 kHz (pm) |
+|---|---|---|---|---|
+| 20 | 0.645 s | 1.55 | 9 / 10 / 12 / **525** | 9 / 14 / 112 / **306** |
+| 10 | 0.323 s | 3.1 | 45 / 43 / 52 / **548** | 56 / 69 / 146 / **243** |
+| 6 | 0.194 s | 5.2 | 75 / 85 / 123 / **600** | 98 / 89 / 168 / **429** |
+| 4 | 0.129 s | 7.7 | 135 / 125 / 111 / **722** | **481** / **523** / **497** / **889** |
+
+* **The frame time is the loop steps per pixel times a constant** (32,260 us per step). It is the twin counting its own clocks, so it agrees with the formula by construction; it checks nothing about a real instrument. Pinned in `tests/hs_rate.sh` for 20, 10 and 4.
+* **The step height is not a sensitive figure:** every cell with a scanner at 50 kHz or faster reads the 1,000 pm step within 0.5%. The lag in the trace-minus-retrace figure is what degrades first.
+* **Against an error bound of 100 pm (my proposal, not derived):** profile 1 holds it at 3.1 frames/s with a scanner of 50 kHz or faster and at 5.2 with 70 kHz or faster; profile 2 holds it at 3.1 with 70 kHz or faster, never with a 50 kHz scanner (112 pm already at 1.55 frames/s), and its 7.7 frames/s run is lost whatever the scanner is. A 30 kHz scanner fails everywhere (as in H2). **The design note's goal of 1 to 5 frames/s at 64 x 64 stands for the twin only if the Z scanner resonates at 70 kHz or more**; a 50 kHz one caps it near 3 in air and below 1.5 in liquid.
+* **The detector window was not swept.** `lockin.snap` picks the shortest window of at least 16 samples that fits a whole number of cycles at 8 or more samples per period, so the window is 18 here and cannot be cut by a constant. Windows under one cycle are the fast detector of issue #67.
+* **The profile called "air" is not air.** Profile 1 defaults to Q 5. Asked for a cantilever of Q 20 and Q 50 the tune stage finds Q 17 and Q 21 (probably the 12.7 kHz sweep step: the line is 25, 10 and 5 kHz wide at Q 20, 50 and 100, so it is under-sampled and Q reads low; the cause was not isolated), and **at Q 100 it refuses with code 21 (no resonance)**: an air cantilever is not supported by the tune sweep. Pinned in `tests/hs_rate.sh`. This is the entry point of issue #66 (Q control for air), and it means every "air" figure in this note and in `docs/liquid.md` is a low-Q figure.
+
+## What HS2 found (twin, 2026-11-09; predictions, not measurements)
+
+Issue #65. Rule 5 of the approach, the step budget: **the approach is host-driven, one script exchange per step, and its worst case is linear in the Z range.** `approach.worst_steps(p)` is `(max_motor + 1) * ((range / dz + 2) * (dwell + 1) + 4 * dwell)`; `approach.check_budget` refuses a range whose worst case plus 1,000 steps for the other stages exceeds `session.step_budget()` (100,000, an assumption: the time per step on a real link is not measured), with **failure code 35**, before anything moves. `max_motor` is now derived from the farthest initial gap the approach is asked to cover (`session.gap_max()` = 12,000 pm; the twin's gap is 11,000), not fixed at 20, so the worst case is 4 descents instead of 21.
+
+| Z range | worst-case steps | result |
+|---|---|---|
+| 10 nm | about 9,500 | completes; steps up to 6 nm within 0.2%; 8 and 20 nm steps clipped at 7.2 nm (the range) |
+| 100 nm | about 86,200 | completes (contact Z 2,656 pm); steps of 3, 8, 20 and 50 nm read within 0.1% |
+| 1,000 nm | about 860,000 | **refused, code 35** |
+
+* **The 7.2 nm clip of `docs/liquid.md` was the range, not the loop.** Corrected there in place.
+* **What it costs:** a range ten times larger is ten times the approach steps. Not designed: a far-field descent in bigger moves, which would cut it.
+* **Two hidden limits were found on the way:** `session.consume` had its own cap of 40,000 calls (code 6), apart from the hosts' loop caps of 40,000; both now read `step_budget()`. Before #62 a spent cap ended with code 0.
+* **Not covered:** the real scanner's range (a guess, about 1 um), the hysteresis and creep that a large range brings, and the force at a large range (not measured).
+
+## Open slices, as issues
+
+#64 HS1 and #65 HS2 are above. Not started: #66 HS3 (Q control for air), #67 HS4 (a detector for windows under one cycle), #68 HS5 (tapping dynamics at speed), #69 HS6 (hardware; blocked on a bench).
+
 ## Risks
 
 1. **Optical detection** is a new subsystem (laser, alignment, quadrant photodiode, a fast TIA); none is designed. It is the schedule risk.

@@ -43,12 +43,18 @@ step_of() { sed 's/.*"step_pm":\([0-9.]*\).*/\1/' "$1"; }
 awk -v a="$(step_of "$W/z3.json")" 'BEGIN { exit !(a > 2940 && a < 3060) }' || { echo "FAILED: a 3 nm step not read within 2%"; exit 1; }
 awk -v a="$(step_of "$W/z20.json")" 'BEGIN { exit !(a < 18000) }' || { echo "FAILED: a 20 nm step was read in full at a 10 nm Z range (the claim of docs/liquid.md is false)"; exit 1; }
 echo "Z range: a 3 nm step read within 2%, a 20 nm step not: ok"
-# a Z range the approach cannot cross within the step budget (100 nm) is refused with code 73 (70 + the approach stage), not reported as success on a dead image
-sed 's/pub fn zmax() -> \[\] int { return 10000; }/pub fn zmax() -> [] int { return 100000; }/' host/session.cho > "$W/session_wide.cho"
-grep -q 'return 100000; }' "$W/session_wide.cho" || { echo "FAILED: the wide-range session was not made"; exit 1; }
-MODS_WIDE="$(echo "$MODS" | sed "s#host/session.cho#$W/session_wide.cho#")"
-"$CANCHO" build host/scan_twin.cho $MODS_WIDE --std -o "$W/scan_wide" > /dev/null
-"$W/scan_wide" 2 0 500 0 | head -n 1 | grep -qF 'failure code 73' || { echo "FAILED: a 100 nm range was not refused with code 73"; "$W/scan_wide" 2 0 500 0 | head -n 1; exit 1; }
+# the Z range rule (docs/liquid.md, "What the Z range found"; docs/high-speed.md, HS2): a 100 nm range completes and reads a 20 nm step within 2%; a 1 um range, whose worst-case approach does not fit
+# in the step budget, is refused before anything moves with code 35 (rule 5); the 10 nm range is unchanged
+wide() {  # $1 = the range in pm; builds $W/scan_$1
+    sed "s/pub fn zmax() -> \\[\\] int { return 10000; }/pub fn zmax() -> [] int { return $1; }/" host/session.cho > "$W/session_$1.cho"
+    grep -q "return $1; }" "$W/session_$1.cho" || { echo "FAILED: the $1 pm session was not made"; exit 1; }
+    "$CANCHO" build host/scan_twin.cho $(echo "$MODS" | sed "s#host/session.cho#$W/session_$1.cho#") --std -o "$W/scan_$1" > /dev/null
+}
+wide 100000; wide 1000000
+"$W/scan_100000" 2 0 500 0 | head -n 1 | grep -qF 'failure code 0,' || { echo "FAILED: a 100 nm range did not complete"; "$W/scan_100000" 2 0 500 0 | head -n 1; exit 1; }
+"$W/scan_100000" 2 0 500 5 0 0 0 0 0 0 30 0 0 15 0 100 0 100 0 0 20000 > "$W/w20.json"
+awk -v a="$(step_of "$W/w20.json")" 'BEGIN { exit !(a > 19600 && a < 20400) }' || { echo "FAILED: at a 100 nm range a 20 nm step was not read within 2%"; exit 1; }
+"$W/scan_1000000" 2 0 500 0 | head -n 1 | grep -qF 'failure code 35,' || { echo "FAILED: a 1 um range was not refused with code 35"; "$W/scan_1000000" 2 0 500 0 | head -n 1; exit 1; }
 "$W/scan_twin" 2 0 500 0 | head -n 1 | grep -qF 'failure code 0,' || { echo "FAILED: the 10 nm range no longer succeeds"; exit 1; }
-echo "Z range too wide for the step budget: refused with code 73: ok"
+echo "Z range rule: 100 nm completes and reads a 20 nm step, 1 um refused with code 35: ok"
 echo "liquid flow: passed"

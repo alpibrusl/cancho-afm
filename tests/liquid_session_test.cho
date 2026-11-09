@@ -58,6 +58,24 @@ fn run_liquid[&a](got: &!a [int], forest: float, spacing: float, sum0: float, al
     return fault;
 }
 
+// session.budget_spent: a session cut short in the approach (stage 3) is refused with 73; one at its last stage, one already refused, and one that already carries a code are left alone.
+fn test_a_spent_step_budget_is_refused_with_a_tag() -> [] int {
+    region r {
+        let ss = alloc_slice[r](32, 0);
+        ss[0] = 3;
+        test.assert_eq(session.budget_spent(ss, 5), 1);
+        test.assert_eq(ss[2], 73);
+        test.assert_eq(ss[0], 98);
+        ss[0] = 5; ss[2] = 0;
+        test.assert_eq(session.budget_spent(ss, 5), 0);
+        test.assert_eq(ss[2], 0);
+        ss[0] = 3; ss[2] = 41;
+        test.assert_eq(session.budget_spent(ss, 5), 0);
+        test.assert_eq(ss[2], 41);
+    }
+    return 0;
+}
+
 fn test_the_liquid_profile_runs_whole_with_no_operator() -> [] int {
     region r {
         let got = alloc_slice[r](12, 0);

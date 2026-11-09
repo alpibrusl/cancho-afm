@@ -22,12 +22,26 @@ pub struct P { free_r: int, free_pm: int, contact_pct: int, dz: int, dwell: int,
 // tip already touching).
 pub struct A { phase: int, z: int, motor: int, dwell: int, fault: int }
 
-// 0 = the parameters are safe; otherwise the first rule broken: 1 coarse step too big, 2 dz too big, 3 dwell < 1, 4 lag distance too big.
+// 0 = the parameters are safe; otherwise the first rule broken: 1 coarse step too big, 2 dz too big, 3 dwell < 1, 4 lag distance too big. (Rule 5, the step budget, is `check_budget`, which needs the host's budget.)
 pub fn check(p: P, alpha: float) -> [] int {
     if p.coarse + p.free_pm > p.zmax - p.zmin { return 1; }
     if p.dz * 10 > p.free_pm { return 2; }
     if p.dwell < 1 { return 3; }
     if float_of(p.dz) / (float_of(p.dwell) * alpha) > float_of(p.free_pm) / 2.0 { return 4; }
+    return 0;
+}
+
+// The most session steps the approach can take before it either finds the surface or faults at max_motor: every one of the max_motor + 1 descents walks the whole Z range in
+// steps of dz with a dwell (+ 1 step) after each, and after each retract waits four dwells. Linear in the Z range: a range ten times larger costs ten times the steps (docs/liquid.md,
+// "What the Z range found"; found when a 100 nm range spent the host's whole step budget and reported success).
+pub fn worst_steps(p: P) -> [] int {
+    let range = p.zmax - p.zmin;
+    return (p.max_motor + 1) * ((range / p.dz + 2) * (p.dwell + 1) + 4 * p.dwell);
+}
+
+// 0 = the worst case fits in `budget` steps (less `slack` for the stages around the approach); 5 = it does not: refuse before anything moves, since the run would end mid-approach (check's rule 5).
+pub fn check_budget(p: P, budget: int, slack: int) -> [] int {
+    if worst_steps(p) + slack > budget { return 5; }
     return 0;
 }
 

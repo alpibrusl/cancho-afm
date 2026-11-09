@@ -40,6 +40,16 @@ fn test_unsafe_parameters_are_refused() -> [] int {
     return 0;
 }
 
+// The worst-case number of session steps (rule 5: the step budget): 21 descents of (10000 / 100 + 2) steps of 151, plus four dwells after each retract; linear in the Z range.
+fn test_the_step_budget_rule() -> [] int {
+    test.assert_eq(approach.worst_steps(params()), 21 * ((100 + 2) * 151 + 600));
+    test.assert_eq(approach.check_budget(params(), 400000, 1000), 0);
+    test.assert_eq(approach.check_budget(params(), 336042, 1000), 5);
+    let big = approach.P { free_r: 32000, free_pm: 2000, contact_pct: 90, dz: 100, dwell: 150, zmin: 0, zmax: 100000, coarse: 6000, max_motor: 20 };
+    test.assert(approach.worst_steps(big) > 9 * approach.worst_steps(params()));
+    return 0;
+}
+
 // Run the approach from a surface `s0` away; return the final state, with the number of samples and whether the tip ever touched.
 fn run_approach(s0: int, max_motor: int) -> [] (approach.A, int, int, int) {
     var p = params();
