@@ -1,0 +1,121 @@
+edition 7;
+
+import std.buffer;
+import std.math;
+import nucleation;
+
+// D7 slice 1 report (docs/dynamics.md): what the analysis recovers from a made-up nucleation movie, for several frame times and sizes of the smallest visible object. A prediction of this software.
+//   cancho run host/d7_report.cho sim/nucleation.cho --std
+// One line per (frame time, min_size): the rate read with the lag removed and naively, over the rate put in; the measured lag and the predicted; events seen over nuclei born.
+
+fn text[&h, &r](heap: &!h Heap, b: buffer.Buffer, s: &r [byte]) -> [heap] buffer.Buffer { return buffer.append(heap, b, s); }
+
+fn dec[&h](heap: &!h Heap, o: buffer.Buffer, v: float, places: int) -> [heap] buffer.Buffer {
+    var b = o;
+    var x = v;
+    if x < 0.0 { b = text(heap, b, "-"); x = 0.0 - x; }
+    var scale = 1;
+    var p = 0;
+    while p < places { scale = scale * 10; p = p + 1; }
+    let c = truncate(x * float_of(scale) + 0.5);
+    b = buffer.push_nat(heap, b, c / scale);
+    if places > 0 {
+        b = text(heap, b, ".");
+        var rest = c % scale;
+        var div = scale / 10;
+        while div > 0 {
+            b = buffer.push_nat(heap, b, rest / div);
+            rest = rest % div;
+            div = div / 10;
+        }
+    }
+    return b;
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(net); release(clock); release(signals); release(exec); release(args);
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 8192);
+        o = text(h, o, "tf_s min_px | rate_corrected rate_naive (over the rate put in) | lag_measured lag_predicted (s) | seen / born\n");
+        region r {
+            let bt = alloc_slice[r](160, 0.0);
+            let bx = alloc_slice[r](160, 0.0);
+            let by = alloc_slice[r](160, 0.0);
+            let evt = alloc_slice[r](160, 0.0);
+            let evx = alloc_slice[r](160, 0.0);
+            let evy = alloc_slice[r](160, 0.0);
+            let cy = alloc_slice[r](160, 0.0);
+            let cx = alloc_slice[r](160, 0.0);
+            let py = alloc_slice[r](160, 0.0);
+            let px = alloc_slice[r](160, 0.0);
+            let frame = alloc_slice[r](5184, 0.0);
+            var cfg = 0;
+            while cfg < 6 {
+                var tf = 1.0;
+                var frames = 60;
+                var ms = 6;
+                if cfg == 1 { tf = 4.0; frames = 15; }
+                if cfg == 2 { tf = 10.0; frames = 6; }
+                if cfg == 3 { ms = 3; }
+                if cfg == 4 { ms = 12; }
+                if cfg == 5 { tf = 4.0; frames = 15; ms = 12; }
+                let m = nucleation.Movie { size: 72, j: 0.0001929, v: 0.0583, r0: 0.3, h: 1.0, sigma: 0.1, tf: tf, frames: frames, min_size: ms, link: 2.5 };
+                var seen = 0;
+                var born = 0;
+                var lag_sum = 0.0;
+                var lag_n = 0;
+                var seed = 1;
+                while seed <= 12 {
+                    let nb = nucleation.births(m, seed, 60.0, bt, bx, by);
+                    born = born + nb;
+                    let ne = nucleation.analyse(m, nb, bt, bx, by, seed, frame, cy, cx, py, px, evt, evx, evy);
+                    seen = seen + ne;
+                    var e = 0;
+                    while e < ne {
+                        var best = 1000000.0;
+                        var bi = 0 - 1;
+                        var k = 0;
+                        while k < nb {
+                            let dx = evx[e] - bx[k];
+                            let dy = evy[e] - by[k];
+                            let d2 = dx * dx + dy * dy;
+                            if bt[k] <= evt[e] && d2 < best { best = d2; bi = k; }
+                            k = k + 1;
+                        }
+                        if bi >= 0 && best <= 9.0 { lag_sum = lag_sum + (evt[e] - bt[bi]); lag_n = lag_n + 1; }
+                        e = e + 1;
+                    }
+                    seed = seed + 1;
+                }
+                // the window of the births the movie can show: frames * tf; births are drawn to 60 s, so use the movie's own length for the naive rate
+                let t_movie = float_of(frames) * tf;
+                let naive = float_of(seen) / 12.0 / (5184.0 * t_movie);
+                let corrected = nucleation.rate_from_events(m, seen) / 12.0;
+                o = dec(h, o, tf, 0);
+                o = text(h, o, " ");
+                o = buffer.push_nat(h, o, ms);
+                o = text(h, o, " | ");
+                o = dec(h, o, corrected / m.j, 2);
+                o = text(h, o, " ");
+                o = dec(h, o, naive / m.j, 2);
+                o = text(h, o, " | ");
+                if lag_n > 0 { o = dec(h, o, lag_sum / float_of(lag_n), 1); } else { o = text(h, o, "-"); }
+                o = text(h, o, " ");
+                o = dec(h, o, nucleation.lag_pred(m), 1);
+                o = text(h, o, " | ");
+                o = buffer.push_nat(h, o, seen);
+                o = text(h, o, " / ");
+                o = buffer.push_nat(h, o, born);
+                o = text(h, o, "\n");
+                cfg = cfg + 1;
+            }
+        }
+        var code = 0;
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(heap);
+    release(io);
+    return 0;
+}

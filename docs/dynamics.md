@@ -272,6 +272,25 @@ Nine PDFs were read after the search-snippet and blocked-fetch rounds above. **N
 
 **Acceptance, written first:** (a) at low coverage the recovered J is within 3 / sqrt(N) of the injected J; (b) the waiting-time histogram has the exponential's mean within the same bound, after the shift of (2) is removed; (c) the measured shift matches (2) to within one frame time; (d) the coverage at time t matches (3) within the Poisson scatter; (e) every refusal has a tag (no objects, field too crowded to separate objects, a frame time longer than the mean waiting time per field); (f) reproducible.
 
+**Built (slice 1, 2026-11-10):** `sim/nucleation.cho` (births, the frame, the analysis, the expected lag and the Avrami law), `tests/nucleation_test.cho` (the four closed forms, each at its stated bound), `host/d7_report.cho` (the table below). Field 72 by 72 pixels, 60 s, 12 movies of about 60 births each; units are pixels and seconds, nothing is from an experiment. The reading of vesicle movies named at the top of this section is **still not done**; slice 1 does not wait on it because it needs only the analysis recipe, but the section is not corrected by any paper yet.
+
+**Found** (`cancho run host/d7_report.cho sim/nucleation.cho --std`; predictions of this software):
+
+| frame time | smallest object | rate, lag removed | rate, naive | lag measured / predicted | seen / born |
+|---|---|---|---|---|---|
+| 1 s | 6 px | 0.91 | 0.62 | 18.6 / 19.1 s | 448 / 725 |
+| 4 s | 6 px | 0.94 | 0.62 | 20.1 / 20.6 s | 444 / 725 |
+| 10 s | 6 px | 0.98 | 0.60 | 22.9 / 23.6 s | 429 / 725 |
+| 1 s | 3 px | 0.92 | 0.74 | 11.7 / 12.1 s | 531 / 725 |
+| 1 s | 12 px | 0.92 | 0.48 | 28.2 / 28.9 s | 343 / 725 |
+| 4 s | 12 px | 0.96 | 0.48 | 29.6 / 30.4 s | 342 / 725 |
+
+* The four closed forms hold at the stated bounds: the birth counts are Poisson and the waiting times exponential; the rate is recovered once the lag is removed (within three counting errors); the measured lag is within one frame time of the predicted; the covered fraction follows the Avrami law within 25% (r0 = 0, mean of 12 movies).
+* **The lag, not the frame time, is what biases the rate.** A nucleus must grow to the smallest visible size before it is seen, which took 19 s of a 60 s movie here (the object needs 6 pixels, the disc grows 0.058 pixel/s); the frame time adds only half a frame. A rate read naively, as events over the whole window, comes out 26% to 52% too low; with the lag removed it is within 2% to 9% of the rate put in.
+* **A small bias is left, not explained:** the lag-corrected rate is 0.91 to 0.98 of the rate put in, low in all six runs, and the measured lag is about 0.5 s below the predicted. The counting error bound (1 / sqrt(N) = 5% at 448 events) allows it, but all six sit low. Candidates, none isolated: nuclei near the field edge are clipped and seen late, and neighbouring discs merge (X is about 0.1 at the end).
+* 725 nuclei were born over the 12 movies and 448 seen at the 1 s frame time: the rest were born too late to have grown to the threshold, which is design item 4 (the report says how many were missed).
+* Not tested: crowding beyond X of about 0.1, the field edge, anything with noise sigma above 0.1 of the height, and real movies.
+
 **Slice 2, after slice 1 is read and found sound:** an adsorbed vesicle as a spherical cap that ruptures into a flat disc, with the area and volume relations derived and checked in this document first; and the tip's force on a soft object (it flattens or bursts a vesicle), which needs a model of that force beyond the current force proxy and is therefore the largest unknown.
 
 **Out of scope for slice 1:** vesicle fusion and budding, anything with a curvature energy, diffusion of the objects (D1 covers mobile particles), and any comparison with measured movies (none is available).

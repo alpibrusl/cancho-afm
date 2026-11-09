@@ -1,0 +1,142 @@
+import std.test;
+import std.math;
+import nucleation;
+
+// docs/dynamics.md, D7 slice 1: each check is one of the closed forms the design wrote down before the code. A prediction of this software; the pattern is made up.
+
+fn movie() -> [] nucleation.Movie {
+    return nucleation.Movie { size: 72, j: 0.0001929, v: 0.0583, r0: 0.3, h: 1.0, sigma: 0.1, tf: 1.0, frames: 60, min_size: 6, link: 2.5 };
+}
+
+fn near(got: float, want: float, tol: float) -> [] int {
+    var d = got - want;
+    if d < 0.0 { d = 0.0 - d; }
+    if d <= tol { return 1; }
+    return 0;
+}
+
+// (1) the births are Poisson in number and exponential in waiting time: pooled over 20 seeds, the mean count per movie is j A T and the mean waiting time is 1 / (j A)
+fn test_births_are_poisson_and_exponential() -> [] int {
+    region r {
+        let bt = alloc_slice[r](160, 0.0);
+        let bx = alloc_slice[r](160, 0.0);
+        let by = alloc_slice[r](160, 0.0);
+        let m = movie();
+        let want = m.j * 5184.0 * 60.0;
+        var total = 0;
+        var wsum = 0.0;
+        var wn = 0;
+        var seed = 1;
+        while seed <= 20 {
+            let n = nucleation.births(m, seed, 60.0, bt, bx, by);
+            total = total + n;
+            var k = 1;
+            while k < n { wsum = wsum + (bt[k] - bt[k - 1]); wn = wn + 1; k = k + 1; }
+            seed = seed + 1;
+        }
+        let mean_count = float_of(total) / 20.0;
+        // three standard errors of the mean of 20 Poisson counts
+        test.assert(near(mean_count, want, 3.0 * math.sqrt(want / 20.0)) == 1);
+        let mean_wait = wsum / float_of(wn);
+        let expect_wait = 1.0 / (m.j * 5184.0);
+        test.assert(near(mean_wait, expect_wait, 3.0 * expect_wait / math.sqrt(float_of(wn))) == 1);
+    }
+    return 0;
+}
+
+// (2) and (3): the analysis sees each nucleus a lag after its birth and the rate read with that lag removed is the rate put in
+fn test_the_rate_and_the_lag_are_recovered() -> [] int {
+    region r {
+        let bt = alloc_slice[r](160, 0.0);
+        let bx = alloc_slice[r](160, 0.0);
+        let by = alloc_slice[r](160, 0.0);
+        let evt = alloc_slice[r](160, 0.0);
+        let evx = alloc_slice[r](160, 0.0);
+        let evy = alloc_slice[r](160, 0.0);
+        let cy = alloc_slice[r](160, 0.0);
+        let cx = alloc_slice[r](160, 0.0);
+        let py = alloc_slice[r](160, 0.0);
+        let px = alloc_slice[r](160, 0.0);
+        let frame = alloc_slice[r](5184, 0.0);
+        let m = movie();
+        var seen = 0;
+        var lag_sum = 0.0;
+        var lag_n = 0;
+        var seed = 1;
+        while seed <= 12 {
+            let nb = nucleation.births(m, seed, 60.0, bt, bx, by);
+            let ne = nucleation.analyse(m, nb, bt, bx, by, seed, frame, cy, cx, py, px, evt, evx, evy);
+            seen = seen + ne;
+            // the lag of each event: against the nearest nucleus (within 3 pixels of the event's centroid) born before it
+            var e = 0;
+            while e < ne {
+                var best = 1000000.0;
+                var bi = 0 - 1;
+                var k = 0;
+                while k < nb {
+                    let dx = evx[e] - bx[k];
+                    let dy = evy[e] - by[k];
+                    let d2 = dx * dx + dy * dy;
+                    if bt[k] <= evt[e] && d2 < best { best = d2; bi = k; }
+                    k = k + 1;
+                }
+                if bi >= 0 && best <= 9.0 { lag_sum = lag_sum + (evt[e] - bt[bi]); lag_n = lag_n + 1; }
+                e = e + 1;
+            }
+            seed = seed + 1;
+        }
+        test.assert(seen > 300);
+        // the rate with the lag removed: within three counting errors (1 / sqrt(N)) of the rate put in
+        let j_hat = nucleation.rate_from_events(m, seen) / 12.0;
+        let tol = 3.0 * m.j / math.sqrt(float_of(seen));
+        test.assert(near(j_hat, m.j, tol) == 1);
+        // the lag measured against the predicted: within one frame time
+        test.assert(lag_n > 250);
+        test.assert(near(lag_sum / float_of(lag_n), nucleation.lag_pred(m), m.tf) == 1);
+    }
+    return 0;
+}
+
+// (4) the covered fraction of the field follows the Avrami law (r0 = 0, so the law is exact up to the pixel grid and the field's edge): the mean over 12 movies at the last frame is within 25%
+fn test_coverage_follows_avrami() -> [] int {
+    region r {
+        let bt = alloc_slice[r](160, 0.0);
+        let bx = alloc_slice[r](160, 0.0);
+        let by = alloc_slice[r](160, 0.0);
+        let frame = alloc_slice[r](5184, 0.0);
+        let base = movie();
+        let m = nucleation.Movie { size: 72, j: base.j, v: base.v, r0: 0.0, h: 1.0, sigma: 0.0, tf: 1.0, frames: 60, min_size: 6, link: 2.5 };
+        var cov = 0.0;
+        var seed = 1;
+        while seed <= 12 {
+            let nb = nucleation.births(m, seed, 60.0, bt, bx, by);
+            nucleation.render(m, 60.0, nb, bt, bx, by, seed, 60, frame);
+            cov = cov + nucleation.covered(frame, 5184, 0.5);
+            seed = seed + 1;
+        }
+        cov = cov / 12.0;
+        let want = nucleation.avrami(m.j, m.v, 60.0);
+        test.assert(near(cov, want, 0.25 * want) == 1);
+    }
+    return 0;
+}
+
+// the same movie twice is the same movie
+fn test_a_movie_is_reproducible() -> [] int {
+    region r {
+        let bt = alloc_slice[r](160, 0.0);
+        let bx = alloc_slice[r](160, 0.0);
+        let by = alloc_slice[r](160, 0.0);
+        let bt2 = alloc_slice[r](160, 0.0);
+        let bx2 = alloc_slice[r](160, 0.0);
+        let by2 = alloc_slice[r](160, 0.0);
+        let m = movie();
+        let a = nucleation.births(m, 5, 60.0, bt, bx, by);
+        let b = nucleation.births(m, 5, 60.0, bt2, bx2, by2);
+        test.assert_eq(a, b);
+        test.assert(near(bt[a - 1], bt2[a - 1], 0.0) == 1);
+        let c = nucleation.births(m, 6, 60.0, bt2, bx2, by2);
+        test.assert(near(bt[0], bt2[0], 0.0) == 0);
+    }
+    return 0;
+}
