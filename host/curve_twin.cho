@@ -108,11 +108,11 @@ fn main(world: World) -> [] int {
     borrow mut heap as &!h in {
         var o = buffer.empty(h, 65536);
         region r {
-            let force_l = alloc_slice[r](420, 0.0);
-            let delta_l = alloc_slice[r](420, 0.0);
-            let e_l = alloc_slice[r](420, 0.0);
-            let zb = alloc_slice[r](420, 0.0);
-            let db = alloc_slice[r](420, 0.0);
+            let force_l = alloc_slice[r](720, 0.0);
+            let delta_l = alloc_slice[r](720, 0.0);
+            let e_l = alloc_slice[r](720, 0.0);
+            let zb = alloc_slice[r](720, 0.0);
+            let db = alloc_slice[r](720, 0.0);
             let gs = alloc_slice[r](8, 0.0);
             let si = alloc_slice[r](8, 0);
             let sf = alloc_slice[r](16, 0.0);
@@ -128,6 +128,7 @@ fn main(world: World) -> [] int {
                 l = bilayer.Lever { k: l.k, r: l.r, v: float_of(speed), dt: 0.2 / float_of(speed), sigma: 0.003, f_cap: l.f_cap, z0: l.z0, zc: l.zc };
             }
             var c = 0;
+            var nf = 0;          // curves with a breakthrough found: only they enter the per-curve lists (a curve cut by the force cap or the point cap has none)
             while c < ncurves {
                 bilayer.begin(gs, 100 + c);
                 livecurve.start(si, sf);
@@ -137,9 +138,10 @@ fn main(world: World) -> [] int {
                 var fin_bt = 0.0;
                 var fin_h = 0.0;
                 var fin_k = 0.0;
-                while i < 420 && go == 1 {
+                var fin_e = 0.0;
+                while i < 720 && go == 1 {
                     let p = bilayer.next(s, l, gs, i, 100 + c);
-                    let lv = livecurve.push(p.z, p.d, zb, db, si, sf, 420, 40, l.k, l.r, 0.5, 8.0, 400.0, 4.5);
+                    let lv = livecurve.push(p.z, p.d, zb, db, si, sf, 720, 40, l.k, l.r, 0.5, 8.0, 400.0, 4.5);
                     force_l[i] = lv.force;
                     delta_l[i] = lv.delta;
                     e_l[i] = lv.e0;
@@ -152,8 +154,10 @@ fn main(world: World) -> [] int {
                             fin_bt = fin.breakthrough;
                             fin_h = fin.height;
                             fin_k = fin.kappa_a;
-                            forces[c] = fin.breakthrough / 1000.0;
-                            moduli[c] = fin.e0;
+                            fin_e = fin.e0;
+                            forces[nf] = fin.breakthrough / 1000.0;
+                            moduli[nf] = fin.e0;
+                            nf = nf + 1;
                         }
                         finished = 1;
                     }
@@ -174,11 +178,10 @@ fn main(world: World) -> [] int {
                         if finished == 1 {
                             b = field(h, b, "height_nm", fin_h, 2);
                             b = field(h, b, "kappa", fin_k, 1);
-                            b = field(h, b, "e_final", moduli[c], 2);
+                            b = field(h, b, "e_final", fin_e, 2);
                         }
-                        let done_curves = c + finished;
-                        b = arr(h, b, "forces_nn", forces, done_curves, 2);
-                        b = arr(h, b, "moduli", moduli, done_curves, 2);
+                        b = arr(h, b, "forces_nn", forces, nf, 2);
+                        b = arr(h, b, "moduli", moduli, nf, 2);
                         o = text(h, b, "}\n");
                     }
                 }
