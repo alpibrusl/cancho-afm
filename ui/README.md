@@ -71,6 +71,7 @@ cancho build host/scan_twin.cho sim/*.cho host/regs.cho gen/ir.cho gen/pid_ir.ch
     host/session.cho host/image.cho host/metrics.cho host/features.cho host/drift.cho host/report.cho host/png.cho host/force.cho --std -o scan_twin
 ./scan_twin 2 0 500 5 0 0 0 0 0 0 30 0 0 15 0 100 > ui/scan.json   # (profile 2 with a 0.15 N/m lever, threshold 100 pN, shows the force line)
 ./scan_twin 1 0 500 5 > ui/scan.json        # profile 1 (the high-speed cantilever), ideal Z scanner, 500 kHz, mode 5: the document
+./scan_twin 2 0 500 8 0 0 0 0 0 0 30 0 0 15 0 100 > ui/force.png   # mode 8: the force map (only drawn by scan.html when scan.json has a force)
 ./scan_twin 1 0 500 6 > ui/scan.png         # mode 6: the levelled image
 cancho-ui check ui/scan.cui && cancho-ui build ui/scan.cui -o ui/scan.js
 cd ui && python3 -m http.server 8765        # open http://localhost:8765/scan.html

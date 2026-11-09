@@ -30,5 +30,10 @@ grep -q '"force_pixels_over":[1-9]' "$W/s1.json" || { echo "FAILED: nothing over
 # without a stiffness the force is not claimed
 "$W/scan_twin" 2 0 500 5 > "$W/s0.json"
 grep -q 'force_pn_max' "$W/s0.json" && { echo "FAILED: force reported without a stiffness"; exit 1; } || true
+# the force map (mode 8): a PNG; with a stiffness it differs from the blank map of a scan without one
+"$W/scan_twin" 2 0 500 8 0 0 0 0 0 0 30 0 0 15 0 100 > "$W/f.png"
+"$W/scan_twin" 2 0 500 8 > "$W/f0.png"
+[ "$(head -c 4 "$W/f.png" | tail -c 3)" = "PNG" ] || { echo "FAILED: force map is not a PNG"; exit 1; }
+cmp -s "$W/f.png" "$W/f0.png" && { echo "FAILED: force map ignores the force"; exit 1; } || true
 echo "force next to the image in the report: ok"
 echo "liquid flow: passed"

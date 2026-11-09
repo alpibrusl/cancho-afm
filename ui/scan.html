@@ -21,6 +21,10 @@
         <img id="scan" src="scan.png" alt="the levelled topography of the last scan: not loaded yet">
         <figcaption id="cap">Levelled topography (plane and line offsets removed); colour from the lowest (dark purple) to the highest (yellow) point.</figcaption>
     </figure>
+    <figure id="fig_force" style="display:none">
+        <img id="force" src="force.png" alt="the force map of the last scan: not loaded yet">
+        <figcaption>Tapping force per pixel, from 0 to the damage threshold (or the largest force if that is higher). The twin's proxy, not a measured force; a flat map means the loop held the force near constant.</figcaption>
+    </figure>
     <script type="module" src="./scan.js"></script>
     <script>
         // cancho-ui has no image element: this page loads scan.png itself every 5 s, and sets its text alternative from scan.json
@@ -28,6 +32,12 @@
             var t = Date.now();
             document.getElementById('scan').src = 'scan.png?' + t;
             fetch('scan.json?' + t).then(function (r) { return r.json(); }).then(function (d) {
+                var has = d.force_pn_max !== undefined;
+                document.getElementById('fig_force').style.display = has ? '' : 'none';
+                if (has) {
+                    document.getElementById('force').src = 'force.png?' + t;
+                    document.getElementById('force').alt = 'Force map of the last scan (' + d.source + '): largest ' + d.force_pn_max + ' pN, ' + d.force_pixels_over + ' pixels over ' + d.force_threshold_pn + ' pN.';
+                }
                 document.getElementById('scan').alt = 'Levelled topography of the last scan (' + d.source + '): ' + d.size + ' pixels, heights from ' + d.z_min_pm + ' to ' + d.z_max_pm + ' pm, ' + d.particles + ' particles: ' + d.particles_text + '.';
             }).catch(function () {});
         }
