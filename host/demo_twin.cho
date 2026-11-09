@@ -44,6 +44,7 @@ fn main(world: World) -> [] int {
                 session.consume(ss, sf, out, img);
                 guard = guard + 1;
             }
+            session.budget_spent(ss, 99);
             o = text(h, o, "run record (software twin; a prediction of this software, not a measurement)\n");
             o = text(h, o, "stage reached: "); o = num(h, o, ss[0]); o = text(h, o, "   failure code: "); o = num(h, o, ss[2]);
             o = text(h, o, "   refused writes: "); o = num(h, o, failures); o = text(h, o, "\n");
