@@ -252,6 +252,29 @@ Nine PDFs were read after the search-snippet and blocked-fetch rounds above. **N
 * The modulus is the closed-form fit of the 32 nm tip of the Khadka lever on a half-space: 11.4 MPa fluid and 16.8 MPa gel, not the 6 and 10 MPa the stand-in table was set to for the 20 nm tip of Et-Thakafy et al. What matters on the map is the ratio (1.47; 1.67 put in).
 * **The contact-point image does not give the 1.0 nm step; it gives 1.42 nm.** The analysis finds contact when the deflection is above the threshold (the 0.3 nm floor), and a softer pixel must be pushed further to reach it, so the fluid contact is found about 1.86 nm late and the gel's 0.43 nm late. A topography built from contact points mixes the real height with the stiffness. That is a known confound of force-volume imaging, and the twin shows it.
 * The map is a made-up pattern with a one-pixel edge; nothing here was compared with a measured map (nanoindent's 400-curve gel map is not in either repository).
+## D7: nucleation and growth of objects, imaged at high speed (design written 2026-11-10, before any code)
+
+**Ask.** An HS-AFM experiment where objects (bilayer patches, vesicles adsorbing and rupturing) appear over time: how are they analysed, and what does the twin say about what the analysis can recover? This section is a design; nothing here is built, and the analysis recipe is the standard one from general knowledge, not from papers read for this document (reading the HS-AFM vesicle literature is the first task of the slice, and this section is corrected in place by what it finds).
+
+**The analysis, per movie:** flatten each frame; segment by height above the support; label connected objects; track them (`sim/tracking.cho`); per object measure height, footprint area and volume against time; call an event the first frame in which an object above a size threshold exists; then the **nucleation rate** is the number of events per area and time, the **waiting-time histogram** (time from the start to each first appearance) should be exponential for a single barrier at a constant rate, and **growth** is footprint area, or edge speed, against time.
+
+**What the twin will model, slice 1 (patches only; no vesicles, no tip force):**
+
+* Nuclei appear as a Poisson process of rate J (per um^2 per s) over an L by L field, uniform in space; each grows as a disc, radius r(t) = r0 + v (t - t0) at constant speed v, to a height h above the support. Times and places come from a fixed hash of the seed, as in `sim/membrane.cho`, so a movie is reproducible. STAND-IN values: none are taken from an experiment.
+* The imaging: frame time Tf, pixel size, height noise sigma, and the analysis's thresholds (smallest visible radius r_min, smallest visible height).
+
+**Closed forms the acceptance is written against** (stated before the code; each is to be verified by simulation, not assumed):
+
+1. With no growth and no overlap, the number of events in a window T over area A = L^2 is Poisson with mean J A T, and the waiting times are exponential with mean 1/(J A). The estimate J_hat = N/(A T) has relative error 1/sqrt(N).
+2. Detection lag: an object is first visible when r(t) = r_min, a time (r_min - r0)/v after birth, and is first seen at the next frame boundary, a further delay uniform on [0, Tf] (mean Tf/2). So the observed waiting-time histogram is the true exponential shifted by a constant (r_min - r0)/v + Tf/2 on average; fitting an exponential without the shift over-reads the mean waiting time, i.e. under-reads the rate when the window is short.
+3. Crowding: when discs overlap they merge into one object, so counts fall below J A T. For constant J and v the covered fraction is the Kolmogorov-Johnson-Mehl-Avrami result in two dimensions, X(t) = 1 - exp(-pi J v^2 t^3 / 3). The analysis's undercount should follow X; rates must be read from the early frames, or corrected.
+4. Objects below the threshold are missed and counted as missed: the report says how many were born and how many were seen.
+
+**Acceptance, written first:** (a) at low coverage the recovered J is within 3 / sqrt(N) of the injected J; (b) the waiting-time histogram has the exponential's mean within the same bound, after the shift of (2) is removed; (c) the measured shift matches (2) to within one frame time; (d) the coverage at time t matches (3) within the Poisson scatter; (e) every refusal has a tag (no objects, field too crowded to separate objects, a frame time longer than the mean waiting time per field); (f) reproducible.
+
+**Slice 2, after slice 1 is read and found sound:** an adsorbed vesicle as a spherical cap that ruptures into a flat disc, with the area and volume relations derived and checked in this document first; and the tip's force on a soft object (it flattens or bursts a vesicle), which needs a model of that force beyond the current force proxy and is therefore the largest unknown.
+
+**Out of scope for slice 1:** vesicle fusion and budding, anything with a curvature energy, diffusion of the objects (D1 covers mobile particles), and any comparison with measured movies (none is available).
 
 ## What stays out of scope, and why
 
