@@ -194,13 +194,14 @@ pub fn calibrate[&a, &b, &c, &d](z: &a [float], defl: &b [float], n: int, k: flo
 
 pub struct Fit { why: int, e: float, std: float, rmse: float, n: int, contact: float }
 
-// E at a fixed contact point and baseline, by closed-form least squares over the points with delta above the contact point: E = <f, s> / <s, s>, s = shape. why = 5 with under 3 points, 6 when <s, s> is 0.
-pub fn fit_at[&a, &b](delta: &a [float], force: &b [float], n: int, m: int, r: float, nu: float, h: float, cp: float, base: float) -> [] Fit {
+// E at a fixed contact point and baseline, by closed-form least squares over the points from index `a` up to (not including) `b` with delta above the contact point: E = <f, s> / <s, s>, s = shape.
+// why = 5 with under 3 points, 6 when <s, s> is 0.
+pub fn fit_at_range[&a1, &b1](delta: &a1 [float], force: &b1 [float], a: int, b: int, m: int, r: float, nu: float, h: float, cp: float, base: float) -> [] Fit {
     var cnt = 0;
     var ss = 0.0;
     var fs = 0.0;
-    var i = 0;
-    while i < n {
+    var i = a;
+    while i < b {
         let d = delta[i] - cp;
         if d > 0.0 {
             let s = shape(m, d, r, nu, h);
@@ -214,8 +215,8 @@ pub fn fit_at[&a, &b](delta: &a [float], force: &b [float], n: int, m: int, r: f
     if ss <= 0.0 { return Fit { why: 6, e: 0.0, std: 0.0, rmse: 0.0, n: cnt, contact: cp }; }
     let e = fs / ss;
     var rr = 0.0;
-    i = 0;
-    while i < n {
+    i = a;
+    while i < b {
         let d = delta[i] - cp;
         if d > 0.0 {
             let miss = (force[i] - base) - e * shape(m, d, r, nu, h);
@@ -228,12 +229,16 @@ pub fn fit_at[&a, &b](delta: &a [float], force: &b [float], n: int, m: int, r: f
     return Fit { why: 0, e: e, std: sqrt(rr / float_of(dof) / ss), rmse: sqrt(rr / float_of(cnt)), n: cnt, contact: cp };
 }
 
-// The mean of the force over the points at or below the contact point (0 when there are none): the baseline nanoindent uses while it scans the contact point.
-fn base_at[&a, &b](delta: &a [float], force: &b [float], n: int, cp: float) -> [] float {
+pub fn fit_at[&a, &b](delta: &a [float], force: &b [float], n: int, m: int, r: float, nu: float, h: float, cp: float, base: float) -> [] Fit {
+    return fit_at_range(delta, force, 0, n, m, r, nu, h, cp, base);
+}
+
+// The mean of the force over the points from a to b at or below the contact point (0 when there are none): the baseline nanoindent uses while it scans the contact point.
+fn base_at_range[&a1, &b1](delta: &a1 [float], force: &b1 [float], a: int, b: int, cp: float) -> [] float {
     var s = 0.0;
     var c = 0;
-    var i = 0;
-    while i < n {
+    var i = a;
+    while i < b {
         if delta[i] <= cp { s = s + force[i]; c = c + 1; }
         i = i + 1;
     }
@@ -241,13 +246,13 @@ fn base_at[&a, &b](delta: &a [float], force: &b [float], n: int, cp: float) -> [
     return s / float_of(c);
 }
 
-// nanoindent's `fit_modulus(..., fit_contact_point=True)`: scan 40 contact points from the smallest delta to min(0.5 max delta, lo + 0.6 (max - lo)) and keep the positive modulus with the smallest
-// rmse. why = 6 when none qualifies.
-pub fn fit_modulus[&a, &b](delta: &a [float], force: &b [float], n: int, m: int, r: float, nu: float, h: float) -> [] Fit {
-    var lo = delta[0];
-    var hi = delta[0];
-    var i = 1;
-    while i < n {
+// nanoindent's `fit_modulus(..., fit_contact_point=True)` on the points from index a up to b: scan 40 contact points from the smallest delta to min(0.5 max delta, lo + 0.6 (max - lo)) and keep the
+// positive modulus with the smallest rmse. why = 6 when none qualifies.
+pub fn fit_modulus_range[&a1, &b1](delta: &a1 [float], force: &b1 [float], a: int, b: int, m: int, r: float, nu: float, h: float) -> [] Fit {
+    var lo = delta[a];
+    var hi = delta[a];
+    var i = a + 1;
+    while i < b {
         if delta[i] < lo { lo = delta[i]; }
         if delta[i] > hi { hi = delta[i]; }
         i = i + 1;
@@ -259,13 +264,28 @@ pub fn fit_modulus[&a, &b](delta: &a [float], force: &b [float], n: int, m: int,
     var j = 0;
     while j < 40 {
         let cp = lo + (top - lo) * float_of(j) / 39.0;
-        let f = fit_at(delta, force, n, m, r, nu, h, cp, base_at(delta, force, n, cp));
+        let f = fit_at_range(delta, force, a, b, m, r, nu, h, cp, base_at_range(delta, force, a, b, cp));
         if f.why == 0 && f.e > 0.0 {
             if have == 0 || f.rmse < best.rmse { best = f; have = 1; }
         }
         j = j + 1;
     }
     return best;
+}
+
+// The whole curve, as nanoindent does it. NOTE: the scan of contact points runs from the smallest delta up to 60% of the way to the largest, so it assumes the curve starts near the contact: on a
+// curve with a long approach before contact (smallest delta far below 0) every candidate lies before the true contact point and the modulus comes out wrong (found by tests/bilayer_test.cho:
+// 0.5 to 2 MPa for a 6 MPa half-space). Use fit_modulus_from_contact for such curves.
+pub fn fit_modulus[&a, &b](delta: &a [float], force: &b [float], n: int, m: int, r: float, nu: float, h: float) -> [] Fit {
+    return fit_modulus_range(delta, force, 0, n, m, r, nu, h);
+}
+
+// The same scan, started three points before the contact point `ci` that `calibrate` found, so the true contact is among the candidates whatever the length of the approach. Parity with nanoindent is for
+// fit_modulus; this is new (the oracle has the limitation described above).
+pub fn fit_modulus_from_contact[&a, &b](delta: &a [float], force: &b [float], n: int, ci: int, m: int, r: float, nu: float, h: float) -> [] Fit {
+    var a = ci - 3;
+    if a < 0 { a = 0; }
+    return fit_modulus_range(delta, force, a, n, m, r, nu, h);
 }
 
 // ---- the supported-bilayer analysis of one curve (nanoindent.slb.process_curve) ----
@@ -284,7 +304,17 @@ fn slb_refused(why: int) -> [] Slb {
 // The curve is z (nm, decreasing toward the sample: far to near, as the Python sorts it) and the deflection (nm), n points. The breakthrough is the largest single force drop after contact and must be
 // at least `min_drop` pN (400 in nanoindent). `film_thickness` (nm, 0 = use the step height) is the h of the finite-thickness models and `fit_max_delta` (nm, 0 = h) caps the indentation they are fit on.
 pub fn slb_curve[&a, &b](z: &a [float], defl: &b [float], n: int, k: float, r: float, nu: float, contact_sigma: float, min_drop: float, film_thickness: float, fit_max_delta: float) -> [] Slb {
+    var nb = (3 * n) / 10;
+    if nb < 5 { nb = 5; }
+    return slb_curve_nb(z, defl, n, nb, k, r, nu, contact_sigma, min_drop, film_thickness, fit_max_delta);
+}
+
+// slb_curve with the baseline window given: the first `nb` points are the baseline (median and noise of the deflection). nanoindent takes 30% of the curve, which is wrong when contact begins before
+// that: the window then holds the start of the indentation, the noise estimate and with it the contact threshold grow, the contact point comes late and the modulus is over-read (found with the twin's
+// bilayer curves, whose approach is 25% of the curve: a 10 MPa gel read 150 MPa). Give nb at the last point you trust to be before contact.
+pub fn slb_curve_nb[&a, &b](z: &a [float], defl: &b [float], n: int, nb: int, k: float, r: float, nu: float, contact_sigma: float, min_drop: float, film_thickness: float, fit_max_delta: float) -> [] Slb {
     if n < 20 { return slb_refused(1); }
+    if nb < 5 || nb > n - 4 { return slb_refused(3); }
     // far to near: z non-increasing for all but at most 5% of the steps
     var up = 0;
     var i = 0;
@@ -293,8 +323,6 @@ pub fn slb_curve[&a, &b](z: &a [float], defl: &b [float], n: int, k: float, r: f
         i = i + 1;
     }
     if up > (n - 1) / 20 { return slb_refused(2); }
-    var nb = (3 * n) / 10;
-    if nb < 5 { nb = 5; }
     let d0 = median_head(defl, nb);
     var noise = std_head(defl, nb);
     if noise == 0.0 { noise = 0.000001; }

@@ -1,0 +1,142 @@
+edition 5;
+
+module livecurve;
+
+// `livecurve` -- the analysis of a force curve WHILE IT IS ACQUIRED, one (z, deflection) point at a time. docs/dynamics.md, D6. NOT TESTED ON ANY REAL CURVE.
+//
+// `push` takes the next point of an approach (z falling toward the sample, deflection in nm, as sim/forcecurve.cho's `slb_curve`) and returns, at once, what is known so far: the force and the
+// indentation of this point, whether contact has been found, the modulus fit by each model over the points so far (the closed-form sums of forcecurve.fit_at updated one point at a time), the
+// largest force, and whether a breakthrough has happened. `finish` runs the whole-curve analysis (forcecurve.slb_curve_nb, with the same baseline window as the live fit) on the stored points.
+//
+// It follows `slb_curve` but cannot see the future, so three things differ, each stated here and tested:
+//   * the baseline (median and noise of the deflection) is fixed once the first `nb` points are in, where slb_curve takes the first 30% of the whole curve; give nb = int(0.3 n) when replaying a
+//     curve of known length and the two agree;
+//   * contact is the first run of three points above the threshold, found when the third arrives;
+//   * the breakthrough is the FIRST single-step force drop of at least `min_drop` pN, where slb_curve takes the LARGEST drop of the whole curve; on a curve with one clear event they are the same.
+// The film thickness of the finite-thickness models must be given (> 0): slb_curve may default it to the step height, which is not known until the breakthrough.
+//
+// State lives in slices the caller allocates (a cancho region is 64 KiB): zb, db (floats, `cap` points each), si (ints, 8), sf (floats, 16):
+//   si: [0] points stored, [1] phase, [2] contact index (-1 none), [3] breakthrough index (-1 none), [4] points in the running fit
+//   sf: [0] baseline, [1] noise, [2] threshold, [3] contact z, [4] to [7] sum of s^2 per model, [8] to [11] sum of f s per model, [12] largest force so far
+// phase: 0 collecting the baseline, 1 searching for contact, 2 in contact, 3 broken through, 4 refused (the store is full: `why` 7)
+
+import std.math;
+import forcecurve;
+
+pub struct Live { phase: int, i: int, force: float, delta: float, e0: float, e1: float, e2: float, e3: float, fmax: float, bt_force: float, why: int }
+
+pub fn state_ints() -> [] int { return 8; }
+pub fn state_floats() -> [] float { return 16.0; }
+
+// Reset ALL of the state for a new curve: the integers and the floats (the running sums and the largest force of the previous curve would otherwise leak into the next: found by the live page, which
+// showed the previous curve's largest force while the new curve was still at 200 pN).
+pub fn start[&a, &b](si: &!a [int], sf: &!b [float]) -> [] int {
+    var k = 0;
+    while k < 8 { si[k] = 0; k = k + 1; }
+    si[2] = 0 - 1;
+    si[3] = 0 - 1;
+    k = 0;
+    while k < 16 { sf[k] = 0.0; k = k + 1; }
+    return 0;
+}
+
+fn model_e[&a](sf: &a [float], m: int) -> [] float {
+    if sf[4 + m] > 0.0 {
+        let e = sf[8 + m] / sf[4 + m];
+        if e > 0.0 { return e; }
+    }
+    return 0.0;
+}
+
+fn snapshot[&a, &b](si: &a [int], sf: &b [float], phase: int, force: float, delta: float, why: int) -> [] Live {
+    var bt = 0.0;
+    if si[3] >= 0 { bt = sf[13]; }
+    return Live { phase: phase, i: si[0] - 1, force: force, delta: delta, e0: model_e(sf, 0), e1: model_e(sf, 1), e2: model_e(sf, 2), e3: model_e(sf, 3), fmax: sf[12], bt_force: bt, why: why };
+}
+
+// Add point j (already stored) to the running sums if it is in the elastic branch: indentation above 0 and not above `cap` (nm).
+fn add_to_fit[&a, &b, &c, &d](zb: &a [float], db: &b [float], si: &!c [int], sf: &!d [float], j: int, k: float, r: float, nu: float, h: float, cap: float) -> [] int {
+    let de = (sf[3] - zb[j]) - (db[j] - sf[0]);
+    if de > 0.0 && de <= cap {
+        let f = k * (db[j] - sf[0]) * 1000.0;
+        var m = 0;
+        while m < forcecurve.models() {
+            let s = forcecurve.shape(m, de, r, nu, h);
+            sf[4 + m] = sf[4 + m] + s * s;
+            sf[8 + m] = sf[8 + m] + f * s;
+            m = m + 1;
+        }
+        si[4] = si[4] + 1;
+    }
+    return 0;
+}
+
+// Push the next point. `nb` baseline points, `contact_sigma` and `min_drop` as in slb_curve (8 and 400 pN there), `film_thickness` the h of the finite-thickness models (nm, > 0), `cap_points` the size
+// of zb and db. The returned `why` is 0, or 7 when the store is full.
+pub fn push[&a, &b, &c, &d](z: float, defl: float, zb: &!a [float], db: &!b [float], si: &!c [int], sf: &!d [float], cap_points: int,
+                            nb: int, k: float, r: float, nu: float, contact_sigma: float, min_drop: float, film_thickness: float) -> [] Live {
+    let n = si[0];
+    if n >= cap_points {
+        si[1] = 4;
+        return snapshot(si, sf, 4, 0.0, 0.0, 7);
+    }
+    zb[n] = z;
+    db[n] = defl;
+    si[0] = n + 1;
+    let cap = film_thickness;
+    var force = 0.0;
+    var delta = 0.0;
+    if si[1] == 0 {
+        // collecting the baseline: nothing to analyse until nb points are in
+        if si[0] >= nb {
+            sf[0] = forcecurve.median_head(db, nb);
+            var noise = forcecurve.std_head(db, nb);
+            if noise == 0.0 { noise = 0.000001; }
+            sf[1] = noise;
+            var thr = contact_sigma * noise;
+            if thr < 0.3 { thr = 0.3; }
+            sf[2] = thr;
+            si[1] = 1;
+        }
+        return snapshot(si, sf, si[1], 0.0, 0.0, 0);
+    }
+    if si[1] == 1 {
+        // contact: three points in a row above the threshold; the first of them is the contact point
+        if si[0] >= 3 && n >= nb {
+            if db[n] - sf[0] > sf[2] && db[n - 1] - sf[0] > sf[2] && db[n - 2] - sf[0] > sf[2] {
+                si[2] = n - 2;
+                sf[3] = zb[n - 2];
+                si[1] = 2;
+                var j = n - 2;
+                while j <= n {
+                    add_to_fit(zb, db, si, sf, j, k, r, nu, film_thickness, cap);
+                    let fj = k * (db[j] - sf[0]) * 1000.0;
+                    if fj > sf[12] { sf[12] = fj; }
+                    j = j + 1;
+                }
+            }
+        }
+        force = k * (defl - sf[0]) * 1000.0;
+        return snapshot(si, sf, si[1], force, 0.0, 0);
+    }
+    force = k * (defl - sf[0]) * 1000.0;
+    delta = (sf[3] - z) - (defl - sf[0]);
+    if si[1] == 2 {
+        let prev = k * (db[n - 1] - sf[0]) * 1000.0;
+        if prev - force >= min_drop {
+            // the force fell by min_drop or more in one step: the point before it was the last of the elastic branch
+            si[3] = n - 1;
+            sf[13] = prev;
+            si[1] = 3;
+        } else {
+            add_to_fit(zb, db, si, sf, n, k, r, nu, film_thickness, cap);
+            if force > sf[12] { sf[12] = force; }
+        }
+    }
+    return snapshot(si, sf, si[1], force, delta, 0);
+}
+
+// The whole-curve analysis of the stored points (forcecurve.slb_curve): the final answer, with the height, the area compressibility and all four moduli.
+pub fn finish[&a, &b, &c](zb: &a [float], db: &b [float], si: &c [int], nb: int, k: float, r: float, nu: float, contact_sigma: float, min_drop: float, film_thickness: float) -> [] forcecurve.Slb {
+    return forcecurve.slb_curve_nb(zb, db, si[0], nb, k, r, nu, contact_sigma, min_drop, film_thickness, 0.0);
+}

@@ -1,0 +1,160 @@
+edition 5;
+
+module bilayer;
+
+// `bilayer` -- a supported lipid bilayer as the twin's sample for FORCE CURVES: what the lever reads while the piezo pushes the tip into it, the bilayer yields (breakthrough) and the tip reaches the
+// substrate. docs/dynamics.md, D3 and D6. A PREDICTION OF THIS SOFTWARE, not a measurement. Every parameter is stated; the ones that are free choices are marked STAND-IN.
+//
+// The physics, deliberately small:
+//   * quasi-static contact: at each piezo position z the deflection d solves k d = F(delta), delta = (zc - z) - d (the lever's compliance shares the travel), by bisection (F rises with delta, so the
+//     equation has one root). The pushing direction is z falling, as in forcecurve.slb_curve; zc is the undisturbed surface.
+//   * the sample law F(delta): a half-space (Hertz, an apparent modulus) or a film bonded to a rigid substrate (Dimitriadis 2002, a modulus of the film and its thickness h). nu = 1/2.
+//   * the breakthrough is a thermally activated event with a force-dependent lifetime, the Dudko-Hummer-Szabo form of sim/dfs.cho (nu = 2/3: a linear-plus-cubic potential): the hazard 1/tau(F) is
+//     integrated over time and the bilayer ruptures when it passes an exponential random variable (-ln U, U a fixed hash of the seed), so a given seed always gives the same curve and many seeds
+//     give the distribution of rupture forces that theory predicts at the loading rate k v. After rupture the tip falls through the bilayer's thickness `t_step` and meets a stiff wall.
+//   * measurement noise on the deflection, a hash-based uniform (sigma in nm).
+// The loading rate seen by the bond is NOT constant: as the sample yields under a lever of finite stiffness the force grows slower than k v (the nonlinear loading of Bjornham & Andersson, and of
+// Bullerjahn et al., whose papers say the linear Bell-Evans analysis then needs care). The twin does that by construction.
+//
+// STAND-IN parameters (docs/dynamics.md says how each was set):
+//   * the three phases follow Et-Thakafy, Guyomarc'h & Lopez 2019 (milk sphingomyelin, melting at 34.3 C): gel domains and the fluid phase at 20 C, a melted homogeneous membrane at 50 C. Their
+//     APPARENT Hertz moduli (tip 20 nm, nu = 0.5, to 200 pN) were 10, 6 and 4 MPa; law 0 uses those; law 1 uses the film moduli that read as those under a Hertz fit (1.906, 0.858, 0.445 MPa for a
+//     4.5 nm bonded film: the Dimitriadis hypothesis, not a fact about a hydrated bilayer).
+//   * the rupture kinetics (dG = 20 kT, nu = 2/3; x, tau0 per phase) are FREE: set so that the most probable breakthrough force at 70,000 pN/s (a 0.35 N/m lever at 200 nm/s) is 5.3 nN (fluid;
+//     Khadka et al. 2021 give 5.26 nN for POPC under those conditions), 13.25 nN (gel; a stand-in 2.5 times the fluid) and 4.0 nN (melted; a stand-in). The barrier distance x comes out at 0.006
+//     to 0.02 nm, a number with no structural meaning: the whole bilayer, not a bond, is breaking.
+
+import std.math;
+import forcecurve;
+import dfs;
+
+pub struct Sample { law: int, e: float, nu: float, h: float, t_step: float, tau0: float, x: float, dg: float, nu_dhs: float, k_wall: float }
+pub struct Lever { k: float, r: float, v: float, dt: float, sigma: float, f_cap: float, z0: float, zc: float }
+pub struct Pt { z: float, d: float, force: float, ruptured: int, done: int }
+
+// phases: 0 fluid (Ld), 1 gel, 2 melted (above the transition). law 0: half-space with the apparent modulus; law 1: bonded film of 4.5 nm.
+pub fn sample_of(phase: int, law: int) -> [] Sample {
+    let kt = dfs.kt(298.15);
+    var e = 6.0;
+    var ef = 0.858;
+    var x = 0.01553;
+    var tau0 = 42820.0;
+    if phase == 1 { e = 10.0; ef = 1.906; x = 0.00621; tau0 = 107100.0; }
+    if phase == 2 { e = 4.0; ef = 0.445; x = 0.02058; tau0 = 32320.0; }
+    var modulus = e;
+    if law == 1 { modulus = ef; }
+    return Sample { law: law, e: modulus, nu: 0.5, h: 4.5, t_step: 4.0, tau0: tau0, x: x, dg: 20.0 * kt, nu_dhs: 2.0 / 3.0, k_wall: 3000.0 };
+}
+
+// the lever and approach of Khadka et al. 2021 (0.35 N/m, a 32 nm tip, 200 nm/s: 70,000 pN/s) and of Et-Thakafy et al. 2019 (0.03 N/m, a 20 nm tip, to 200 pN)
+pub fn lever_khadka() -> [] Lever {
+    return Lever { k: 0.35, r: 32.0, v: 200.0, dt: 0.001, sigma: 0.0, f_cap: 40000.0, z0: 115.0, zc: 100.0 };
+}
+
+pub fn lever_et_thakafy() -> [] Lever {
+    return Lever { k: 0.03, r: 20.0, v: 2000.0, dt: 0.0001, sigma: 0.0, f_cap: 200.0, z0: 110.0, zc: 100.0 };
+}
+
+fn frac(x: float) -> [] float {
+    var a = x;
+    if a < 0.0 { a = 0.0 - a; }
+    return a - math.floor(a);
+}
+
+// a uniform in (-1, 1) from an index and a seed (a fixed hash)
+fn unit(i: int, seed: int) -> [] float {
+    return 2.0 * frac(math.sin(12.9898 * float_of(i * 7 + seed * 131) + 78.233) * 43758.5453) - 1.0;
+}
+
+// the force (pN) the sample opposes at indentation `delta` (nm): the law before the breakthrough; after it nothing until the tip has fallen through `t_step` (delta_w), then the stiff wall
+fn sample_force(s: Sample, l: Lever, delta: float, ruptured: int, delta_w: float) -> [] float {
+    if delta <= 0.0 { return 0.0; }
+    if ruptured == 1 {
+        if delta <= delta_w { return 0.0; }
+        return s.k_wall * (delta - delta_w);
+    }
+    if s.law == 1 { return forcecurve.dimitriadis(delta, l.r, s.e, s.nu, s.h); }
+    return forcecurve.hertz(delta, l.r, s.e, s.nu);
+}
+
+// the deflection (nm, from the baseline) at piezo position z: the root of k 1000 d = F(delta), delta = (zc - z) - d, by bisection
+fn solve_d(s: Sample, l: Lever, z: float, ruptured: int, delta_w: float) -> [] float {
+    let travel = l.zc - z;
+    if travel <= 0.0 { return 0.0; }
+    var lo = 0.0;
+    var hi = travel;
+    var it = 0;
+    while it < 60 {
+        let mid = 0.5 * (lo + hi);
+        let g = l.k * 1000.0 * mid - sample_force(s, l, travel - mid, ruptured, delta_w);
+        if g > 0.0 { hi = mid; } else { lo = mid; }
+        it = it + 1;
+    }
+    return 0.5 * (lo + hi);
+}
+
+// ---- the generator ----
+// gs (floats, 8): [0] hazard integrated so far, [1] the threshold -ln U, [2] ruptured (0/1), [3] the indentation at which the wall begins, [4] points since the rupture, [5] done (0/1),
+//                 [6] the force at the rupture (pN, the truth the analysis should find), [7] the index of the point before the rupture
+
+pub fn gs_floats() -> [] int { return 8; }
+
+pub fn begin[&a](gs: &!a [float], seed: int) -> [] int {
+    var k = 0;
+    while k < 8 { gs[k] = 0.0; k = k + 1; }
+    var u = frac(math.sin(float_of(seed) * 12.9898 + 4.1414) * 43758.5453);
+    if u < 0.000000001 { u = 0.000000001; }
+    if u > 0.999999999 { u = 0.999999999; }
+    gs[1] = 0.0 - math.log(u);
+    gs[7] = 0.0 - 1.0;
+    return 0;
+}
+
+pub fn baseline() -> [] float { return 0.5; }
+
+// Point i of the approach: the piezo is at z0 - v dt i. Before the surface: the baseline and noise. After: the quasi-static deflection. Advances the hazard and, when it passes the threshold, ruptures the
+// bilayer (the next point is on the other side). Ends (`done`) at the force cap without a rupture, or 40 points after one.
+pub fn next[&a](s: Sample, l: Lever, gs: &!a [float], i: int, seed: int) -> [] Pt {
+    let z = l.z0 - l.v * l.dt * float_of(i);
+    let noise = l.sigma * 1.7320508 * unit(i, seed);
+    if z >= l.zc {
+        return Pt { z: z, d: baseline() + noise, force: 0.0, ruptured: 0, done: 0 };
+    }
+    let ruptured = truncate(gs[2]);
+    let drel = solve_d(s, l, z, ruptured, gs[3]);
+    let f = l.k * 1000.0 * drel;
+    var done = 0;
+    if ruptured == 0 {
+        let tau = dfs.dhs_lifetime(f, s.tau0, s.x, s.dg, s.nu_dhs, dfs.kt(298.15));
+        var haz = 1000000000.0;
+        if tau > 0.000000001 { haz = 1.0 / tau; }
+        gs[0] = gs[0] + haz * l.dt;
+        if gs[0] >= gs[1] {
+            gs[2] = 1.0;
+            gs[3] = (l.zc - z - drel) + s.t_step;
+            gs[6] = f;
+            gs[7] = float_of(i);
+        } else if f >= l.f_cap {
+            done = 1;
+        }
+    } else {
+        gs[4] = gs[4] + 1.0;
+        if gs[4] >= 40.0 { done = 1; }
+    }
+    return Pt { z: z, d: baseline() + drel + noise, force: f, ruptured: ruptured, done: done };
+}
+
+// A whole curve into z and d (capacity `cap`); returns the number of points. gs: gs_floats() floats of scratch.
+pub fn generate[&a, &b, &c](s: Sample, l: Lever, seed: int, z: &!a [float], d: &!b [float], gs: &!c [float], cap: int) -> [] int {
+    begin(gs, seed);
+    var i = 0;
+    var go = 1;
+    while i < cap && go == 1 {
+        let p = next(s, l, gs, i, seed);
+        z[i] = p.z;
+        d[i] = p.d;
+        i = i + 1;
+        if p.done == 1 { go = 0; }
+    }
+    return i;
+}

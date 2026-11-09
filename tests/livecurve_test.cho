@@ -1,0 +1,208 @@
+import std.test;
+import forcecurve;
+import livecurve;
+
+// docs/dynamics.md, D6: the analysis of a force curve while it is acquired. The curve is the deterministic supported-bilayer curve of tests/forcecurve_test.cho (k = 0.5 N/m, R = 20 nm, nu = 1/2,
+// E = 80 MPa elastic branch to 4 nm, a 4.5 nm breakthrough step; 60 + 100 + 60 points), whose whole-curve analysis reproduces nanoindent's numbers.
+
+fn rel(got: float, want: float, tol: float) -> [] int {
+    var d = got - want;
+    if d < 0.0 { d = 0.0 - d; }
+    var w = want;
+    if w < 0.0 { w = 0.0 - w; }
+    if d <= tol * w { return 1; }
+    return 0;
+}
+
+fn make_bilayer_curve[&a, &b](z: &!a [float], d: &!b [float]) -> [] int {
+    var i = 0;
+    while i < 60 {
+        z[i] = 115.0 - 0.25 * float_of(i);
+        d[i] = 0.5;
+        i = i + 1;
+    }
+    var zb = 0.0;
+    var drb = 0.0;
+    var j = 0;
+    while j < 100 {
+        let dl = 4.0 * float_of(j) / 99.0;
+        let f = forcecurve.hertz(dl, 20.0, 80.0, 0.5);
+        let drel = f / (0.5 * 1000.0);
+        z[60 + j] = 100.0 - dl - drel;
+        d[60 + j] = 0.5 + drel;
+        zb = 100.0 - dl - drel;
+        drb = drel;
+        j = j + 1;
+    }
+    j = 0;
+    while j < 60 {
+        z[160 + j] = zb - 0.25 * float_of(j + 1);
+        d[160 + j] = 0.5 + (drb - 4.5 + 0.25 * float_of(j + 1));
+        j = j + 1;
+    }
+    return 0;
+}
+
+fn test_replaying_a_curve_point_by_point_matches_the_whole_curve_analysis() -> [] int {
+    region r1 {
+        let z = alloc_slice[r1](220, 0.0);
+        let d = alloc_slice[r1](220, 0.0);
+        make_bilayer_curve(z, d);
+        region r2 {
+            let zb = alloc_slice[r2](512, 0.0);
+            let db = alloc_slice[r2](512, 0.0);
+            let si = alloc_slice[r2](8, 0);
+            let sf = alloc_slice[r2](16, 0.0);
+            livecurve.start(si, sf);
+            var seen_contact = 0 - 1;
+            var seen_break = 0 - 1;
+            var last = livecurve.push(z[0], d[0], zb, db, si, sf, 512, 66, 0.5, 20.0, 0.5, 8.0, 400.0, 4.5);
+            var i = 1;
+            while i < 220 {
+                last = livecurve.push(z[i], d[i], zb, db, si, sf, 512, 66, 0.5, 20.0, 0.5, 8.0, 400.0, 4.5);
+                if last.phase >= 2 && seen_contact < 0 { seen_contact = i; }
+                if last.phase == 3 && seen_break < 0 { seen_break = i; }
+                // the baseline phase lasts until 66 points are in, then the search for contact
+                if i == 64 { test.assert_eq(last.phase, 0); }
+                if i == 66 { test.assert_eq(last.phase, 1); }
+                i = i + 1;
+            }
+            // contact is the first of three points above the threshold, found when the third arrives (two points later), and it is the point the whole-curve analysis uses
+            test.assert_eq(si[2] + 2, seen_contact);
+            test.assert(rel(sf[3], 99.26925920905627, 0.000001) == 1);
+            // the breakthrough: found at the first point after the drop; the point before it is the last of the elastic branch (5,088.3 pN)
+            test.assert_eq(si[3] + 1, seen_break);
+            test.assert(rel(last.bt_force, 5088.296908799522, 0.000001) == 1);
+            test.assert_eq(last.phase, 3);
+            // the running fits at the breakthrough are the whole-curve fits: hertz, dimitriadis, garcia, chadwick
+            test.assert(rel(last.e0, 118.33061049645163, 0.000001) == 1);
+            test.assert(rel(last.e1, 10.993425742903275, 0.000001) == 1);
+            test.assert(rel(last.e2, 5.921471462321873, 0.000001) == 1);
+            test.assert(rel(last.e3, 21.18164251744945, 0.000001) == 1);
+            test.assert(rel(last.fmax, 5088.296908799522, 0.000001) == 1);
+            // and finish gives the whole-curve answer (nanoindent's numbers)
+            let s = livecurve.finish(zb, db, si, 66, 0.5, 20.0, 0.5, 8.0, 400.0, 4.5);
+            test.assert_eq(s.why, 0);
+            test.assert(rel(s.breakthrough, 5088.296908799522, 0.000001) == 1);
+            test.assert(rel(s.height, 4.5, 0.000001) == 1);
+            test.assert(rel(s.kappa_a, 211.25536654234335, 0.000001) == 1);
+        }
+    }
+    return 0;
+}
+
+// a running estimate exists before the breakthrough, and moves toward the final value as the indentation grows
+fn test_the_running_modulus_is_available_before_the_breakthrough() -> [] int {
+    region r1 {
+        let z = alloc_slice[r1](220, 0.0);
+        let d = alloc_slice[r1](220, 0.0);
+        make_bilayer_curve(z, d);
+        region r2 {
+            let zb = alloc_slice[r2](512, 0.0);
+            let db = alloc_slice[r2](512, 0.0);
+            let si = alloc_slice[r2](8, 0);
+            let sf = alloc_slice[r2](16, 0.0);
+            livecurve.start(si, sf);
+            var e_early = 0.0;
+            var e_mid = 0.0;
+            var first = 0 - 1;
+            var i = 0;
+            while i < 150 {
+                let l = livecurve.push(z[i], d[i], zb, db, si, sf, 512, 66, 0.5, 20.0, 0.5, 8.0, 400.0, 4.5);
+                if l.e0 > 0.0 && first < 0 { first = i; e_early = l.e0; }
+                if i == 140 { e_mid = l.e0; }
+                i = i + 1;
+            }
+            // an estimate appears soon after contact (index 70, found at 72), and is not yet the final one
+            test.assert(first >= 0 && first < 80);
+            test.assert(e_early > 0.0);
+            test.assert(e_mid > 0.0);
+            // the force at the last point is the largest so far while the elastic branch rises
+            let l = livecurve.push(z[150], d[150], zb, db, si, sf, 512, 66, 0.5, 20.0, 0.5, 8.0, 400.0, 4.5);
+            test.assert(rel(l.fmax, l.force, 0.000001) == 1);
+        }
+    }
+    return 0;
+}
+
+fn test_a_flat_curve_stays_in_the_search_and_a_gentle_one_in_contact() -> [] int {
+    region r {
+        let zb = alloc_slice[r](512, 0.0);
+        let db = alloc_slice[r](512, 0.0);
+        let si = alloc_slice[r](8, 0);
+        let sf = alloc_slice[r](16, 0.0);
+        livecurve.start(si, sf);
+        var i = 0;
+        var l = livecurve.push(100.0, 1.0, zb, db, si, sf, 512, 30, 0.5, 20.0, 0.5, 8.0, 400.0, 4.5);
+        while i < 99 {
+            l = livecurve.push(100.0 - 0.25 * float_of(i + 1), 1.0, zb, db, si, sf, 512, 30, 0.5, 20.0, 0.5, 8.0, 400.0, 4.5);
+            i = i + 1;
+        }
+        // nothing rose above the baseline: still searching for contact
+        test.assert_eq(l.phase, 1);
+        test.assert(si[2] < 0);
+        // a smooth rise with no snap: in contact, no breakthrough
+        livecurve.start(si, sf);
+        var j = 0;
+        var d = 1.0;
+        while j < 100 {
+            if j > 40 { d = 1.0 + 0.08 * float_of(j - 40); }
+            l = livecurve.push(100.0 - 0.25 * float_of(j), d, zb, db, si, sf, 512, 30, 0.5, 20.0, 0.5, 8.0, 400.0, 4.5);
+            j = j + 1;
+        }
+        test.assert_eq(l.phase, 2);
+        test.assert(si[3] < 0);
+    }
+    return 0;
+}
+
+fn test_a_full_store_is_refused_with_7() -> [] int {
+    region r {
+        let zb = alloc_slice[r](10, 0.0);
+        let db = alloc_slice[r](10, 0.0);
+        let si = alloc_slice[r](8, 0);
+        let sf = alloc_slice[r](16, 0.0);
+        livecurve.start(si, sf);
+        var i = 0;
+        var l = livecurve.push(100.0, 1.0, zb, db, si, sf, 10, 5, 0.5, 20.0, 0.5, 8.0, 400.0, 4.5);
+        while i < 12 {
+            l = livecurve.push(99.0 - float_of(i), 1.0, zb, db, si, sf, 10, 5, 0.5, 20.0, 0.5, 8.0, 400.0, 4.5);
+            i = i + 1;
+        }
+        test.assert_eq(l.why, 7);
+        test.assert_eq(l.phase, 4);
+    }
+    return 0;
+}
+
+// the second curve of a session starts clean: nothing of the first (largest force, running sums) is left
+fn test_a_new_curve_does_not_inherit_the_previous_ones_state() -> [] int {
+    region r1 {
+        let z = alloc_slice[r1](220, 0.0);
+        let d = alloc_slice[r1](220, 0.0);
+        make_bilayer_curve(z, d);
+        region r2 {
+            let zb = alloc_slice[r2](512, 0.0);
+            let db = alloc_slice[r2](512, 0.0);
+            let si = alloc_slice[r2](8, 0);
+            let sf = alloc_slice[r2](16, 0.0);
+            livecurve.start(si, sf);
+            var i = 0;
+            var last = livecurve.push(z[0], d[0], zb, db, si, sf, 512, 66, 0.5, 20.0, 0.5, 8.0, 400.0, 4.5);
+            while i < 219 {
+                i = i + 1;
+                last = livecurve.push(z[i], d[i], zb, db, si, sf, 512, 66, 0.5, 20.0, 0.5, 8.0, 400.0, 4.5);
+            }
+            test.assert(last.fmax > 5000.0);
+            // a new curve: reset, and the first points show nothing of the old one
+            livecurve.start(si, sf);
+            let first = livecurve.push(z[0], d[0], zb, db, si, sf, 512, 66, 0.5, 20.0, 0.5, 8.0, 400.0, 4.5);
+            test.assert_eq(first.phase, 0);
+            test.assert(first.fmax < 1.0);
+            test.assert(first.e0 < 0.000001);
+            test.assert_eq(si[0], 1);
+            test.assert(si[3] < 0);
+        }
+    }
+    return 0;
+}

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>cancho-afm force curve</title>
+    <style>
+        .cui-col {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        :root { color-scheme: light dark; --cui-chart: #0550ae; }
+        @media (prefers-color-scheme: dark) { :root { --cui-chart: #79c0ff; } }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            padding: 1rem; max-width: 46rem;
+        }
+        [role="status"] {
+            font-size: 1rem;
+            font-weight: 600;
+        }
+        button {
+            padding: 0.5rem 1rem;
+            font-size: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="module" src="./curve.js"></script>
+</body>
+</html>
