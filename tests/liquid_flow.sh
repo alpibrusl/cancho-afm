@@ -43,4 +43,12 @@ step_of() { sed 's/.*"step_pm":\([0-9.]*\).*/\1/' "$1"; }
 awk -v a="$(step_of "$W/z3.json")" 'BEGIN { exit !(a > 2940 && a < 3060) }' || { echo "FAILED: a 3 nm step not read within 2%"; exit 1; }
 awk -v a="$(step_of "$W/z20.json")" 'BEGIN { exit !(a < 18000) }' || { echo "FAILED: a 20 nm step was read in full at a 10 nm Z range (the claim of docs/liquid.md is false)"; exit 1; }
 echo "Z range: a 3 nm step read within 2%, a 20 nm step not: ok"
+# a Z range the approach cannot cross within the step budget (100 nm) is refused with code 73 (70 + the approach stage), not reported as success on a dead image
+sed 's/pub fn zmax() -> \[\] int { return 10000; }/pub fn zmax() -> [] int { return 100000; }/' host/session.cho > "$W/session_wide.cho"
+grep -q 'return 100000; }' "$W/session_wide.cho" || { echo "FAILED: the wide-range session was not made"; exit 1; }
+MODS_WIDE="$(echo "$MODS" | sed "s#host/session.cho#$W/session_wide.cho#")"
+"$CANCHO" build host/scan_twin.cho $MODS_WIDE --std -o "$W/scan_wide" > /dev/null
+"$W/scan_wide" 2 0 500 0 | head -n 1 | grep -qF 'failure code 73' || { echo "FAILED: a 100 nm range was not refused with code 73"; "$W/scan_wide" 2 0 500 0 | head -n 1; exit 1; }
+"$W/scan_twin" 2 0 500 0 | head -n 1 | grep -qF 'failure code 0,' || { echo "FAILED: the 10 nm range no longer succeeds"; exit 1; }
+echo "Z range too wide for the step budget: refused with code 73: ok"
 echo "liquid flow: passed"

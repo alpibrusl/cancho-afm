@@ -214,6 +214,16 @@ fn period_of[&a](img: &a [int], line: int) -> [] int {
 }
 
 // ---- looking at the results of a stage and choosing the next one ----
+// A host that runs the session in a bounded loop calls this when the loop ends. If the session is neither at its last stage (`last`) nor refused (98), the step budget ran out
+// mid-run: say so with code 70 + the stage it was in (73: still approaching; docs/liquid.md, "What the Z range found"), and refuse (stage 98). Before this a 100 nm Z range
+// ran out of steps in the approach and reported code 0 with an image pinned at the top of the range. Returns 1 when it refused.
+pub fn budget_spent[&a](ss: &!a [int], last: int) -> [] int {
+    if ss[0] == last || ss[0] == 98 || ss[2] != 0 { return 0; }
+    ss[2] = 70 + ss[0];
+    ss[0] = 98;
+    return 1;
+}
+
 pub fn consume[&a, &b, &c, &d](ss: &!a [int], sf: &!b [float], out: &c [int], img: &!d [int]) -> [] int {
     let stage = ss[0];
     let p = ss[3];
