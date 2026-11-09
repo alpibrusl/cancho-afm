@@ -321,3 +321,31 @@ fn test_the_parallel_adc_sets_the_sample_rate_by_half() -> [] int {
     }
     return 0;
 }
+
+// The dynamic sample (sim/board.cho `dynamic`; docs/high-speed.md): A moves along x at 700 codes/s and bounces, B circles, C is fixed, D grows over 6 s. Heights in units of a 1,000 pm step.
+fn test_the_dynamic_sample_moves() -> [] int {
+    // A starts at x 1,500 (4,000 pm high); 2 s later it is at 2,900, and the old place is empty
+    test.assert(close_f(board.dynamic_at(1500.0, 2000.0, 1000.0, 0.0), 4000.0, 1.0) == 1);
+    test.assert(close_f(board.dynamic_at(1500.0, 2000.0, 1000.0, 2.0), 0.0, 1.0) == 1);
+    test.assert(close_f(board.dynamic_at(2900.0, 2000.0, 1000.0, 2.0), 4000.0, 1.0) == 1);
+    // it bounces: at 10 s it is back at 1,500 (a round trip of 10,000 codes)
+    test.assert(close_f(board.dynamic_at(1500.0, 2000.0, 1000.0, 10.0 / 0.7), 4000.0, 1.0) == 1);
+    // C does not move
+    test.assert(close_f(board.dynamic_at(2200.0, 5300.0, 1000.0, 0.0), 4000.0, 1.0) == 1);
+    test.assert(close_f(board.dynamic_at(2200.0, 5300.0, 1000.0, 9.0), 4000.0, 1.0) == 1);
+    // D grows: nothing at t = 0, half at 3 s, full from 6 s on
+    test.assert(close_f(board.dynamic_at(5600.0, 5600.0, 1000.0, 0.0), 0.0, 1.0) == 1);
+    test.assert(close_f(board.dynamic_at(5600.0, 5600.0, 1000.0, 3.0), 2000.0, 1.0) == 1);
+    test.assert(close_f(board.dynamic_at(5600.0, 5600.0, 1000.0, 8.0), 4000.0, 1.0) == 1);
+    // B is on its circle: at t = 0 at (4,000 + 1,300, 4,500), a quarter turn (1 s) later at (4,000, 4,500 + 1,300)
+    test.assert(close_f(board.dynamic_at(5300.0, 4500.0, 1000.0, 0.0), 4000.0, 1.0) == 1);
+    test.assert(close_f(board.dynamic_at(4000.0, 5800.0, 1000.0, 1.0), 4000.0, 1.0) == 1);
+    return 0;
+}
+
+fn close_f(got: float, want: float, tol: float) -> [] int {
+    var d = got - want;
+    if d < 0.0 { d = 0.0 - d; }
+    if d <= tol { return 1; }
+    return 0;
+}
