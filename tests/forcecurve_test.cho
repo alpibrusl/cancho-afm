@@ -264,3 +264,45 @@ fn test_a_fit_of_a_flat_force_is_refused_with_6() -> [] int {
     }
     return 0;
 }
+
+// ---- the conditions of a published experiment: Et-Thakafy, Guyomarc'h & Lopez, BBA Biomembranes 1861:1523 (2019), read in full: supported milk-sphingomyelin bilayers on mica, classical Hertz with
+// R = 20 nm and nu = 0.5, force up to 200 pN, E = 6 +- 1 MPa (fluid phase) and 10 +- 4 MPa (gel phase) at 20 C. If such a bilayer behaved as an elastic film bonded to a rigid substrate
+// (Dimitriadis 2002; a MODEL for a hydrated bilayer on a water layer, not a fact about it) a half-space Hertz fit would over-read its modulus. Oracle (nanoindent's Dimitriadis and Hertz, same
+// grid): a film of 4.5 nm with E = 2 MPa reads 10.32 MPa under a Hertz fit to 200 pN; 6.0 MPa is what a film with E = 0.86 MPa reads. ----
+
+fn hertz_reading_of_a_bonded_film(e_true: float, h: float) -> [] float {
+    var out = 0.0;
+    region r {
+        let delta = alloc_slice[r](3001, 0.0);
+        let force = alloc_slice[r](3001, 0.0);
+        var n = 0;
+        var j = 0;
+        var go = 1;
+        while j <= 3000 && go == 1 {
+            let dl = 0.002 * float_of(j);
+            let f = forcecurve.dimitriadis(dl, 20.0, e_true, 0.5, h);
+            if f > 200.0 { go = 0; }
+            else {
+                delta[n] = dl;
+                force[n] = f;
+                n = n + 1;
+            }
+            j = j + 1;
+        }
+        out = forcecurve.fit_at(delta, force, n, 0, 20.0, 0.5, h, 0.0, 0.0).e;
+    }
+    return out;
+}
+
+fn test_a_half_space_fit_over_reads_a_thin_bonded_film_at_a_published_experiments_conditions() -> [] int {
+    // 2 MPa in a 4.5 nm bonded film reads 10.3 MPa: a factor of 5
+    test.assert(rel(hertz_reading_of_a_bonded_film(2.0, 4.5), 10.32, 0.02) == 1);
+    // and 0.86 MPa reads 6.0 (the paper's fluid phase), 1.91 reads 10.0 (its gel phase)
+    test.assert(rel(hertz_reading_of_a_bonded_film(0.86, 4.5), 6.0, 0.02) == 1);
+    test.assert(rel(hertz_reading_of_a_bonded_film(1.91, 4.5), 10.0, 0.02) == 1);
+    // the thicker the film the smaller the over-reading (6 nm: 1.37 MPa reads 6.0)
+    test.assert(rel(hertz_reading_of_a_bonded_film(1.37, 6.0), 6.0, 0.02) == 1);
+    // a thick film is a half-space: the reading is the modulus
+    test.assert(rel(hertz_reading_of_a_bonded_film(6.0, 100000.0), 6.0, 0.001) == 1);
+    return 0;
+}

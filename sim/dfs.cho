@@ -1,0 +1,91 @@
+edition 5;
+
+module dfs;
+
+// `dfs` -- dynamic force spectroscopy: what the force at which a bond (or a bilayer) ruptures says about its kinetics. docs/dynamics.md, D6. NOT TESTED ON ANY REAL RUPTURE DATA.
+//
+// Bell's law (Bell 1978; as stated in Dudko, Hummer & Szabo, PNAS 105:15755, 2008, which was read in full): the lifetime under a force F is tau_Bell(F) = tau0 exp(-beta F x), with tau0 the
+// lifetime at zero force, x the distance between the bound state and the transition state and beta = 1 / kT. Pulled at a constant loading rate r the rupture force has a distribution
+//     p(F) = (k(F) / r) exp(-integral from 0 to F of k(f) / r df),     k(F) = k_off exp(F x / kT)
+// (their Eq. 1 with Bell's lifetime), and the most probable force (the maximum of p) follows from setting its derivative to zero, k(F*) = r x / kT:
+//     F* = (kT / x) ln(r x / (k_off kT))        (Evans; derived here, and checked against the maximum of p(F) in tests/dfs_test.cho)
+// linear in ln(r), which is what the analysis uses: the slope is kT / x and the intercept gives k_off. DHS state that this linear form is what Bell's phenomenological formula predicts and that,
+// with the increasing dynamic range of experiments, deviations are seen: x cannot stay fixed as the force rises (the barrier and the well merge at a critical force). Their generalisation from
+// Kramers theory (Eq. 5), implemented as `dhs_lifetime`, is
+//     tau(F) = tau0 (1 - nu F x / dG)^(1 - 1/nu) exp(-beta dG [1 - (1 - nu F x / dG)^(1/nu)]),
+// with dG the activation free energy at zero force and nu = 1/2 (a harmonic well with a cusp-like barrier) or 2/3 (a linear-plus-cubic potential); nu = 1 gives Bell's formula back.
+// It holds for forces below dG / (nu x), where the barrier vanishes.
+//
+// Units: forces in pN, x in nm, rates in 1/s, loading rate in pN/s, kT in pN nm (4.1 at room temperature).
+//   why (of `fit`): 0 ok; 1 fewer than 3 points; 2 the most probable force does not rise with ln(loading rate) (not Bell-Evans); 3 the loading rates span under one decade
+
+import std.math;
+
+// kT in pN nm for a temperature in kelvin: 1.380649e-23 J/K * T / 1e-21 J per pN nm
+pub fn kt(temp_k: float) -> [] float { return 0.01380649 * temp_k; }
+
+// Bell's rate at force F (pN): k_off exp(F x / kT)
+pub fn bell_rate(f: float, k_off: float, x: float, kt_pn_nm: float) -> [] float {
+    return k_off * math.exp(f * x / kt_pn_nm);
+}
+
+// Bell's lifetime at force F (pN): tau0 exp(-F x / kT)
+pub fn bell_lifetime(f: float, tau0: float, x: float, kt_pn_nm: float) -> [] float {
+    return tau0 * math.exp(0.0 - f * x / kt_pn_nm);
+}
+
+// the density of rupture forces p(F) (1/pN) at a constant loading rate r (pN/s) for Bell's rate: (k(F) / r) exp(-(k_off kT / (r x)) (e^(F x / kT) - 1))
+pub fn rupture_density(f: float, r: float, k_off: float, x: float, kt_pn_nm: float) -> [] float {
+    let f0 = kt_pn_nm / x;
+    return (bell_rate(f, k_off, x, kt_pn_nm) / r) * math.exp(0.0 - (k_off * f0 / r) * (math.exp(f / f0) - 1.0));
+}
+
+// the most probable rupture force F* = (kT / x) ln(r x / (k_off kT)), pN; 0 when the loading is slower than the bond's own off-rate (the argument of the logarithm under 1: it ruptures at zero force)
+pub fn bell_evans_peak(r: float, k_off: float, x: float, kt_pn_nm: float) -> [] float {
+    let arg = r * x / (k_off * kt_pn_nm);
+    if arg <= 1.0 { return 0.0; }
+    return (kt_pn_nm / x) * math.log(arg);
+}
+
+// Dudko-Hummer-Szabo Eq. 5: the lifetime at force F for the Kramers-theory barrier of activation free energy dg (pN nm), exponent nu, distance x (nm). 0 at or above the critical force dg / (nu x).
+pub fn dhs_lifetime(f: float, tau0: float, x: float, dg: float, nu: float, kt_pn_nm: float) -> [] float {
+    let u = 1.0 - nu * f * x / dg;
+    if u <= 0.0 { return 0.0; }
+    return tau0 * math.pow(u, 1.0 - 1.0 / nu) * math.exp(0.0 - (dg / kt_pn_nm) * (1.0 - math.pow(u, 1.0 / nu)));
+}
+
+pub struct Fit { why: int, x: float, k_off: float, slope: float, intercept: float }
+
+// The Bell-Evans analysis: from n pairs (loading rate r_i in pN/s, most probable rupture force f_i in pN) a straight line f = a + b ln(r), then x = kT / b and k_off = exp(-a / b) / b (from
+// f = (kT / x) ln(r) - (kT / x) ln(k_off kT / x) with b = kT / x). Refuses with 1 for under 3 points, 3 when the rates span less than a factor of 10, 2 when the slope is not positive.
+pub fn fit[&a, &b](r: &a [float], f: &b [float], n: int, kt_pn_nm: float) -> [] Fit {
+    if n < 3 { return Fit { why: 1, x: 0.0, k_off: 0.0, slope: 0.0, intercept: 0.0 }; }
+    var rmin = r[0];
+    var rmax = r[0];
+    var i = 1;
+    while i < n {
+        if r[i] < rmin { rmin = r[i]; }
+        if r[i] > rmax { rmax = r[i]; }
+        i = i + 1;
+    }
+    if rmin <= 0.0 || rmax < 10.0 * rmin { return Fit { why: 3, x: 0.0, k_off: 0.0, slope: 0.0, intercept: 0.0 }; }
+    var sl = 0.0;
+    var sf = 0.0;
+    i = 0;
+    while i < n { sl = sl + math.log(r[i]); sf = sf + f[i]; i = i + 1; }
+    let lm = sl / float_of(n);
+    let fm = sf / float_of(n);
+    var sxx = 0.0;
+    var sxy = 0.0;
+    i = 0;
+    while i < n {
+        let dl = math.log(r[i]) - lm;
+        sxx = sxx + dl * dl;
+        sxy = sxy + dl * (f[i] - fm);
+        i = i + 1;
+    }
+    let slope = sxy / sxx;
+    if slope <= 0.0 { return Fit { why: 2, x: 0.0, k_off: 0.0, slope: slope, intercept: 0.0 }; }
+    let icpt = fm - slope * lm;
+    return Fit { why: 0, x: kt_pn_nm / slope, k_off: math.exp(0.0 - icpt / slope) / slope, slope: slope, intercept: icpt };
+}

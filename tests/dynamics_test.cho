@@ -53,6 +53,9 @@ fn test_the_form_is_refused_outside_its_validity() -> [] int {
     test.assert_eq(membrane.sd_valid(0.000000001, 0.0, 0.001), 0);
     test.assert_eq(membrane.sd_valid(0.000000001, 0.000000005, 0.0), 0);
     test.assert_eq(membrane.sd_valid(0.000000001, 0.000000005, 0.001), 1);
+    // the bound is eps = a / L_sd under 0.1 (Petrov & Schwille): L_sd here is 500 nm, so 49 nm passes and 51 nm does not
+    test.assert_eq(membrane.sd_valid(0.000000001, 0.000000049, 0.001), 1);
+    test.assert_eq(membrane.sd_valid(0.000000001, 0.000000051, 0.001), 0);
     return 0;
 }
 
