@@ -234,6 +234,25 @@ Nine PDFs were read after the search-snippet and blocked-fetch rounds above. **N
 
 **Not done, and not claimed:** no measured curve was run through any of this; the rupture kinetics are free stand-ins; the temperature enters only as a switch between three phases (a transition width, and domains of gel in fluid as in the real membranes, are not modelled); the loading-rate effect of the nonlinear sample was tested only through the fit above, not against Bjornham & Andersson's nonlinear theory; Redondo-Morata's papers are not in this note (they are to be added).
 
+## Force-volume map of a mixed gel and fluid bilayer (design written 2026-11-10, before the code)
+
+**Ask.** Image scanning and curve analysis side by side. **What is honest to build:** one experiment on one sample, a force-volume map: the tip is ramped into the bilayer at every pixel of a grid, each curve is analysed as it is acquired (`sim/livecurve.cho`), and the maps (contact-point height, Hertz modulus, breakthrough force) fill in pixel by pixel next to the live curve of the pixel being measured. It is NOT the tapping-mode `scan_twin` image: that program and the curve twin do not share a sample, and showing a tapping image beside curves from a different sample would imply an agreement nobody checked.
+
+**Sample** (`sim/domains.cho`): a 32 by 32 grid over 200 nm (6.25 nm a pixel), fluid matrix with gel disks (the mixed-phase case of Et-Thakafy et al. 2019 at 20 C). Each pixel is gel if its centre is inside a disk, else fluid; the edge is one pixel wide, not a measured line tension. The gel surface stands `dz` = 1.0 nm higher than the fluid: a STAND-IN (not taken from a paper that has been read; the maps show it only so that the contact-point image has something to find).
+
+**Acceptance, written first:** (1) the analysis recovers the phase of the pixel: a gel pixel reads a larger modulus and a larger breakthrough force than a fluid pixel, for every pixel of the map; (2) the contact-point image shows the 1.0 nm step (CORRECTED after the run: it reads 1.42 nm, see the finding below; the first version of this line claimed the step would be reproduced to within the noise); (3) a pixel is classified by a threshold on the modulus and the classification matches the true map except at most on the disk edge; (4) the whole map is reproducible (fixed seeds); (5) every refused curve is counted and tagged, none is silently dropped.
+
+**Built:** `sim/domains.cho`, `host/fv_twin.cho`, `tests/domains_test.cho`, `tests/fvmap.sh`.
+
+**Found** (32 by 32 = 1,024 curves, law 0, Khadka lever; predictions, not measurements; `tests/fvmap.sh`):
+
+* Cost: a whole 32 by 32 map runs in about a second (16 by 16: 0.08 s). The curves are not the limit.
+* No curve was refused (0 of 1,024); 339 pixels are gel, 685 fluid. Two runs are identical.
+* The breakthrough force separates the phases with no error: the threshold 8 nN misclassifies 0 pixels (medians 4.88 nN fluid, 12.55 nN gel; these medians are the stand-in kinetics reading back, not a finding about membranes). The modulus misclassifies 1 pixel at 14 MPa: a fluid pixel that broke through at 0.44 nN, far below the rest (the thermal hazard's early tail), so the fit was made on too short a ramp and read 23.5 MPa. That pixel is a real feature of the stochastic model, not a bug; it is why the breakthrough force is the better classifier here.
+* The modulus is the closed-form fit of the 32 nm tip of the Khadka lever on a half-space: 11.4 MPa fluid and 16.8 MPa gel, not the 6 and 10 MPa the stand-in table was set to for the 20 nm tip of Et-Thakafy et al. What matters on the map is the ratio (1.47; 1.67 put in).
+* **The contact-point image does not give the 1.0 nm step; it gives 1.42 nm.** The analysis finds contact when the deflection is above the threshold (the 0.3 nm floor), and a softer pixel must be pushed further to reach it, so the fluid contact is found about 1.86 nm late and the gel's 0.43 nm late. A topography built from contact points mixes the real height with the stiffness. That is a known confound of force-volume imaging, and the twin shows it.
+* The map is a made-up pattern with a one-pixel edge; nothing here was compared with a measured map (nanoindent's 400-curve gel map is not in either repository).
+
 ## What stays out of scope, and why
 
 * **Real molecular dynamics, hydrodynamic interactions between molecules, crowding, and anything that depends on a force field.** The twin's particles are shapes that move.
