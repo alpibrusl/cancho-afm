@@ -294,6 +294,16 @@ pub fn consume[&a, &b, &c, &d](ss: &!a [int], sf: &!b [float], out: &c [int], im
                 }
                 let g = tune.choose(t, t.peak / free_pm(), win_s(ss), float_of(setpoint_pct(p)) / 100.0);
                 ss[11] = g.shift; ss[13] = g.kp; ss[14] = g.ki; sf[3] = g.alpha;
+                if sf[6] > 0.0 {
+                    // sf[6]: a scale on the chosen loop gains, in percent (scan_twin argument 24; 0 = as chosen). A knob for measuring, not a setting: docs/high-speed.md, HS4 used it to ask whether better gains would let a shorter window win.
+                    var kp2 = truncate(float_of(ss[13]) * sf[6] / 100.0);
+                    var ki2 = truncate(float_of(ss[14]) * sf[6] / 100.0);
+                    if kp2 < 1 { kp2 = 1; }
+                    if kp2 > 65535 { kp2 = 65535; }
+                    if ki2 < 1 { ki2 = 1; }
+                    if ki2 > 65535 { ki2 = 65535; }
+                    ss[13] = kp2; ss[14] = ki2;
+                }
                 ss[0] = 2;
             }
         }
