@@ -1,0 +1,195 @@
+edition 7;
+
+import std.buffer;
+import std.math;
+import forcecurve;
+import livecurve;
+import dfs;
+import bilayer;
+
+// Force curves on the twin's supported bilayer (sim/bilayer.cho), analysed AS THEY ARE ACQUIRED (sim/livecurve.cho), one JSON snapshot per few points for the live page ui/curve.cui. A prediction of this
+// software, not a measurement (docs/dynamics.md, D3 and D6): the rupture kinetics are free stand-ins.
+//
+//   cancho run host/curve_twin.cho sim/bilayer.cho sim/livecurve.cho sim/forcecurve.cho sim/dfs.cho --std -- PHASE LAW CURVES SPEED KIND [STRIDE]
+//     PHASE  0 fluid, 1 gel, 2 melted (above the transition)               (default 0)
+//     LAW    0 half-space (apparent modulus), 1 film bonded to the substrate  (default 0)
+//     CURVES how many curves, one after another, seeds 100, 101, ...          (default 3)
+//     SPEED  the piezo's speed in nm/s                                        (default 200; the loading rate is k v)
+//     KIND   0 the lever and approach of Khadka et al. 2021 (0.35 N/m, 32 nm tip), 1 of Et-Thakafy et al. 2019 (0.03 N/m, 20 nm tip, to 200 pN)  (default 0)
+//     STRIDE one snapshot per this many points (default 4)
+// Each snapshot is one line: {"source":"twin","curve":c,"i":n,"phase":p,"done":d,"force":[pN..],"delta":[nm..],"e_hertz":[MPa..],"fmax":..,"bt_pn":..,"height_nm":..,"kappa":..,"e_final":..,
+// "forces_nn":[the breakthrough of each finished curve],"moduli":[the Hertz modulus of each]}. Pace the lines into ui/curve.json with a shell loop (ui/README.md); the program prints them as it goes.
+// Phase of the page: 0 baseline, 1 searching for contact, 2 in contact, 3 broken through, 4 refused.
+
+fn text[&h, &r](heap: &!h Heap, b: buffer.Buffer, s: &r [byte]) -> [heap] buffer.Buffer { return buffer.append(heap, b, s); }
+
+fn num[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer {
+    if n < 0 { return buffer.push_nat(heap, buffer.append(heap, b, "-"), 0 - n); }
+    return buffer.push_nat(heap, b, n);
+}
+
+fn number_of[&t](text: &t [byte]) -> [] int {
+    var n = 0;
+    var i = 0;
+    while i < len(text) {
+        let c = int_of(text[i]);
+        if c < 48 || c > 57 { return 0; }
+        n = n * 10 + (c - 48);
+        i = i + 1;
+    }
+    return n;
+}
+
+// a float with `places` decimals (0 to 3), signed
+fn dec[&h](heap: &!h Heap, o: buffer.Buffer, v: float, places: int) -> [heap] buffer.Buffer {
+    var b = o;
+    var x = v;
+    if x < 0.0 { b = text(heap, b, "-"); x = 0.0 - x; }
+    var scale = 1;
+    var p = 0;
+    while p < places { scale = scale * 10; p = p + 1; }
+    let c = truncate(x * float_of(scale) + 0.5);
+    b = num(heap, b, c / scale);
+    if places > 0 {
+        b = text(heap, b, ".");
+        var rest = c % scale;
+        var div = scale / 10;
+        while div > 0 {
+            b = num(heap, b, rest / div);
+            rest = rest % div;
+            div = div / 10;
+        }
+    }
+    return b;
+}
+
+fn arr[&h, &a, &c](heap: &!h Heap, o: buffer.Buffer, key: &a [byte], xs: &c [float], n: int, places: int) -> [heap] buffer.Buffer {
+    var b = text(heap, o, ",\"");
+    b = text(heap, b, key);
+    b = text(heap, b, "\":[");
+    var i = 0;
+    while i < n {
+        if i > 0 { b = text(heap, b, ","); }
+        b = dec(heap, b, xs[i], places);
+        i = i + 1;
+    }
+    return text(heap, b, "]");
+}
+
+fn field[&h, &a](heap: &!h Heap, o: buffer.Buffer, key: &a [byte], v: float, places: int) -> [heap] buffer.Buffer {
+    var b = text(heap, o, ",\"");
+    b = text(heap, b, key);
+    b = text(heap, b, "\":");
+    return dec(heap, b, v, places);
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(net); release(clock); release(signals); release(exec);
+    var phase = 0;
+    var law = 0;
+    var ncurves = 3;
+    var speed = 200;
+    var kind = 0;
+    var stride = 4;
+    borrow args as &g in {
+        if arg_count(g) > 1 { phase = number_of(arg(g, 1)); }
+        if arg_count(g) > 2 { law = number_of(arg(g, 2)); }
+        if arg_count(g) > 3 { ncurves = number_of(arg(g, 3)); }
+        if arg_count(g) > 4 { speed = number_of(arg(g, 4)); }
+        if arg_count(g) > 5 { kind = number_of(arg(g, 5)); }
+        if arg_count(g) > 6 { stride = number_of(arg(g, 6)); }
+    }
+    release(args);
+    if ncurves < 1 { ncurves = 1; }
+    if ncurves > 32 { ncurves = 32; }
+    if speed < 1 { speed = 200; }
+    if stride < 1 { stride = 4; }
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 65536);
+        region r {
+            let force_l = alloc_slice[r](420, 0.0);
+            let delta_l = alloc_slice[r](420, 0.0);
+            let e_l = alloc_slice[r](420, 0.0);
+            let zb = alloc_slice[r](420, 0.0);
+            let db = alloc_slice[r](420, 0.0);
+            let gs = alloc_slice[r](8, 0.0);
+            let si = alloc_slice[r](8, 0);
+            let sf = alloc_slice[r](16, 0.0);
+            let forces = alloc_slice[r](32, 0.0);
+            let moduli = alloc_slice[r](32, 0.0);
+            let s = bilayer.sample_of(phase, law);
+            var l = bilayer.lever_khadka();
+            if kind == 1 { l = bilayer.lever_et_thakafy(); }
+            if kind == 0 {
+                // the point spacing follows the speed: 0.2 nm a point
+                l = bilayer.Lever { k: l.k, r: l.r, v: float_of(speed), dt: 0.2 / float_of(speed), sigma: 0.02, f_cap: l.f_cap, z0: l.z0, zc: l.zc };
+            } else {
+                l = bilayer.Lever { k: l.k, r: l.r, v: float_of(speed), dt: 0.2 / float_of(speed), sigma: 0.003, f_cap: l.f_cap, z0: l.z0, zc: l.zc };
+            }
+            var c = 0;
+            while c < ncurves {
+                bilayer.begin(gs, 100 + c);
+                livecurve.start(si, sf);
+                var i = 0;
+                var go = 1;
+                var finished = 0;
+                var fin_bt = 0.0;
+                var fin_h = 0.0;
+                var fin_k = 0.0;
+                while i < 420 && go == 1 {
+                    let p = bilayer.next(s, l, gs, i, 100 + c);
+                    let lv = livecurve.push(p.z, p.d, zb, db, si, sf, 420, 40, l.k, l.r, 0.5, 8.0, 400.0, 4.5);
+                    force_l[i] = lv.force;
+                    delta_l[i] = lv.delta;
+                    e_l[i] = lv.e0;
+                    i = i + 1;
+                    if p.done == 1 { go = 0; }
+                    if go == 0 {
+                        // the whole-curve analysis of the stored points
+                        let fin = livecurve.finish(zb, db, si, 40, l.k, l.r, 0.5, 8.0, 400.0, 4.5);
+                        if fin.why == 0 {
+                            fin_bt = fin.breakthrough;
+                            fin_h = fin.height;
+                            fin_k = fin.kappa_a;
+                            forces[c] = fin.breakthrough / 1000.0;
+                            moduli[c] = fin.e0;
+                        }
+                        finished = 1;
+                    }
+                    if i % stride == 0 || go == 0 {
+                        var b = text(h, o, "{\"source\":\"twin\",\"curve\":");
+                        b = num(h, b, c + 1);
+                        b = text(h, b, ",\"i\":");
+                        b = num(h, b, i);
+                        b = text(h, b, ",\"phase\":");
+                        b = num(h, b, lv.phase);
+                        b = text(h, b, ",\"done\":");
+                        b = num(h, b, finished);
+                        b = arr(h, b, "force", force_l, i, 1);
+                        b = arr(h, b, "delta", delta_l, i, 2);
+                        b = arr(h, b, "e_hertz", e_l, i, 2);
+                        b = field(h, b, "fmax", lv.fmax, 1);
+                        b = field(h, b, "bt_pn", lv.bt_force, 1);
+                        if finished == 1 {
+                            b = field(h, b, "height_nm", fin_h, 2);
+                            b = field(h, b, "kappa", fin_k, 1);
+                            b = field(h, b, "e_final", moduli[c], 2);
+                        }
+                        let done_curves = c + finished;
+                        b = arr(h, b, "forces_nn", forces, done_curves, 2);
+                        b = arr(h, b, "moduli", moduli, done_curves, 2);
+                        o = text(h, b, "}\n");
+                    }
+                }
+                c = c + 1;
+            }
+        }
+        var code = 0;
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(heap);
+    release(io);
+    return 0;
+}

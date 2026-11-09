@@ -1,0 +1,232 @@
+import std.test;
+import forcecurve;
+import dfs;
+import bilayer;
+
+// docs/dynamics.md, D3 and D6: the twin's supported bilayer. A prediction of this software; its rupture kinetics are free STAND-INS (sim/bilayer.cho), so what is checked is that the pieces agree with
+// each other and with the formulas, not that they describe a membrane.
+
+fn rel(got: float, want: float, tol: float) -> [] int {
+    var d = got - want;
+    if d < 0.0 { d = 0.0 - d; }
+    var w = want;
+    if w < 0.0 { w = 0.0 - w; }
+    if d <= tol * w { return 1; }
+    return 0;
+}
+
+// the median of n values (insertion sort; n small)
+fn median[&a](x: &!a [float], n: int) -> [] float {
+    var i = 1;
+    while i < n {
+        let v = x[i];
+        var j = i;
+        while j > 0 && x[j - 1] > v {
+            x[j] = x[j - 1];
+            j = j - 1;
+        }
+        x[j] = v;
+        i = i + 1;
+    }
+    if n % 2 == 1 { return x[n / 2]; }
+    return 0.5 * (x[n / 2 - 1] + x[n / 2]);
+}
+
+fn test_the_curve_is_the_same_for_a_seed_and_differs_between_seeds() -> [] int {
+    region r {
+        let z = alloc_slice[r](600, 0.0);
+        let d = alloc_slice[r](600, 0.0);
+        let gs = alloc_slice[r](8, 0.0);
+        let s = bilayer.sample_of(0, 0);
+        let l = bilayer.lever_khadka();
+        let n1 = bilayer.generate(s, l, 1, z, d, gs, 600);
+        let f1 = gs[6];
+        let d_at = d[n1 - 20];
+        let n1b = bilayer.generate(s, l, 1, z, d, gs, 600);
+        test.assert_eq(n1, n1b);
+        test.assert(rel(gs[6], f1, 0.0000000001) == 1);
+        test.assert(rel(d[n1 - 20], d_at, 0.0000000001) == 1);
+        let n2 = bilayer.generate(s, l, 2, z, d, gs, 600);
+        test.assert(n2 > 100);
+        test.assert(gs[6] > 0.0);
+        test.assert(rel(gs[6], f1, 0.00001) == 0);
+    }
+    return 0;
+}
+
+// the whole-curve analysis of a generated curve finds the rupture force the generator recorded, the contact, and a step of about the bilayer's thickness plus the wall's give
+fn test_the_analysis_finds_the_true_breakthrough() -> [] int {
+    region r {
+        let z = alloc_slice[r](600, 0.0);
+        let d = alloc_slice[r](600, 0.0);
+        let gs = alloc_slice[r](8, 0.0);
+        let s = bilayer.sample_of(0, 0);
+        let l = bilayer.lever_khadka();
+        let n = bilayer.generate(s, l, 3, z, d, gs, 600);
+        test.assert(gs[2] > 0.5);
+        let a = forcecurve.slb_curve(z, d, n, l.k, l.r, s.nu, 8.0, 400.0, 4.5, 0.0);
+        test.assert_eq(a.why, 0);
+        // the breakthrough force is the force at the last point before the drop: the generator's
+        test.assert(rel(a.breakthrough, gs[6], 0.000001) == 1);
+        // 5 to 13 nN for a fluid bilayer at 70,000 pN/s (the stand-in's 16 to 84% range is 4.6 to 5.6 nN)
+        test.assert(a.breakthrough > 3000.0 && a.breakthrough < 8000.0);
+        // the indentation jump is the 4 nm step and the wall's give under the lever's stored force
+        test.assert(a.height > 3.5 && a.height < 6.5);
+    }
+    return 0;
+}
+
+// the three phases, read with a Hertz fit under the lever and speed of Et-Thakafy et al. 2019: the apparent moduli they were built from (6, 10 and 4 MPa) come back
+fn apparent_modulus(phase: int, law: int) -> [] float {
+    var out = 0.0;
+    region r {
+        let z = alloc_slice[r](900, 0.0);
+        let d = alloc_slice[r](900, 0.0);
+        let zn = alloc_slice[r](900, 0.0);
+        let delta = alloc_slice[r](900, 0.0);
+        let force = alloc_slice[r](900, 0.0);
+        let gs = alloc_slice[r](8, 0.0);
+        let s = bilayer.sample_of(phase, law);
+        let l = bilayer.lever_et_thakafy();
+        let n = bilayer.generate(s, l, 5, z, d, gs, 900);
+        // forcecurve.calibrate wants z increasing toward the sample
+        var i = 0;
+        while i < n { zn[i] = 0.0 - z[i]; i = i + 1; }
+        let cal = forcecurve.calibrate(zn, d, n, l.k, delta, force);
+        if cal.why == 0 {
+            out = forcecurve.fit_modulus_from_contact(delta, force, n, cal.contact_index, 0, l.r, 0.5, 4.5).e;
+        }
+    }
+    return out;
+}
+
+fn test_the_phases_read_back_as_the_apparent_moduli_they_were_built_from() -> [] int {
+    // law 0 (half-space moduli 6, 10 and 4 MPa): the pipeline reads 6.0, 9.8 and 4.0, within 5%
+    test.assert(rel(apparent_modulus(0, 0), 6.0, 0.05) == 1);
+    test.assert(rel(apparent_modulus(1, 0), 10.0, 0.05) == 1);
+    test.assert(rel(apparent_modulus(2, 0), 4.0, 0.05) == 1);
+    return 0;
+}
+
+// law 1 (a bonded film of 4.5 nm with 0.858, 1.906 and 0.445 MPa): a Hertz fit with the contact fixed at the true contact reads 6, 10 and 4 MPa (tests/forcecurve_test.cho), but THIS pipeline, which
+// scans the contact point, reads 9.5 to 10, 11.5 to 12 and 7.5 to 8: a curve that stiffens faster than Hertz is fitted better by a later contact point and a larger modulus, so the reading depends on the
+// analysis choice, by up to 2 times here. Pinned as between 1 and 2 times the fixed-contact reading.
+fn test_a_stiffening_curve_reads_higher_when_the_contact_point_is_scanned() -> [] int {
+    let f = apparent_modulus(0, 1);
+    let g = apparent_modulus(1, 1);
+    let m = apparent_modulus(2, 1);
+    test.assert(f > 6.0 && f < 12.0);
+    test.assert(g > 10.0 && g < 20.0);
+    test.assert(m > 4.0 && m < 8.0 + 1.0);
+    // the order of the phases survives (gel above fluid above melted)
+    test.assert(g > f && f > m);
+    return 0;
+}
+
+// the rupture force of one seed, from the generator (the truth), at lever speed v nm/s; -1 when it did not rupture before the force cap
+fn rupture_force(phase: int, v: float, seed: int) -> [] float {
+    var out = 0.0 - 1.0;
+    region r {
+        let z = alloc_slice[r](1200, 0.0);
+        let d = alloc_slice[r](1200, 0.0);
+        let gs = alloc_slice[r](8, 0.0);
+        let s = bilayer.sample_of(phase, 0);
+        var l = bilayer.lever_khadka();
+        // the point spacing follows the speed: 0.2 nm a point at 200 nm/s
+        l = bilayer.Lever { k: l.k, r: l.r, v: v, dt: 0.2 / v, sigma: 0.0, f_cap: l.f_cap, z0: l.z0, zc: l.zc };
+        bilayer.generate(s, l, seed, z, d, gs, 1200);
+        if gs[2] > 0.5 { out = gs[6]; }
+    }
+    return out;
+}
+
+fn median_rupture(phase: int, v: float) -> [] float {
+    var out = 0.0;
+    region r {
+        let fs = alloc_slice[r](41, 0.0);
+        var i = 0;
+        while i < 41 {
+            fs[i] = rupture_force(phase, v, 100 + i);
+            i = i + 1;
+        }
+        out = median(fs, 41);
+    }
+    return out;
+}
+
+// the median rupture force of 41 seeds against the numerical median of the Dudko-Hummer-Szabo hazard at a constant loading rate of 70,000 pN/s: 5,174 (fluid), 12,936 (gel), 3,906 (melted) pN.
+// The twin's loading rate is not constant (the sample yields under the lever), so some difference from that is expected; within 12%.
+fn test_the_rupture_forces_of_the_phases_follow_the_stand_in_kinetics() -> [] int {
+    let fluid = median_rupture(0, 200.0);
+    let gel = median_rupture(1, 200.0);
+    let melted = median_rupture(2, 200.0);
+    test.assert(rel(fluid, 5174.0, 0.12) == 1);
+    test.assert(rel(gel, 12936.0, 0.12) == 1);
+    test.assert(rel(melted, 3906.0, 0.12) == 1);
+    // gel above fluid above melted, as built
+    test.assert(gel > fluid && fluid > melted);
+    return 0;
+}
+
+fn speed_of(i: int) -> [] float {
+    if i == 0 { return 20.0; }
+    if i == 1 { return 60.0; }
+    if i == 2 { return 200.0; }
+    if i == 3 { return 600.0; }
+    return 2000.0;
+}
+
+// force spectroscopy on twin curves: the median rupture force at five speeds (loading rates k v = 7,000 to 700,000 pN/s) rises with ln(rate), and the Bell-Evans fit of sim/dfs.cho gives an
+// EFFECTIVE barrier distance (kT / slope): 0.0096 nm for the stand-in's x = 0.0155 nm at constant loading rate (numerical modal forces 3,616 to 6,426 pN between 1e3 and 7e5 pN/s)
+fn test_a_bell_evans_fit_of_twin_ruptures_gives_an_effective_barrier_distance() -> [] int {
+    region r {
+        let rs = alloc_slice[r](5, 0.0);
+        let fs = alloc_slice[r](5, 0.0);
+        var i = 0;
+        while i < 5 {
+            let v = speed_of(i);
+            rs[i] = 350.0 * v;
+            fs[i] = median_rupture(0, v);
+            i = i + 1;
+        }
+        let fit = dfs.fit(rs, fs, 5, dfs.kt(298.15));
+        test.assert_eq(fit.why, 0);
+        // the force rises with the rate
+        test.assert(fs[4] > fs[0]);
+        // the effective distance is smaller than the model's x (0.0155 nm), as the Bell fit of a Kramers barrier is; within a factor of 2 of 0.0096
+        test.assert(fit.x > 0.0048 && fit.x < 0.0155);
+    }
+    return 0;
+}
+
+// ---- a limitation of nanoindent's whole-curve analysis, found with these curves: its baseline is the first 30% of the curve. The twin's approach (15 nm at 0.2 nm a point, 75 points) is about 25% of
+// a curve that ends at the breakthrough, so that window holds the start of the indentation, the noise estimate and the contact threshold grow, the contact point comes late, and the modulus is over-read:
+// a gel built at 10 MPa (a half-space) reads 150 MPa or more. With the baseline given as the 40 points that are surely before contact (slb_curve_nb) it reads 15 to 18: the residual 50 to 80% is
+// consistent with the 0.3 nm floor of the contact threshold, which is 105 pN for this 0.35 N/m lever (against 9 pN for the 0.03 N/m lever whose curves read within 2%), but that was not isolated. ----
+
+fn gel_modulus(nb: int) -> [] float {
+    var out = 0.0;
+    region r {
+        let z = alloc_slice[r](600, 0.0);
+        let d = alloc_slice[r](600, 0.0);
+        let gs = alloc_slice[r](8, 0.0);
+        let s = bilayer.sample_of(1, 0);
+        var l = bilayer.lever_khadka();
+        l = bilayer.Lever { k: l.k, r: l.r, v: l.v, dt: l.dt, sigma: 0.02, f_cap: l.f_cap, z0: l.z0, zc: l.zc };
+        let n = bilayer.generate(s, l, 100, z, d, gs, 600);
+        var a = forcecurve.slb_curve(z, d, n, l.k, l.r, s.nu, 8.0, 400.0, 4.5, 0.0);
+        if nb > 0 { a = forcecurve.slb_curve_nb(z, d, n, nb, l.k, l.r, s.nu, 8.0, 400.0, 4.5, 0.0); }
+        out = a.e0;
+    }
+    return out;
+}
+
+fn test_a_baseline_window_that_holds_the_start_of_contact_over_reads_the_modulus() -> [] int {
+    // the default window (30% of the curve): 150 MPa or more for a 10 MPa gel
+    test.assert(gel_modulus(0) > 100.0);
+    // the 40 points before contact: 15 to 20 MPa, still above 10 but ten times closer
+    let e = gel_modulus(40);
+    test.assert(e > 12.0 && e < 22.0);
+    test.assert(gel_modulus(0) > 6.0 * e);
+    return 0;
+}

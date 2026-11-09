@@ -76,3 +76,24 @@ cancho build host/scan_twin.cho sim/*.cho host/regs.cho gen/ir.cho gen/pid_ir.ch
 cancho-ui check ui/scan.cui && cancho-ui build ui/scan.cui -o ui/scan.js
 cd ui && python3 -m http.server 8765        # open http://localhost:8765/scan.html
 ```
+
+## The force-curve console (`curve.cui`, `curve.html`)
+
+`curve.cui` polls `curve.json` every 200 ms and draws a force curve **analysed while it is acquired**: the force, the indentation, the running Hertz modulus (the closed-form fit over the points so
+far, which starts wild on the first few contact points and settles), and, across a session of curves, the breakthrough force and the modulus of each finished one. Each line of `curve.json` is a
+complete snapshot (the whole curve so far and the analysis of it so far), so a slow page never misses a point. The producer is `host/curve_twin.cho`: the twin's supported bilayer
+(`sim/bilayer.cho`, with free stand-in rupture kinetics: a prediction, said in the page's own text) and the incremental analysis (`sim/livecurve.cho`). The charts are against the point number
+(cancho-ui has no x axis).
+
+```sh
+cancho build host/curve_twin.cho sim/bilayer.cho sim/livecurve.cho sim/forcecurve.cho sim/dfs.cho --std -o curve_twin
+# PHASE (0 fluid, 1 gel, 2 melted) LAW (0 half-space, 1 bonded film) CURVES SPEED(nm/s) KIND (0 Khadka 2021's lever, 1 Et-Thakafy 2019's) STRIDE
+cd ui && ../curve_twin 1 0 4 200 0 3 | while IFS= read -r l; do printf '%s\n' "$l" > curve.json.tmp && mv curve.json.tmp curve.json; sleep 0.12; done
+cancho-ui check curve.cui && cancho-ui build curve.cui -o curve.js     # once; cancho-ui is a separate repository
+python3 -m http.server 8765                                           # open http://localhost:8765/curve.html
+```
+
+**Seen in a browser on 2026-11-09** with a gel session of four curves: the page followed each curve point by point (baseline, approach, contact, the snap of the breakthrough with the status line
+changing to "broken through the bilayer"), and the per-curve charts filled in (breakthrough forces of 12.0 and 11.7 nN, Hertz moduli of 16.8 and 16.9 MPa for a gel built at 10 MPa; see
+`docs/dynamics.md` for why the modulus is over-read). That run found a bug (the previous curve's largest force and running sums leaked into the next curve), now fixed and tested.
+`curve.json` is written at run time and is not committed.

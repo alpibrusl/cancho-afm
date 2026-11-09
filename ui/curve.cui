@@ -1,0 +1,67 @@
+// ui/curve.cui: a force curve analysed WHILE it is acquired (docs/dynamics.md, D3 and D6). Every 200 ms it reads curve.json from its own origin (`requires Network;`, nothing else): one line of JSON
+// written by host/curve_twin.cho (the software twin: a prediction, and its rupture kinetics are free stand-ins) with the whole curve so far and the analysis of it so far, and says so in its `source`
+// field. Each reading is a complete snapshot, so a slow page never misses a point. The charts are against the point number; cancho-ui has no x axis.
+
+component Curve {
+    requires Network;
+
+    state doc: Result[String, String] = Ok("");
+    state note: String = "waiting for the first snapshot";
+    state source: String = "-";
+    state curve: String = "-";
+    state points: String = "-";
+    state phase: String = "-";
+    state stage: String = "-";
+    state done: String = "0";
+    state fmax: String = "-";
+    state bt: String = "-";
+    state height: String = "-";
+    state kappa: String = "-";
+    state efinal: String = "-";
+    state force: List[Float] = [];
+    state delta: List[Float] = [];
+    state ehertz: List[Float] = [];
+    state forces: List[Float] = [];
+    state moduli: List[Float] = [];
+
+    start Poll;
+    every 200 Poll;
+
+    on Poll {
+        doc = await(net.get("curve.json"));
+        note = match doc {
+            Ok(_) => { "reading" }
+            Err(e) => { "no reading: " + e }
+            Cancelled => { "cancelled" }
+        };
+        source = match doc { Ok(d) => { json.get(d, "source", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        curve = match doc { Ok(d) => { json.get(d, "curve", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        points = match doc { Ok(d) => { json.get(d, "i", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        phase = match doc { Ok(d) => { json.get(d, "phase", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        done = match doc { Ok(d) => { json.get(d, "done", "0") } Err(_) => { "0" } Cancelled => { "0" } };
+        fmax = match doc { Ok(d) => { json.get(d, "fmax", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        bt = match doc { Ok(d) => { json.get(d, "bt_pn", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        height = match doc { Ok(d) => { json.get(d, "height_nm", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        kappa = match doc { Ok(d) => { json.get(d, "kappa", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        efinal = match doc { Ok(d) => { json.get(d, "e_final", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        stage = if phase == "0" { "collecting the baseline" } else { if phase == "1" { "approaching: no contact yet" } else { if phase == "2" { "in contact: the tip is indenting" } else { if phase == "3" { "broken through the bilayer" } else { "-" } } } };
+        force = match doc { Ok(d) => { map(json.items(d, "force"), x => num(x, 0)) } Err(_) => { [] } Cancelled => { [] } };
+        delta = match doc { Ok(d) => { map(json.items(d, "delta"), x => num(x, 0)) } Err(_) => { [] } Cancelled => { [] } };
+        ehertz = match doc { Ok(d) => { map(json.items(d, "e_hertz"), x => num(x, 0)) } Err(_) => { [] } Cancelled => { [] } };
+        forces = match doc { Ok(d) => { map(json.items(d, "forces_nn"), x => num(x, 0)) } Err(_) => { [] } Cancelled => { [] } };
+        moduli = match doc { Ok(d) => { map(json.items(d, "moduli"), x => num(x, 0)) } Err(_) => { [] } Cancelled => { [] } };
+    }
+
+    view {
+        Column {
+            Text { role: heading "cancho-afm: a force curve, analysed as it is acquired" }
+            Text { role: status "Source: {source}. {note}. Curve {curve}, point {points}: {stage}. (source twin = a prediction of this software, with free stand-in rupture kinetics; not a measurement.)" }
+            Text { role: status "So far: largest force {fmax} pN. Breakthrough {bt} pN (step {height} nm, area compressibility {kappa} mN/m, Hertz modulus {efinal} MPa; filled in when the curve ends)." }
+            Chart { label: "Force" kind: "line" values: force unit: "pN" }
+            Chart { label: "Indentation" kind: "line" values: delta unit: "nm" }
+            Chart { label: "Running Hertz modulus (the fit so far)" kind: "line" values: ehertz unit: "MPa" }
+            Chart { label: "Breakthrough force of each finished curve" kind: "line" values: forces unit: "nN" }
+            Chart { label: "Hertz modulus of each finished curve" kind: "line" values: moduli unit: "MPa" }
+        }
+    }
+}
