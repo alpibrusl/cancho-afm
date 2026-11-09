@@ -1,0 +1,65 @@
+edition 5;
+
+module domains;
+
+// `domains` -- the sample of the force-volume map: a fluid bilayer with gel disks, on a square grid of pixels. docs/dynamics.md, "Force-volume map". A MADE-UP pattern: the disks' places and sizes
+// are not from any measurement, and the gel surface standing `gel_step` higher than the fluid is a STAND-IN.
+
+// the grid is `n` by `n` pixels; the disks are fractions of the grid (centre x, centre y, radius)
+pub fn disks() -> [] int { return 4; }
+
+fn disk_x(k: int) -> [] float {
+    if k == 0 { return 0.31; }
+    if k == 1 { return 0.72; }
+    if k == 2 { return 0.62; }
+    return 0.19;
+}
+fn disk_y(k: int) -> [] float {
+    if k == 0 { return 0.34; }
+    if k == 1 { return 0.28; }
+    if k == 2 { return 0.72; }
+    return 0.78;
+}
+fn disk_r(k: int) -> [] float {
+    if k == 0 { return 0.19; }
+    if k == 1 { return 0.12; }
+    if k == 2 { return 0.21; }
+    return 0.09;
+}
+
+// 1 when the centre of pixel (ix, iy) of an n by n grid is inside a gel disk, else 0 (fluid)
+pub fn phase_at(ix: int, iy: int, n: int) -> [] int {
+    let x = (float_of(ix) + 0.5) / float_of(n);
+    let y = (float_of(iy) + 0.5) / float_of(n);
+    var k = 0;
+    while k < disks() {
+        let dx = x - disk_x(k);
+        let dy = y - disk_y(k);
+        if dx * dx + dy * dy <= disk_r(k) * disk_r(k) { return 1; }
+        k = k + 1;
+    }
+    return 0;
+}
+
+// the height of the bilayer's top above the fluid's, nm
+pub fn gel_step() -> [] float { return 1.0; }
+
+pub fn surface_nm(phase: int) -> [] float {
+    if phase == 1 { return gel_step(); }
+    return 0.0;
+}
+
+// how many of the n*n pixels are gel
+pub fn gel_count(n: int) -> [] int {
+    var c = 0;
+    var iy = 0;
+    while iy < n {
+        var ix = 0;
+        while ix < n {
+            c = c + phase_at(ix, iy, n);
+            ix = ix + 1;
+        }
+        iy = iy + 1;
+    }
+    return c;
+}

@@ -1,0 +1,172 @@
+edition 7;
+
+import std.buffer;
+import std.math;
+import forcecurve;
+import livecurve;
+import dfs;
+import bilayer;
+import domains;
+
+// A FORCE-VOLUME MAP of a mixed gel and fluid bilayer (docs/dynamics.md, "Force-volume map"): at every pixel of an N by N grid a force curve is ramped (sim/bilayer.cho) and analysed as it is acquired
+// (sim/livecurve.cho, then the whole-curve analysis). One JSON line per pixel. A prediction of this software, not a measurement: the sample is made up (sim/domains.cho) and the rupture kinetics are free
+// stand-ins.
+//
+//   cancho build host/fv_twin.cho sim/domains.cho sim/bilayer.cho sim/livecurve.cho sim/forcecurve.cho sim/dfs.cho --std -o fv_twin
+//   fv_twin [N] [LAW] [STRIDE] [KIND]      N pixels a side (default 16, 2 to 64); LAW 0 half-space, 1 bonded film (default 0); STRIDE points between those printed of each curve (default 3);
+//                                          KIND 0 the lever of Khadka et al. 2021, 1 of Et-Thakafy et al. 2019 (default 0)
+// A line: {"px":p,"ix":..,"iy":..,"n":N,"truth":0|1 (gel),"ok":0|1,"why":tag,"e":MPa,"bt_nn":nN,"height_nm":..,"zc_nm":contact point above the fluid's,"force":[pN..],"delta":[nm..]}
+// The curves are the pixel's, thinned to every STRIDE-th point; "ok" is 0 when the analysis refused (its tag in "why"), and the maps then hold nothing for that pixel.
+
+fn text[&h, &r](heap: &!h Heap, b: buffer.Buffer, s: &r [byte]) -> [heap] buffer.Buffer { return buffer.append(heap, b, s); }
+
+fn num[&h](heap: &!h Heap, b: buffer.Buffer, n: int) -> [heap] buffer.Buffer {
+    if n < 0 { return buffer.push_nat(heap, buffer.append(heap, b, "-"), 0 - n); }
+    return buffer.push_nat(heap, b, n);
+}
+
+fn number_of[&t](text: &t [byte]) -> [] int {
+    var n = 0;
+    var i = 0;
+    while i < len(text) {
+        let c = int_of(text[i]);
+        if c < 48 || c > 57 { return 0; }
+        n = n * 10 + (c - 48);
+        i = i + 1;
+    }
+    return n;
+}
+
+// a float with `places` decimals (0 to 3), signed
+fn dec[&h](heap: &!h Heap, o: buffer.Buffer, v: float, places: int) -> [heap] buffer.Buffer {
+    var b = o;
+    var x = v;
+    if x < 0.0 { b = text(heap, b, "-"); x = 0.0 - x; }
+    var scale = 1;
+    var p = 0;
+    while p < places { scale = scale * 10; p = p + 1; }
+    let c = truncate(x * float_of(scale) + 0.5);
+    b = num(heap, b, c / scale);
+    if places > 0 {
+        b = text(heap, b, ".");
+        var rest = c % scale;
+        var div = scale / 10;
+        while div > 0 {
+            b = num(heap, b, rest / div);
+            rest = rest % div;
+            div = div / 10;
+        }
+    }
+    return b;
+}
+
+fn arr[&h, &a, &c](heap: &!h Heap, o: buffer.Buffer, key: &a [byte], xs: &c [float], n: int, places: int) -> [heap] buffer.Buffer {
+    var b = text(heap, o, ",\"");
+    b = text(heap, b, key);
+    b = text(heap, b, "\":[");
+    var i = 0;
+    while i < n {
+        if i > 0 { b = text(heap, b, ","); }
+        b = dec(heap, b, xs[i], places);
+        i = i + 1;
+    }
+    return text(heap, b, "]");
+}
+
+fn field[&h, &a](heap: &!h Heap, o: buffer.Buffer, key: &a [byte], v: float, places: int) -> [heap] buffer.Buffer {
+    var b = text(heap, o, ",\"");
+    b = text(heap, b, key);
+    b = text(heap, b, "\":");
+    return dec(heap, b, v, places);
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(net); release(clock); release(signals); release(exec);
+    var n = 16;
+    var law = 0;
+    var stride = 3;
+    var kind = 0;
+    borrow args as &g in {
+        if arg_count(g) > 1 { n = number_of(arg(g, 1)); }
+        if arg_count(g) > 2 { law = number_of(arg(g, 2)); }
+        if arg_count(g) > 3 { stride = number_of(arg(g, 3)); }
+        if arg_count(g) > 4 { kind = number_of(arg(g, 4)); }
+    }
+    release(args);
+    if n < 2 { n = 2; }
+    if n > 64 { n = 64; }
+    if stride < 1 { stride = 3; }
+    borrow mut heap as &!h in {
+        region r {
+            let force_l = alloc_slice[r](720, 0.0);
+            let delta_l = alloc_slice[r](720, 0.0);
+            let zb = alloc_slice[r](720, 0.0);
+            let db = alloc_slice[r](720, 0.0);
+            let gs = alloc_slice[r](8, 0.0);
+            let si = alloc_slice[r](8, 0);
+            let sf = alloc_slice[r](16, 0.0);
+            let base = bilayer.lever_khadka();
+            var sigma = 0.02;
+            var l0 = base;
+            if kind == 1 { l0 = bilayer.lever_et_thakafy(); sigma = 0.003; }
+            var p = 0;
+            while p < n * n {
+                let ix = p % n;
+                let iy = p / n;
+                let ph = domains.phase_at(ix, iy, n);
+                // gel: phase 1 of bilayer.sample_of; fluid: phase 0. The surface of a gel pixel is higher, so the approach starts and the contact comes sooner.
+                let s = bilayer.sample_of(ph, law);
+                let up = domains.surface_nm(ph);
+                let l = bilayer.Lever { k: l0.k, r: l0.r, v: 200.0, dt: 0.001, sigma: sigma, f_cap: l0.f_cap, z0: l0.z0 + up, zc: l0.zc + up };
+                bilayer.begin(gs, 1000 + p);
+                livecurve.start(si, sf);
+                var i = 0;
+                var go = 1;
+                while i < 720 && go == 1 {
+                    let pt = bilayer.next(s, l, gs, i, 1000 + p);
+                    let lv = livecurve.push(pt.z, pt.d, zb, db, si, sf, 720, 40, l.k, l.r, 0.5, 8.0, 400.0, 4.5);
+                    force_l[i] = lv.force;
+                    delta_l[i] = lv.delta;
+                    i = i + 1;
+                    if pt.done == 1 { go = 0; }
+                }
+                let fin = livecurve.finish(zb, db, si, 40, l.k, l.r, 0.5, 8.0, 400.0, 4.5);
+                var o = buffer.empty(h, 16384);
+                o = text(h, o, "{\"px\":");
+                o = num(h, o, p);
+                o = text(h, o, ",\"ix\":");
+                o = num(h, o, ix);
+                o = text(h, o, ",\"iy\":");
+                o = num(h, o, iy);
+                o = text(h, o, ",\"n\":");
+                o = num(h, o, n);
+                o = text(h, o, ",\"truth\":");
+                o = num(h, o, ph);
+                o = text(h, o, ",\"ok\":");
+                if fin.why == 0 { o = num(h, o, 1); } else { o = num(h, o, 0); }
+                o = text(h, o, ",\"why\":");
+                o = num(h, o, fin.why);
+                if fin.why == 0 {
+                    o = field(h, o, "e", fin.e0, 2);
+                    o = field(h, o, "bt_nn", fin.breakthrough / 1000.0, 2);
+                    o = field(h, o, "height_nm", fin.height, 2);
+                    o = field(h, o, "zc_nm", fin.contact_z - 100.0, 2);
+                }
+                // the curve, thinned
+                var m = 0;
+                var q = 0;
+                while q < i { if q % stride == 0 { force_l[m] = force_l[q]; delta_l[m] = delta_l[q]; m = m + 1; } q = q + 1; }
+                o = arr(h, o, "force", force_l, m, 0);
+                o = arr(h, o, "delta", delta_l, m, 2);
+                o = text(h, o, "}\n");
+                borrow mut io as &!w in { borrow o as &b in { buffer.write(w, b); } }
+                buffer.drop(h, o);
+                p = p + 1;
+            }
+        }
+    }
+    release(heap);
+    release(io);
+    return 0;
+}
