@@ -21,6 +21,11 @@ component Scan {
     state count: String = "-";
     state plist: String = "-";
     state drift: String = "-";
+    state fmax: String = "-";
+    state fover: String = "-";
+    state fth: String = "-";
+    state ftext: String = "-";
+    state force: String = "not modelled in this scan (no lever stiffness was given)";
 
     start Poll;
     every 5000 Poll;
@@ -46,6 +51,11 @@ component Scan {
         count = match doc { Ok(d) => { json.get(d, "particles", "-") } Err(_) => { "-" } Cancelled => { "-" } };
         plist = match doc { Ok(d) => { json.get(d, "particles_text", "-") } Err(_) => { "-" } Cancelled => { "-" } };
         drift = match doc { Ok(d) => { json.get(d, "drift_text", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        fmax = match doc { Ok(d) => { json.get(d, "force_pn_max", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        fover = match doc { Ok(d) => { json.get(d, "force_pixels_over", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        fth = match doc { Ok(d) => { json.get(d, "force_threshold_pn", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        ftext = match doc { Ok(d) => { json.get(d, "force_text", "-") } Err(_) => { "-" } Cancelled => { "-" } };
+        force = if fmax == "-" { "not modelled in this scan (no lever stiffness was given)" } else { "largest {fmax} pN; {fover} pixels over the {fth} pN threshold. {ftext}" };
     }
 
     view {
@@ -56,6 +66,7 @@ component Scan {
             Text { "Step: {step} pm, edge at line {step_line}. Grating: pitch {pitch} pixels, height {grating} pm peak to peak." }
             Text { "Particles ({count}): {plist}." }
             Text { "Drift: {drift}." }
+            Text { "Tapping force: {force}" }
         }
     }
 }

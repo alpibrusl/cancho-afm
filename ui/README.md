@@ -64,11 +64,12 @@ check and the register limits in `serve.cho`, so a gateway mistake cannot bypass
 
 ## The last scan (`scan.cui`, `scan.html`)
 
-`scan.cui` polls `scan.json` every 5 s and prints the analysis of the last scan: roughness, the step, the grating, the particles and the drift, with the document's `source` (`twin`: a prediction). The levelled image is `scan.png`, an `<img>` of the host page `scan.html`, which also sets its text alternative from `scan.json`: `cancho-ui` has no image element yet (docs/image-processing.md, I5). Both files are written by the twin's analysis:
+`scan.cui` polls `scan.json` every 5 s and prints the analysis of the last scan: roughness, the step, the grating, the particles, the drift and, when the scan was run with a lever stiffness (profile 2, `docs/liquid.md` S9.3), the tapping force (largest, pixels over the threshold, and the twin's own caveat; "not modelled" otherwise), with the document's `source` (`twin`: a prediction). The levelled image is `scan.png`, an `<img>` of the host page `scan.html`, which also sets its text alternative from `scan.json`: `cancho-ui` has no image element yet (docs/image-processing.md, I5). Both files are written by the twin's analysis:
 
 ```sh
 cancho build host/scan_twin.cho sim/*.cho host/regs.cho gen/ir.cho gen/pid_ir.cho gen/raster_ir.cho gen/lockin_ir.cho host/proto.cho host/twin_link.cho host/script.cho host/run_twin.cho \
     host/session.cho host/image.cho host/metrics.cho host/features.cho host/drift.cho host/report.cho host/png.cho host/force.cho --std -o scan_twin
+./scan_twin 2 0 500 5 0 0 0 0 0 0 30 0 0 15 0 100 > ui/scan.json   # (profile 2 with a 0.15 N/m lever, threshold 100 pN, shows the force line)
 ./scan_twin 1 0 500 5 > ui/scan.json        # profile 1 (the high-speed cantilever), ideal Z scanner, 500 kHz, mode 5: the document
 ./scan_twin 1 0 500 6 > ui/scan.png         # mode 6: the levelled image
 cancho-ui check ui/scan.cui && cancho-ui build ui/scan.cui -o ui/scan.js
