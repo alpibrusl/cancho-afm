@@ -360,6 +360,7 @@ fn main(world: World) -> [] int {
     var stp = 150;
     var qg = 0;       // argument 22: Q control gain in tenths (docs/high-speed.md, HS3); 0 is off
     var qph = 0;      // argument 23: its phase error in degrees
+    var gsc = 0;      // argument 24: a scale on the loop gains in percent (host/session.cho, sf[6]); 0 is as chosen
     borrow args as &g in {
         if arg_count(g) > 1 { prof = number_of(arg(g, 1)); }
         if arg_count(g) > 2 { scn = number_of(arg(g, 2)); }
@@ -384,6 +385,7 @@ fn main(world: World) -> [] int {
         if arg_count(g) > 21 { stp = number_of(arg(g, 21)); }
         if arg_count(g) > 22 { qg = number_of(arg(g, 22)); }
         if arg_count(g) > 23 { qph = number_of(arg(g, 23)); }
+        if arg_count(g) > 24 { gsc = number_of(arg(g, 24)); }
     }
     release(args); release(net); release(clock); release(signals); release(exec);
     borrow mut heap as &!h in {
@@ -412,6 +414,7 @@ fn main(world: World) -> [] int {
             let ss = alloc_slice[r](32, 0);
             ss[3] = prof;
             let sf = alloc_slice[r](8, 0.0);
+            sf[6] = float_of(gsc);
             let sc = alloc_slice[r](4 * 200, 0);
             let out = alloc_slice[r](128, 0);
             let img = alloc_slice[r](64, 0 - 1);

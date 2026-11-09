@@ -41,7 +41,7 @@ What this says, plainly:
 * **In air the cantilever's Q is the limit**, not the electronics: Q = 100 at 1.2 MHz has tau = 26 us. Fast imaging in air needs Q control (active damping) or low-Q
   cantilevers. Q control is not designed here **[unknown]**.
 * **10 frames per second** (Ando reports 10 to 25 fps for his instrument **[search]**) at 64 x 64 would need a pixel of 24 us: K = 20 updates of 1.2 us, so a window of
-  about 5 samples at 4 MS/s. That is below one cycle and **does not look reachable with a lock-in**. Ando uses an RMS-to-DC converter or peak hold and a
+  about 5 samples at 4 MS/s. That is below one cycle and **does not look reachable with a lock-in**. **(HS4 below measured it in the twin and corrected the premise: the window was not what limited the rate.)** Ando uses an RMS-to-DC converter or peak hold and a
   fast scanner, and attributes the limits to cantilever frequency, the RMS-DC rate and the Z scanner bandwidth **[search]**. Our honest target is **1 to 5 frames per second at 64 x 64**, not 10.
 * **The one open published controller** reports 55 lines/s, a 512 x 512 image in 9.3 s, for under USD 4,000, on NI hardware (`docs/references.md`). Our cost goal
   is far below that, and our line rate on this budget is also lower **[A]**; neither is measured here.
@@ -174,7 +174,7 @@ Issue #65. Rule 5 of the approach, the step budget: **the approach is host-drive
 
 ## Open slices, as issues
 
-#64 HS1, #65 HS2 and (the twin side of) #66 HS3 are above. Not started: #67 HS4 (a detector for windows under one cycle), #68 HS5 (tapping dynamics at speed), #69 HS6 (hardware; blocked on a bench).
+#64 HS1, #65 HS2 and (the twin side of) #66 HS3 are above. #67 HS4 tested its premise (above) and built nothing. Not started: #68 HS5 (tapping dynamics at speed), #69 HS6 (hardware; blocked on a bench).
 
 ## What HS3 found (twin, 2026-11-09; predictions, not measurements)
 
@@ -201,6 +201,28 @@ Q 100 in air, 64 x 64, the ideal scanner, a 1,000 pm step, no noise; the figure 
 * **The phase error matters** (gain 9): at 45 degrees the lag is 60, 66, 474 and 812 pm at 20, 10, 6 and 4 steps per pixel (fine up to 3 frames/s, lost at 5); at 80 degrees it is lost everywhere; at 100 degrees it is refused (85). The feedback path would need a phase held well inside 45 degrees. **For scale: one sample of the 4.5 MS/s converter is 40 degrees of a 500 kHz cycle**, so a path of several samples is a design problem of its own, not designed here.
 * **Not modelled, and each one decides whether this pays on a real lever:** the noise the feedback adds (the main practical cost), the resonance shift (g sin(phi) / (2 Q0)), the drive range (a gain of 9 holds the free amplitude with ten times the drive), a detector or DAC that is not instantaneous, and the lever's own higher modes.
 * **Verdict for #66:** in the twin the idea pays by an order of magnitude. That is the condition the issue set for generating Verilog; **the Verilog was not written**, because the part that would decide it (the feedback path's delay and noise at 500 kHz) is not in the twin. #66 stays open for the design of that path.
+
+## What HS4 found (twin, 2026-11-09; predictions, not measurements)
+
+Issue #67 asked for a detector that works on windows under one cycle (peak hold or RMS-DC), on the premise that **the lock-in's window is what limits the frame rate**. The issue's own condition was that HS1 show it. I tested the premise before building anything, and **it does not hold in the twin, so no detector was built.**
+
+How it was tested. `lockin.snap` was allowed to pick a one-cycle window (m = 1, n = 9 at 500 kHz) in a scratch copy: it runs, and the figure is half as large (it is proportional to the window). At **equal frame time** the 9-sample window gets twice the loop updates per pixel. Q 100 damped to Q 5 (gain 19), and the liquid lever (Q 3); ideal Z scanner; trace-minus-retrace rms (pm); one run per cell. Gains scaled 25 to 300% of the tune's choice, the best shown:
+
+| frames/s | lever | window 18 at the chosen gains | window 9 at the chosen gains | window 18, best gains | window 9, best gains |
+|---|---|---|---|---|---|
+| 5.2 | Q 5 | 90 | 89 | 90 (100%) | **31** (300%) |
+| 7.7 | Q 5 | 85 | 199 | 75 (150%) | 64 (150%) |
+| 10.3 | Q 5 | 310 | 540 | 50 (200%) | 56 (200%) |
+| 5.2 | liquid Q 3 | 98 | 154 | 53 (300%) | 45 (300%) |
+| 7.7 | liquid Q 3 | 481 | 685 | 54 (200%) | 61 (300%) |
+| 10.3 | liquid Q 3 | 819 | 1,143 | 57 (300%) | 84 (300%) |
+
+* **The shorter window is not better**: with the chosen gains it is the same or worse in every cell, and at the best gains it wins in 3 cells of 6 by a few pm and loses in the other 3. The one clear win (5.2 frames/s, Q 5: 31 against 90 pm) is a single gain scale; its neighbours (200%: 72, 150%: 89) do not repeat it. Pinned for 10.3 frames/s in `tests/hs_rate.sh`.
+* **What did limit the rate is the loop gain rule.** `tune.choose` aims the loop gain at half the lever's response per update, and at 10.3 frames/s that is too timid for an ideal scanner: doubling the gains cuts the lag from 310 to 50 pm (liquid: 819 to 57 pm at three times). **So 10 frames/s at 64 x 64 is reachable in the twin with the same 18-sample window, but only with an ideal scanner** (next bullet). The earlier line of this note that 10 fps needs a window of about 5 samples was wrong about the cause.
+* **That only holds with an ideal Z scanner.** At 10.3 frames/s with Q 5: a 70 kHz scanner gives 288 pm at the chosen gains, 450 at twice and 958 at three times; a 50 kHz one 267, 854 and 2,109; a 30 kHz one is lost at every gain. **Higher gains make a real scanner ring (H2 again): the scanner, not the detector and not the gain rule, is what sets the limit at 10 frames/s.** The gain rule ignores the scanner (said in H2; not fixed).
+* **Detector noise did not matter in the twin** (0 to 30 counts at gains 1, 2 and 3 times: 819/205/57 pm against 780/187/64 pm at 30 counts). That is small against a figure of about 12,000 counts and is not a statement about a real photodiode and amplifier.
+* **A knob was added to measure this:** `scan_twin` argument 24 scales the chosen gains in percent (`sf[6]`); 0 is as chosen.
+* **What this leaves for #67:** the issue's acceptance cannot be met honestly; the condition it depended on is false in the twin. It is not closed: a peak-hold detector could still matter for reasons the twin does not model (a window of 4 us adds a delay the loop sees; a real photodiode's noise against a shorter window). Both need the hardware (#69). The next measurable thing is a loop gain rule that knows the Z scanner (issue #72).
 
 ## Risks
 

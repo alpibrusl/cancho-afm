@@ -38,4 +38,24 @@ air 1000 90 100 | head -n 1 | grep -qF 'failure code 85,' || { echo "FAILED: a p
 # the default profile 1 still completes
 "$W/tw20" 1 0 500 0 | head -n 1 | grep -qF 'failure code 0,' || { echo "FAILED: the default profile 1 no longer completes"; exit 1; }
 echo "air Q 100 completes, Q control cuts the lag from $l0 to $l9 pm, 100 degrees refused with 85: ok"
+# HS4 (docs/high-speed.md): is the lock-in window what limits the frame rate? At 10.3 frames/s (3 loop steps per pixel), Q 100 damped to Q 5 (gain 19), 1,000 pm step.
+# (a) the gains the tune chooses are far too low for an ideal Z scanner: doubling them cuts the lag from about 310 pm to about 50 pm
+build 3
+g() { "$W/tw3" 1 "$1" 500 0 0 0 0 0 0 0 1000 0 0 0 0 0 0 100 0 0 1000 190 0 "$2"; }   # $1 Z scanner (0 ideal, 5 = 50 kHz Q 3), $2 gain scale in percent
+a1=$(lag_rms g 0 100); a2=$(lag_rms g 0 200)
+awk -v a="$a1" -v b="$a2" 'BEGIN { exit !(a > 200 && b < 100) }' || { echo "FAILED: gain scale 100 -> 200 gave $a1 -> $a2 pm with an ideal scanner (HS4 is out of date)"; exit 1; }
+# (b) with a 50 kHz scanner the same doubling makes it worse: the Z scanner, not the gain rule, sets the limit
+s1=$(lag_rms g 5 100); s2=$(lag_rms g 5 200)
+awk -v a="$s1" -v b="$s2" 'BEGIN { exit !(b > a) }' || { echo "FAILED: with a 50 kHz scanner gain scale 100 -> 200 gave $s1 -> $s2 pm, expected worse (HS4 is out of date)"; exit 1; }
+# (c) a one-cycle window (9 samples) at the same frame time (6 loop steps per pixel) is not better than the 18-sample one, each at its best of two gain scales (lag 50 and 56 pm in the table)
+sed 's/var n = 16;/var n = 8;/; s/if m < 2 { m = 2; }/if m < 1 { m = 1; }/' sim/lockin.cho > "$W/lockin_m1.cho"
+grep -q 'var n = 8;' "$W/lockin_m1.cho" && grep -q 'if m < 1' "$W/lockin_m1.cho" || { echo "FAILED: the one-cycle lockin variant was not made"; exit 1; }
+sed "s/if fast(p) == 1 { return 20; } return 60;/if fast(p) == 1 { return 6; } return 60;/" host/session.cho > "$W/s6.cho"
+"$CANCHO" build host/scan_twin.cho $(echo "$MODS" | sed "s#SESSION#$W/s6.cho#; s#sim/lockin.cho#$W/lockin_m1.cho#") --std -o "$W/tw6m1" > /dev/null
+w9a=$("$W/tw6m1" 1 0 500 0 0 0 0 0 0 0 1000 0 0 0 0 0 0 100 0 0 1000 190 0 150 | head -n 1 | grep -o 'window [0-9]*')
+[ "$w9a" = "window 9" ] || { echo "FAILED: the one-cycle variant did not pick a window of 9 (got: $w9a)"; exit 1; }
+b18=$(for s in 150 200; do lag_rms g 0 $s; done | sort -n | head -n 1)
+b9=$(for s in 150 200; do lag_rms "$W/tw6m1" 1 0 500 0 0 0 0 0 0 0 1000 0 0 0 0 0 0 100 0 0 1000 190 0 $s; done | sort -n | head -n 1)
+awk -v a="$b18" -v b="$b9" 'BEGIN { exit !(b > 0.8 * a) }' || { echo "FAILED: a 9-sample window reached $b9 pm against $a pm for 18 (HS4 is out of date: the window may be the limit after all)"; exit 1; }
+echo "HS4: doubling the gains cuts the lag $a1 -> $a2 pm (ideal scanner) but $s1 -> $s2 pm with a 50 kHz one; a 9-sample window ($b9 pm) is no better than 18 ($b18 pm): ok"
 echo "hs rate: passed"
