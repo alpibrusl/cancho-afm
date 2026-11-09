@@ -1,0 +1,25 @@
+import std.test;
+import domains;
+
+// docs/dynamics.md, "Force-volume map": the made-up sample of the map.
+
+fn test_the_pattern_is_mixed() -> [] int {
+    let g = domains.gel_count(32);
+    test.assert(g > 100);
+    test.assert(g < 600);
+    return 0;
+}
+
+fn test_the_pattern_is_the_same_at_any_grid_size() -> [] int {
+    test.assert_eq(domains.phase_at(10, 11, 32), 1);
+    test.assert_eq(domains.phase_at(5, 5, 16), 1);
+    test.assert_eq(domains.phase_at(20, 22, 64), 1);
+    test.assert_eq(domains.phase_at(0, 0, 32), 0);
+    test.assert_eq(domains.phase_at(31, 31, 32), 0);
+    return 0;
+}
+
+fn test_the_gel_stands_higher() -> [] int {
+    test.assert(domains.surface_nm(1) > domains.surface_nm(0));
+    return 0;
+}
