@@ -57,6 +57,7 @@ fn main(world: World) -> [] int {
                 session.consume(ss, sf, out, img);
                 guard = guard + 1;
             }
+            session.budget_spent(ss, 99);
             // the same scan once more, sampled every loop step pair: amplitude figure, Z and X
             // the session stops at the end (run = 0); start the loop from the Z it handed over at (as the session's own hand-off does), scanning
             board.write(rf, st, 1, 0);

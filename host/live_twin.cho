@@ -45,6 +45,7 @@ fn main(world: World) -> [] int {
                 session.consume(ss, sf, out, img);
                 guard = guard + 1;
             }
+            session.budget_spent(ss, 99);
             board.write(rf, st, 1, 0);
             board.write(rf, st, 15, ss[22]);
             board.write(rf, st, 1, 23);
