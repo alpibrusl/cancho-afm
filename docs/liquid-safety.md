@@ -36,7 +36,7 @@
 
 Normal shutdown, in this order:
 1. Stop the scan and the loop: write `CTRL` = 0 (the end of `session`, stage 7). Read `STATUS` and `ZOUT` back.
-2. **Retract the lever from the sample** with the coarse motor by a distance longer than the approach used, with the **backlash overshoot rule `docs/coarse-motor.md` says is not designed yet**: until it is, the retract must be checked by eye or by the readings, not assumed.
+2. **Retract the lever from the sample** with the coarse motor by a distance longer than the approach used, with the **backlash overshoot rule, proposed in `docs/motor-retract.md` (not built; it needs the measured backlash)**: until it is, the retract must be checked by eye or by the readings, not assumed.
 3. Switch the **laser** off.
 4. Switch the **amplifier supplies** off at the stop switch.
 5. Only then unplug the USB of the FPGA board.

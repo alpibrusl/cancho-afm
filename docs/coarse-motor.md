@@ -93,5 +93,5 @@ and its gate threshold against 3.3 V (a part that needs more will not switch ful
 
 * The real Z range and free amplitude (the first bench run on the scanner decides them).
 * Whether the head's weight is within the motor's torque [unmeasured].
-* The overshoot rule for retracting by the motor.
+* The overshoot rule for retracting by the motor: **proposed in [`motor-retract.md`](motor-retract.md)** (needs the measured backlash; also finds that `MOTOR_MAX` in the session allows a move longer than the twin's Z range).
 * Whether to keep the A4988 and the NEMA 8 in `cost.md`: **it stays listed until section 5 passes**. If it passes, the line saves EUR 34 to 70.
