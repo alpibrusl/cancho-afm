@@ -1,0 +1,223 @@
+import std.test;
+import std.math;
+import membrane;
+import tracking;
+
+// docs/dynamics.md, D5: particle detection, linking and the diffusion coefficient, ported from nanoindent.video (github.com/alpibrusl/afm-finite-elements, commit c04820a, Python). nanoindent is the
+// ORACLE: the numbers marked "oracle" were computed by its Python on the same deterministic movie (no random numbers, so both languages build the same frames).
+
+fn rel(got: float, want: float, tol: float) -> [] int {
+    var d = got - want;
+    if d < 0.0 { d = 0.0 - d; }
+    var w = want;
+    if w < 0.0 { w = 0.0 - w; }
+    if d <= tol * w { return 1; }
+    return 0;
+}
+
+fn near(got: float, want: float, tol: float) -> [] int {
+    var d = got - want;
+    if d < 0.0 { d = 0.0 - d; }
+    if d <= tol { return 1; }
+    return 0;
+}
+
+// a 64 x 64 frame, 2 nm per pixel: Gaussian particles of height 3 nm and sigma 6 nm at (cy[k], cx[k]) nm (nanoindent's synthetic_video, without noise)
+fn render[&a, &b, &c](frame: &!a [float], cy: &b [float], cx: &c [float], n: int) -> [] int {
+    var iy = 0;
+    while iy < 64 {
+        var ix = 0;
+        while ix < 64 {
+            let y = float_of(iy) * 2.0;
+            let x = float_of(ix) * 2.0;
+            var v = 0.0;
+            var k = 0;
+            while k < n {
+                v = v + 3.0 * math.exp(0.0 - ((x - cx[k]) * (x - cx[k]) + (y - cy[k]) * (y - cy[k])) / (2.0 * 6.0 * 6.0));
+                k = k + 1;
+            }
+            frame[iy * 64 + ix] = v;
+            ix = ix + 1;
+        }
+        iy = iy + 1;
+    }
+    return 0;
+}
+
+// oracle: the movie of four particles from (40,40), (100,50), (60,100), (100,100) nm (cy, cx), each frame moving them by 3 sin(12.9898 (131 k + 17 t) + 78.233) in x and the same with +7 in y, 40 frames of 0.1 s:
+// 4 tracks of 40 points; D per track 30.563581996185135, 29.771809815302014, 28.034966613287366, 30.514811070643894 nm^2/s; mean 29.721292373854602; the first frame's centroids in raster order
+// (y, x) px: (20, 20), (30, 50), (50, 25), (50, 50)
+fn test_the_tracker_matches_the_oracle() -> [] int {
+    region r1 {
+        let frame = alloc_slice[r1](4096, 0.0);
+        let py = alloc_slice[r1](4, 0.0);
+        let px = alloc_slice[r1](4, 0.0);
+        region r2 {
+            let tt = alloc_slice[r2](2048, 0);
+            let ty = alloc_slice[r2](2048, 0.0);
+            let tx = alloc_slice[r2](2048, 0.0);
+            let tlen = alloc_slice[r2](32, 0);
+            let act = alloc_slice[r2](32, 0);
+            let st = alloc_slice[r2](3, 0);
+            let cy = alloc_slice[r2](32, 0.0);
+            let cx = alloc_slice[r2](32, 0.0);
+            let used = alloc_slice[r2](32, 0);
+            py[0] = 40.0; px[0] = 40.0; py[1] = 100.0; px[1] = 50.0; py[2] = 60.0; px[2] = 100.0; py[3] = 100.0; px[3] = 100.0;
+            var t = 0;
+            while t < 40 {
+                render(frame, py, px, 4);
+                let thr = tracking.frame_threshold(frame, 4096);
+                let nd = tracking.push(frame, 64, t, thr, 6.0, 2, tt, ty, tx, tlen, act, st, cy, cx, used);
+                if t == 0 {
+                    test.assert_eq(nd, 4);
+                    test.assert(near(cy[0], 20.0, 0.0001) == 1);
+                    test.assert(near(cx[0], 20.0, 0.0001) == 1);
+                    test.assert(near(cy[1], 30.0, 0.0001) == 1);
+                    test.assert(near(cx[1], 50.0, 0.0001) == 1);
+                    test.assert(near(cy[2], 50.0, 0.0001) == 1);
+                    test.assert(near(cx[2], 25.0, 0.0001) == 1);
+                    test.assert(near(cy[3], 50.0, 0.0001) == 1);
+                    test.assert(near(cx[3], 50.0, 0.0001) == 1);
+                }
+                var k = 0;
+                while k < 4 {
+                    let sx = 3.0 * math.sin(12.9898 * float_of(k * 131 + t * 17) + 78.233);
+                    let sy = 3.0 * math.sin(12.9898 * float_of(k * 131 + t * 17 + 7) + 78.233);
+                    py[k] = py[k] + sy;
+                    px[k] = px[k] + sx;
+                    k = k + 1;
+                }
+                t = t + 1;
+            }
+            test.assert_eq(st[0], 4);
+            test.assert_eq(tlen[0], 40);
+            test.assert_eq(tlen[1], 40);
+            test.assert_eq(tlen[2], 40);
+            test.assert_eq(tlen[3], 40);
+            test.assert_eq(st[2], 0);
+            // the tracks are numbered by first detection: raster order of the first frame, so the oracle's order
+            test.assert(rel(tracking.track_d(ty, tx, tlen, 0, 2.0, 0.1), 30.563581996185135, 0.000001) == 1);
+            test.assert(rel(tracking.track_d(ty, tx, tlen, 1, 2.0, 0.1), 29.771809815302014, 0.000001) == 1);
+            test.assert(rel(tracking.track_d(ty, tx, tlen, 2, 2.0, 0.1), 28.034966613287366, 0.000001) == 1);
+            test.assert(rel(tracking.track_d(ty, tx, tlen, 3, 2.0, 0.1), 30.514811070643894, 0.000001) == 1);
+            let e = tracking.ensemble(ty, tx, tlen, st, 2.0, 0.1);
+            test.assert_eq(e.why, 0);
+            test.assert_eq(e.n, 4);
+            test.assert(rel(e.d, 29.721292373854602, 0.000001) == 1);
+        }
+    }
+    return 0;
+}
+
+fn test_detection_finds_one_blob_and_ignores_a_speck() -> [] int {
+    region r {
+        let frame = alloc_slice[r](4096, 0.0);
+        let cy = alloc_slice[r](32, 0.0);
+        let cx = alloc_slice[r](32, 0.0);
+        let by = alloc_slice[r](1, 0.0);
+        let bx = alloc_slice[r](1, 0.0);
+        by[0] = 64.0; bx[0] = 80.0;
+        render(frame, by, bx, 1);
+        // a one-pixel speck, as bright as the blob's peak, far away
+        frame[5 * 64 + 5] = 3.0;
+        let thr = tracking.frame_threshold(frame, 4096);
+        // min_size 2 drops the speck; min_size 1 keeps it
+        test.assert_eq(tracking.detect(frame, 64, thr, 2, cy, cx), 1);
+        test.assert(near(cy[0], 32.0, 0.01) == 1);
+        test.assert(near(cx[0], 40.0, 0.01) == 1);
+        test.assert_eq(tracking.detect(frame, 64, thr, 1, cy, cx), 2);
+        // a threshold above everything finds nothing
+        test.assert_eq(tracking.detect(frame, 64, 100.0, 1, cy, cx), 0);
+        // and an empty frame has nothing (its own region: two frames do not fit in one)
+        region r2 {
+            let empty = alloc_slice[r2](4096, 0.0);
+            test.assert_eq(tracking.detect(empty, 64, 0.5, 2, cy, cx), 0);
+        }
+    }
+    return 0;
+}
+
+// ---- the movie of docs/dynamics.md D1: particles that diffuse with a known D (membrane.walk), imaged at 10.3 frames/s, and the coefficient recovered ----
+
+fn test_the_diffusion_coefficient_of_a_d1_movie_is_recovered() -> [] int {
+    region r1 {
+        let frame = alloc_slice[r1](4096, 0.0);
+        let py = alloc_slice[r1](6, 0.0);
+        let px = alloc_slice[r1](6, 0.0);
+        region r2 {
+            let tt = alloc_slice[r2](2048, 0);
+            let ty = alloc_slice[r2](2048, 0.0);
+            let tx = alloc_slice[r2](2048, 0.0);
+            let tlen = alloc_slice[r2](32, 0);
+            let act = alloc_slice[r2](32, 0);
+            let st = alloc_slice[r2](3, 0);
+            let cy = alloc_slice[r2](32, 0.0);
+            let cx = alloc_slice[r2](32, 0.0);
+            let used = alloc_slice[r2](32, 0);
+            // six particles on a grid (nearest neighbours 34 to 48 nm apart) in the 128 nm field, D = 3e-5 um^2/s = 30 nm^2/s, 60 frames of 0.0968 s
+            let d_um2s = 0.00003;
+            var nn = 0.0;
+            var t = 0;
+            while t < 60 {
+                let tm = float_of(t) * 0.0968;
+                var k = 0;
+                while k < 6 {
+                    let gx = 30.0 + 34.0 * float_of(k % 3);
+                    let gy = 40.0 + 48.0 * float_of(k / 3);
+                    py[k] = gy + membrane.walk(d_um2s, 2 * k + 1, tm);
+                    px[k] = gx + membrane.walk(d_um2s, 2 * k, tm);
+                    k = k + 1;
+                }
+                render(frame, py, px, 6);
+                let thr = tracking.frame_threshold(frame, 4096);
+                let nd = tracking.push(frame, 64, t, thr, 8.0, 2, tt, ty, tx, tlen, act, st, cy, cx, used);
+                if t == 0 { nn = tracking.nearest_neighbour_nm(cy, cx, nd, 2.0); }
+                t = t + 1;
+            }
+            let e = tracking.ensemble(ty, tx, tlen, st, 2.0, 0.0968);
+            test.assert_eq(e.why, 0);
+            // D within 30% of the 30 nm^2/s put in (the acceptance of issue 81); and equal to the oracle's own estimate on the same movie (seven tracks of at least five points; some of the six
+            // particles' tracks break into pieces, which nanoindent's linking does as well): 30.36 nm^2/s, 1.2% above the input
+            test.assert(e.d > 0.7 * 30.0 && e.d < 1.3 * 30.0);
+            test.assert_eq(e.n, 7);
+            test.assert(near(e.d, 30.36, 0.01) == 1);
+            // the criteria hold here, so the estimate is trusted
+            test.assert(nn > 30.0);
+            test.assert_eq(tracking.check(e.d, 0.0968, 128.0, nn), 0);
+        }
+    }
+    return 0;
+}
+
+// ---- refusals: every one has a tag, none panics ----
+
+fn test_an_estimate_is_refused_when_the_particles_move_too_far() -> [] int {
+    // D = 0.1 um^2/s at 0.1 s per frame: 200 nm rms in a 128 nm field: 3
+    test.assert_eq(tracking.check(100000.0, 0.1, 128.0, 40.0), 3);
+    // D = 0.005 um^2/s (5,000 nm^2/s): 44.7 nm per frame, inside the field, but over half of a 40 nm nearest-neighbour distance: 4
+    test.assert_eq(tracking.check(5000.0, 0.1, 128.0, 40.0), 4);
+    // the same with a single particle (no neighbour): linking is not in question, so it is trusted
+    test.assert_eq(tracking.check(5000.0, 0.1, 128.0, 0.0), 0);
+    // a slow one is trusted: 30 nm^2/s at 0.1 s is 3.5 nm per frame
+    test.assert_eq(tracking.check(30.0, 0.1, 128.0, 40.0), 0);
+    return 0;
+}
+
+fn test_no_tracks_and_a_full_store_are_refused() -> [] int {
+    region r {
+        let ty = alloc_slice[r](2048, 0.0);
+        let tx = alloc_slice[r](2048, 0.0);
+        let tlen = alloc_slice[r](32, 0);
+        let st = alloc_slice[r](3, 0);
+        // nothing tracked: 1
+        test.assert_eq(tracking.ensemble(ty, tx, tlen, st, 2.0, 0.1).why, 1);
+        // tracks shorter than five points do not count: 1
+        st[0] = 2; tlen[0] = 4; tlen[1] = 3;
+        test.assert_eq(tracking.ensemble(ty, tx, tlen, st, 2.0, 0.1).why, 1);
+        test.assert(tracking.track_d(ty, tx, tlen, 0, 2.0, 0.1) < 0.0);
+        // a store that overflowed: 2, whatever else is in it
+        st[2] = 1;
+        test.assert_eq(tracking.ensemble(ty, tx, tlen, st, 2.0, 0.1).why, 2);
+    }
+    return 0;
+}

@@ -1,0 +1,268 @@
+edition 5;
+
+module tracking;
+
+// `tracking` -- particle detection, linking and the diffusion coefficient from an HS-AFM movie, ported from nanoindent.video (github.com/alpibrusl/afm-finite-elements, commit c04820a; Python), so the
+// instrument's software stays in cancho. nanoindent is the ORACLE, not a dependency: tests/tracking_test.cho holds numbers its Python computed on the same movie. NOT TESTED ON ANY REAL MOVIE.
+// docs/dynamics.md, D5.
+//
+// STREAMING by design: a cancho region is 64 KiB and a movie does not fit, so a frame is pushed (`push`) as it arrives, as an instrument delivers it, and only the tracks are kept. That is also how a
+// live analysis would run; nanoindent's batch `track` is the same loop over a stored movie.
+//
+// What is ported: `detect_particles` (a threshold of mean + std of the frame, 4-connected components of the pixels above it, the intensity-weighted centroid of each component of at least `min_size`
+// pixels), `track` (greedy nearest-neighbour linking with a largest per-frame displacement; a track that misses a frame ends), `msd` and `diffusion_coefficient` (the mean-square displacement at
+// lags 1 to 4 frames, a straight line through it, D = slope / 4: MSD = 4 D t), `ensemble_diffusion` (tracks of at least 5 points, D >= 0). What is NOT ported: the file readers (.asd, TIFF, JPK),
+// drift correction (an FFT phase correlation), the height time series and event detection, playback.
+//
+// New here, from docs/dynamics.md: a check that the estimate can be trusted. A diffusion coefficient from tracks is biased low when particles leave the field or are mislinked, so `check` applies the
+// two criteria of the design note (stays in the frame; the displacement under half the nearest-neighbour distance) and refuses with a tag.
+//   why: 0 ok; 1 no track long enough to fit; 2 the track store overflowed (too many tracks or a movie longer than max_len frames); 3 the particles move farther than the field in a frame;
+//        4 the particles move more than half their nearest-neighbour distance in a frame (linking is not reliable)
+
+import std.math;
+import membrane;
+
+pub fn max_tracks() -> [] int { return 32; }
+pub fn max_len() -> [] int { return 64; }
+pub fn max_dets() -> [] int { return 32; }
+
+// the threshold nanoindent uses when none is given: the frame's mean plus its (population) standard deviation
+pub fn frame_threshold[&a](frame: &a [float], n: int) -> [] float {
+    var s = 0.0;
+    var i = 0;
+    while i < n { s = s + frame[i]; i = i + 1; }
+    let mean = s / float_of(n);
+    var q = 0.0;
+    i = 0;
+    while i < n { q = q + (frame[i] - mean) * (frame[i] - mean); i = i + 1; }
+    return mean + sqrt(q / float_of(n));
+}
+
+// Detect particles in a size x size frame (row-major): the centroids (y, x), in pixels, of the 4-connected components of the pixels above `threshold` that have at least `min_size` pixels, in raster order
+// of each component's first pixel; at most max_dets. Writes them to cy and cx and returns how many. The label of a component is found by propagating the smallest pixel index through it.
+pub fn detect[&a, &b, &c](frame: &a [float], size: int, threshold: float, min_size: int, cy: &!b [float], cx: &!c [float]) -> [] int {
+    var count = 0;
+    let npx = size * size;
+    region r {
+        let lab = alloc_slice[r](npx, 0);
+        var i = 0;
+        while i < npx {
+            if frame[i] > threshold { lab[i] = i + 1; }
+            i = i + 1;
+        }
+        var changed = 1;
+        while changed == 1 {
+            changed = 0;
+            i = 0;
+            while i < npx {
+                if lab[i] > 0 {
+                    var m = lab[i];
+                    let y = i / size;
+                    let x = i % size;
+                    if y > 0 && lab[i - size] > 0 && lab[i - size] < m { m = lab[i - size]; }
+                    if y < size - 1 && lab[i + size] > 0 && lab[i + size] < m { m = lab[i + size]; }
+                    if x > 0 && lab[i - 1] > 0 && lab[i - 1] < m { m = lab[i - 1]; }
+                    if x < size - 1 && lab[i + 1] > 0 && lab[i + 1] < m { m = lab[i + 1]; }
+                    if m < lab[i] { lab[i] = m; changed = 1; }
+                }
+                i = i + 1;
+            }
+        }
+        // each component's root is the pixel whose label is its own index + 1
+        i = 0;
+        while i < npx {
+            if lab[i] == i + 1 {
+                var cnt = 0;
+                var sf = 0.0;
+                var sy = 0.0;
+                var sx = 0.0;
+                var j = 0;
+                while j < npx {
+                    if lab[j] == i + 1 {
+                        let f = frame[j];
+                        sf = sf + f;
+                        sy = sy + f * float_of(j / size);
+                        sx = sx + f * float_of(j % size);
+                        cnt = cnt + 1;
+                    }
+                    j = j + 1;
+                }
+                if cnt >= min_size && sf > 0.0 && count < max_dets() {
+                    cy[count] = sy / sf;
+                    cx[count] = sx / sf;
+                    count = count + 1;
+                }
+            }
+            i = i + 1;
+        }
+    }
+    return count;
+}
+
+// ---- the tracker's state: caller-allocated slices ----
+//   tt (int) / ty, tx (float): max_tracks * max_len entries, track k's i-th point at k * max_len + i: frame index, y, x (pixels)
+//   tlen (int): max_tracks, the number of points of each track
+//   act (int): max_tracks, the indices of the tracks still alive, in order
+//   st (int): 3 entries: [0] the number of tracks, [1] the number alive, [2] 1 once a store overflowed
+// `cy`, `cx`: max_dets floats of scratch for the detections.
+
+// Push frame `t`: detect, link each alive track to its nearest unused detection within `max_step_px` (a track whose nearest detection is already taken, or too far, ends), and start a track at every
+// detection left over. Returns the number of detections.
+pub fn push[&a, &b, &c, &d, &e, &f, &g, &h, &i, &j](frame: &a [float], size: int, t: int, threshold: float, max_step_px: float, min_size: int,
+                                                      tt: &!b [int], ty: &!c [float], tx: &!d [float], tlen: &!e [int], act: &!f [int], st: &!g [int],
+                                                      cy: &!h [float], cx: &!i [float], used: &!j [int]) -> [] int {
+    let n = detect(frame, size, threshold, min_size, cy, cx);
+    var k = 0;
+    while k < max_dets() { used[k] = 0; k = k + 1; }
+    let ml = max_len();
+    let nact = st[1];
+    var ai = 0;
+    while ai < nact {
+        let tr = act[ai];
+        if n > 0 {
+            let li = tr * ml + tlen[tr] - 1;
+            let ly = ty[li];
+            let lx = tx[li];
+            var best = 0;
+            var bd = sqrt((cy[0] - ly) * (cy[0] - ly) + (cx[0] - lx) * (cx[0] - lx));
+            var q = 1;
+            while q < n {
+                let dq = sqrt((cy[q] - ly) * (cy[q] - ly) + (cx[q] - lx) * (cx[q] - lx));
+                if dq < bd { bd = dq; best = q; }
+                q = q + 1;
+            }
+            if bd <= max_step_px && used[best] == 0 {
+                if tlen[tr] < ml {
+                    let p = tr * ml + tlen[tr];
+                    tt[p] = t; ty[p] = cy[best]; tx[p] = cx[best];
+                    tlen[tr] = tlen[tr] + 1;
+                } else {
+                    st[2] = 1;
+                }
+                used[best] = 1;
+            }
+        }
+        ai = ai + 1;
+    }
+    // the tracks that got a point at this frame stay alive, in order
+    var newn = 0;
+    ai = 0;
+    while ai < nact {
+        let tr = act[ai];
+        if tt[tr * ml + tlen[tr] - 1] == t {
+            act[newn] = tr;
+            newn = newn + 1;
+        }
+        ai = ai + 1;
+    }
+    // every detection not used starts a track
+    var q = 0;
+    while q < n {
+        if used[q] == 0 {
+            if st[0] < max_tracks() && newn < max_tracks() {
+                let tr = st[0];
+                let p = tr * ml;
+                tt[p] = t; ty[p] = cy[q]; tx[p] = cx[q];
+                tlen[tr] = 1;
+                act[newn] = tr;
+                newn = newn + 1;
+                st[0] = st[0] + 1;
+            } else {
+                st[2] = 1;
+            }
+        }
+        q = q + 1;
+    }
+    st[1] = newn;
+    return n;
+}
+
+// ---- the diffusion coefficient ----
+
+// The mean-square displacement (nm^2) of track `tr` at lag `lag` frames, NaN-free: 0 when lag is not under the track's length (the caller checks)
+fn msd_at[&a, &b, &c](ty: &a [float], tx: &b [float], tlen: &c [int], tr: int, lag: int, px_nm: float) -> [] float {
+    let ml = max_len();
+    let n = tlen[tr];
+    var s = 0.0;
+    var i = 0;
+    while i + lag < n {
+        let dy = (ty[tr * ml + i + lag] - ty[tr * ml + i]) * px_nm;
+        let dx = (tx[tr * ml + i + lag] - tx[tr * ml + i]) * px_nm;
+        s = s + dy * dy + dx * dx;
+        i = i + 1;
+    }
+    return s / float_of(n - lag);
+}
+
+// D (nm^2/s) of one track: a straight line through the mean-square displacement at lags 1 to 4 frames against time, D = slope / 4. Needs a track of at least 5 points (nanoindent's min_length);
+// returns -1 for a shorter one. A negative slope is returned as it is (the ensemble drops it, as nanoindent does).
+pub fn track_d[&a, &b, &c](ty: &a [float], tx: &b [float], tlen: &c [int], tr: int, px_nm: float, dt: float) -> [] float {
+    if tlen[tr] < 5 { return 0.0 - 1.0; }
+    var st = 0.0;
+    var sm = 0.0;
+    var lag = 1;
+    while lag <= 4 {
+        st = st + float_of(lag) * dt;
+        sm = sm + msd_at(ty, tx, tlen, tr, lag, px_nm);
+        lag = lag + 1;
+    }
+    let tm = st / 4.0;
+    let mm = sm / 4.0;
+    var sxx = 0.0;
+    var sxy = 0.0;
+    lag = 1;
+    while lag <= 4 {
+        let tl = float_of(lag) * dt - tm;
+        sxx = sxx + tl * tl;
+        sxy = sxy + tl * (msd_at(ty, tx, tlen, tr, lag, px_nm) - mm);
+        lag = lag + 1;
+    }
+    return sxy / sxx / 4.0;
+}
+
+pub struct Ens { why: int, n: int, d: float }
+
+// The ensemble: the mean D (nm^2/s) over the tracks of at least 5 points whose D is not negative (nanoindent's ensemble_diffusion, averaged). why = 1 when there is none, 2 when the store overflowed.
+pub fn ensemble[&a, &b, &c, &d](ty: &a [float], tx: &b [float], tlen: &c [int], st: &d [int], px_nm: float, dt: float) -> [] Ens {
+    var sum = 0.0;
+    var cnt = 0;
+    var tr = 0;
+    while tr < st[0] {
+        let dd = track_d(ty, tx, tlen, tr, px_nm, dt);
+        if dd >= 0.0 { sum = sum + dd; cnt = cnt + 1; }
+        tr = tr + 1;
+    }
+    if st[2] == 1 { return Ens { why: 2, n: cnt, d: 0.0 }; }
+    if cnt == 0 { return Ens { why: 1, n: 0, d: 0.0 }; }
+    return Ens { why: 0, n: cnt, d: sum / float_of(cnt) };
+}
+
+// The mean distance (nm) from each detection to its nearest other detection, for the linking criterion; 0 when there are fewer than two.
+pub fn nearest_neighbour_nm[&a, &b](cy: &a [float], cx: &b [float], n: int, px_nm: float) -> [] float {
+    if n < 2 { return 0.0; }
+    var total = 0.0;
+    var i = 0;
+    while i < n {
+        var best = 1000000000.0;
+        var j = 0;
+        while j < n {
+            if j != i {
+                let d = sqrt((cy[i] - cy[j]) * (cy[i] - cy[j]) + (cx[i] - cx[j]) * (cx[i] - cx[j]));
+                if d < best { best = d; }
+            }
+            j = j + 1;
+        }
+        total = total + best * px_nm;
+        i = i + 1;
+    }
+    return total / float_of(n);
+}
+
+// Can the estimate `d_nm2s` (nm^2/s) be trusted at this frame time, field (nm) and nearest-neighbour distance (nm; 0 = a single particle, so linking is not in question)? 0 yes; 3 the particles move
+// farther than the field in a frame; 4 they move more than half the nearest-neighbour distance (membrane.stays_in_frame, membrane.linkable; docs/dynamics.md).
+pub fn check(d_nm2s: float, dt: float, field_nm: float, nn_nm: float) -> [] int {
+    let d_um2s = d_nm2s / 1000000.0;
+    if membrane.stays_in_frame(d_um2s, dt, field_nm) == 0 { return 3; }
+    if nn_nm > 0.0 && membrane.linkable(d_um2s, dt, nn_nm) == 0 { return 4; }
+    return 0;
+}

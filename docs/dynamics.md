@@ -158,6 +158,42 @@ Issue #82. The instrument's software stays in cancho, and the force-curve analys
 
 **Still design only (D6, and sources not obtained):** viscoelastic relaxation and dynamic force spectroscopy. The sources for the standard linear solid (the RSC review: HTTP 403) and for the Bell-Evans formula (PMC and the arXiv PDF: not readable by the fetch tool) were **not read**; the formula in this note is from a search result that quotes Evans. The arXiv paper on dynamic AFM viscoelasticity that was read uses a different model (a moving-surface piecewise-linear one) and gives no Kelvin-Voigt or Zener equations.
 
+## What D5 found, first slice: the tracking port from nanoindent (2026-11-09; predictions, not measurements)
+
+Issue #81. Same method as D6: a port with nanoindent as the oracle (`nanoindent.video`, commit c04820a): `sim/tracking.cho`, `tests/tracking_test.cho`.
+
+**Ported:** particle detection (a threshold of mean + standard deviation of the frame, 4-connected components, the intensity-weighted centroid of each component of at least `min_size` pixels), greedy nearest-neighbour linking with a largest per-frame displacement, the mean-square displacement at lags 1 to 4 frames and its straight-line fit (`MSD = 4 D t`), and the ensemble mean over tracks of at least five points. **Not ported:** the file readers (.asd, TIFF, JPK), drift correction (an FFT phase correlation), the height time series and event detection, playback. **Streaming by design:** a cancho region holds 64 KiB, so a movie does not fit; a frame is pushed as it arrives and only the tracks are kept, which is also how a live instrument would run the analysis.
+
+**New, not in nanoindent:** `tracking.check` applies the two criteria of this note to an estimate (the particles stay in the field; the displacement per frame is under half the nearest-neighbour distance) and refuses with a tag: 3 they move farther than the field in a frame, 4 they move more than half the nearest-neighbour distance. Other tags: 1 no track long enough, 2 the track store overflowed.
+
+**Parity with the oracle** (five tests):
+
+| Check | Oracle | cancho |
+|---|---|---|
+| a deterministic movie of four particles, 40 frames: first-frame centroids and their raster order | (20, 20), (30, 50), (50, 25), (50, 50) px | equal to 1e-4 |
+| tracks and per-track D | 4 tracks of 40 points; 30.564, 29.772, 28.035, 30.515 nm^2/s | equal to 1e-6 |
+| mean D | 29.7213 nm^2/s | equal to 1e-6 |
+| the D1 movie (six particles diffusing with D = 30 nm^2/s, 60 frames of 0.0968 s) | 30.36 nm^2/s from 7 tracks of at least 5 points | within 0.01 |
+
+* **D recovered from the D1 movie: 30.36 against 30 put in (1.2% high)**, by both the oracle and the port. One movie, one realisation: the statistical error of such an estimate is of the order of 10 to 15%, so this says the chain (walk, rendering, detection, linking, fit) is consistent, not that it is accurate to 1%. The acceptance was 30%.
+* **Six particles gave eleven tracks** (lengths 60, 50, 60, 11, 60, 60, 36 and four of one point): nanoindent's linking ends a track at a missed detection and starts another, and tracks under five points are not used. Why the detections were missed was not investigated. Seven tracks were used.
+* **The oracle's own weakness, from its README:** on its synthetic movie it recovers D = 170 against 200 nm^2/s, and says centroid tracking of overlapping blobs biases D low. The port inherits that, and the new check does not catch overlap (it catches speed, not blob size).
+* **Refusals are tested with tags**, not by tracking real failure: `check` refuses D = 0.1 um^2/s at 0.1 s in a 128 nm field (3), and D = 0.005 um^2/s against a 40 nm nearest-neighbour distance (4); and trusts the same D for a single particle, where linking is not in question.
+
+**Experimental data found for the lipid side (read in full text, not implemented):** Khadka, Timsina, Rowe, O'Dell, Mainali, *Mechanical properties of the high cholesterol-containing membrane: An AFM study*, BBA Biomembranes 1863:183625 (2021), PMC8154731. **This is not Redondo-Morata's work** (a search had listed it next to hers). Supported POPC/cholesterol bilayers on mica, room temperature, a DNP-S10 lever of 0.35 N/m, a tip of about 32 nm radius measured on titanium, 200 nm/s, 10 x 10 force curves per 5 x 5 um region:
+
+| Chol/POPC (mol%) | breakthrough force (nN) | K_A (mN/m) | bilayer thickness by imaging (nm) |
+|---|---|---|---|
+| 0 | 5.26 +- 0.28 | 272 +- 69 | 6.24 +- 0.13 |
+| 1 (50) | 9.25 +- 0.57 | 524 +- 104 | 6.64 +- 0.19 |
+| 1.5 (60) | 4.30 +- 0.60 and 11.13 +- 0.77 (two punctures) | 631 +- 116 | 6.71 +- 0.23 |
+| 2.5 (about 71, my arithmetic) | 4.37 +- 0.24 and 11.55 +- 0.95 | 492 +- 76 | 7.68 +- 0.44 |
+| 3.0 (75) | 6.34 +- 1.20 and 12.74 +- 1.23 | 393 +- 138 | 8.81 +- 0.25 |
+
+Their model for K_A is the same law as the Das/Connell form ported in D6 (`F = pi K_A R ((D - s) / s)^2` with `s` the tip-mica separation and `D` the bilayer plus water-layer thickness, which equals `pi K_A R z0^2 / (D - z0)^2` for `z0 = D - s`), fitted over the elastic region up to 80% of the breakthrough force, for the first puncture only. That makes this table a **target for D3 and D6** (a twin that produces bilayers whose analysis returns these K_A and breakthrough forces), and an experiment the ported `slb_curve` could be run against if the curves were available. Not in the paper: Young's modulus, a loading rate in N/s, any temperature dependence. Their thickness from force curves includes the water layer (5.8 to 10.6 nm), unlike the imaging one.
+
+**Not obtained:** Redondo-Morata's own papers. The HAL record (hal-02198128) and the Langmuir 2012 article were blocked or not retrievable; nothing of hers is in this note as a result.
+
 ## What stays out of scope, and why
 
 * **Real molecular dynamics, hydrodynamic interactions between molecules, crowding, and anything that depends on a force field.** The twin's particles are shapes that move.
