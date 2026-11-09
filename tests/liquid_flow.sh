@@ -36,4 +36,11 @@ grep -q 'force_pn_max' "$W/s0.json" && { echo "FAILED: force reported without a 
 [ "$(head -c 4 "$W/f.png" | tail -c 3)" = "PNG" ] || { echo "FAILED: force map is not a PNG"; exit 1; }
 cmp -s "$W/f.png" "$W/f0.png" && { echo "FAILED: force map ignores the force"; exit 1; } || true
 echo "force next to the image in the report: ok"
+# the Z range (docs/liquid.md, "What the Z range found"): at the twin's 10 nm range a 3 nm step is read within 2%, a 20 nm step is not (the loop runs out of range)
+step_of() { sed 's/.*"step_pm":\([0-9.]*\).*/\1/' "$1"; }
+"$W/scan_twin" 2 0 500 5 0 0 0 0 0 0 30 0 0 15 0 100 0 100 0 0 3000 > "$W/z3.json"
+"$W/scan_twin" 2 0 500 5 0 0 0 0 0 0 30 0 0 15 0 100 0 100 0 0 20000 > "$W/z20.json"
+awk -v a="$(step_of "$W/z3.json")" 'BEGIN { exit !(a > 2940 && a < 3060) }' || { echo "FAILED: a 3 nm step not read within 2%"; exit 1; }
+awk -v a="$(step_of "$W/z20.json")" 'BEGIN { exit !(a < 18000) }' || { echo "FAILED: a 20 nm step was read in full at a 10 nm Z range (the claim of docs/liquid.md is false)"; exit 1; }
+echo "Z range: a 3 nm step read within 2%, a 20 nm step not: ok"
 echo "liquid flow: passed"

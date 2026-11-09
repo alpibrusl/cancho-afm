@@ -321,7 +321,7 @@ fn scan_out[&h, &a](heap: &!h Heap, o: buffer.Buffer, pic: &a [int], mode: int, 
     return b;
 }
 
-// the profile: argument 1 (the scanner, argument 2, and for the high-speed profile the cantilever's resonance in kHz, argument 3, the same way; default 500; argument 4 = 1 prints the levelling check, 2 the metrics check, 5 the console's scan.json, 6 its levelled image as a PNG, 7 the raw trace as a PNG, 8 the force map as a PNG (needs a stiffness, arguments 14 to 16), 4 the drift check (arguments 5 and 6: the sample's drift along x in milli-pixels per tick and in height in milli-pm per tick; 7 to 10: a tilt along x in pm per pixel, a tilt along y in pm per line, a bow in pm and line offsets of up to that many pm), of docs/image-processing.md instead of the pixels), `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md), `2` the same lever in liquid (docs/liquid.md, S9.6: the optical lever is always on, its defaults a sum of 2,000 counts and no noise, and the run reads its light); for profiles 1 and 2, arguments 11 to 13 make it a liquid lever (docs/liquid.md, S9.2): its Q in tenths (30 = 3.0; default 50), a forest of fluid-cell peaks whose nearest is this many percent of the lever's height (0 = none), and their spacing in kHz; arguments 14 to 16: the lever's stiffness in hundredths of N/m (15 = 0.15; 0 = force not modelled), the soft sample's stiffness in hundredths of N/m (0 = rigid) and the damage threshold in pN (docs/liquid.md, S9.3), which add a force line to the output; arguments 17 to 20 turn on the optical lever (docs/liquid.md, S9.4): its noise in ADC counts, the share of light reaching the photodiode in percent (default 100), the deflection's DC wander in thousandths of a count per detector window and the light lost in millionths per window
+// the profile: argument 1 (the scanner, argument 2, and for the high-speed profile the cantilever's resonance in kHz, argument 3, the same way; default 500; argument 4 = 1 prints the levelling check, 2 the metrics check, 5 the console's scan.json, 6 its levelled image as a PNG, 7 the raw trace as a PNG, 8 the force map as a PNG (needs a stiffness, arguments 14 to 16), 4 the drift check (arguments 5 and 6: the sample's drift along x in milli-pixels per tick and in height in milli-pm per tick; 7 to 10: a tilt along x in pm per pixel, a tilt along y in pm per line, a bow in pm and line offsets of up to that many pm), of docs/image-processing.md instead of the pixels), `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md), `2` the same lever in liquid (docs/liquid.md, S9.6: the optical lever is always on, its defaults a sum of 2,000 counts and no noise, and the run reads its light); for profiles 1 and 2, arguments 11 to 13 make it a liquid lever (docs/liquid.md, S9.2): its Q in tenths (30 = 3.0; default 50), a forest of fluid-cell peaks whose nearest is this many percent of the lever's height (0 = none), and their spacing in kHz; arguments 14 to 16: the lever's stiffness in hundredths of N/m (15 = 0.15; 0 = force not modelled), the soft sample's stiffness in hundredths of N/m (0 = rigid) and the damage threshold in pN (docs/liquid.md, S9.3), which add a force line to the output; arguments 17 to 20 turn on the optical lever (docs/liquid.md, S9.4): its noise in ADC counts, the share of light reaching the photodiode in percent (default 100), the deflection's DC wander in thousandths of a count per detector window and the light lost in millionths per window; argument 21: the made-up sample's step height in pm (default 150; its particles are 4 times that, docs/liquid.md S9.1 Z range)
 fn number_of[&t](text: &t [byte]) -> [] int {
     var n = 0;
     var i = 0;
@@ -357,6 +357,7 @@ fn main(world: World) -> [] int {
     var oa = 100;
     var ow = 0;
     var ol = 0;
+    var stp = 150;
     borrow args as &g in {
         if arg_count(g) > 1 { prof = number_of(arg(g, 1)); }
         if arg_count(g) > 2 { scn = number_of(arg(g, 2)); }
@@ -378,6 +379,7 @@ fn main(world: World) -> [] int {
         if arg_count(g) > 18 { oa = number_of(arg(g, 18)); }
         if arg_count(g) > 19 { ow = number_of(arg(g, 19)); }
         if arg_count(g) > 20 { ol = number_of(arg(g, 20)); }
+        if arg_count(g) > 21 { stp = number_of(arg(g, 21)); }
     }
     release(args); release(net); release(clock); release(signals); release(exec);
     borrow mut heap as &!h in {
@@ -389,7 +391,7 @@ fn main(world: World) -> [] int {
             board.reset(rf, st, fl);
             if prof >= 1 { var fc = 500000.0; if fk > 0 { fc = 1000.0 * float_of(fk); } var qq = 5.0; if lq > 0 { qq = float_of(lq) / 10.0; } board.set_plant(fl, fc, qq, 2000.0, 2000.0, 100.0, 1200.0, 2.0); board.set_forest(fl, float_of(fr) / 100.0, 1000.0 * float_of(fsp), 15.0, 3); board.set_soft(fl, float_of(lk) / 100.0, float_of(lks) / 100.0, float_of(lth)); }
             else { board.set_plant(fl, 32781.4, 500.0, 2000.0, 2000.0, 100.0, 1200.0, 2.0); }
-            fl[10] = 150.0;
+            fl[10] = float_of(stp);
             if on > 0 || oa != 100 || ow > 0 || ol > 0 || prof == 2 { board.set_optics(fl, 2000.0, float_of(oa) / 100.0, float_of(on), float_of(ow) / 1000.0, float_of(ol) / 1000000.0); }
             // argument 2, the Z scanner: 0 ideal, 1 a good small stack (100 kHz, Q 3), 2 a slow one (20 kHz, Q 10), 3 the good one behind a 20 pm/us amplifier, 4 to 6 a Q = 3 stack at 30, 50, 70 kHz (docs/high-speed.md, H2)
             if scn == 1 { board.set_scanner(fl, 100000.0, 3.0, 0.0); }
