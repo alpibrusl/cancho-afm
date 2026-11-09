@@ -58,4 +58,18 @@ b18=$(for s in 150 200; do lag_rms g 0 $s; done | sort -n | head -n 1)
 b9=$(for s in 150 200; do lag_rms "$W/tw6m1" 1 0 500 0 0 0 0 0 0 0 1000 0 0 0 0 0 0 100 0 0 1000 190 0 $s; done | sort -n | head -n 1)
 awk -v a="$b18" -v b="$b9" 'BEGIN { exit !(b > 0.8 * a) }' || { echo "FAILED: a 9-sample window reached $b9 pm against $a pm for 18 (HS4 is out of date: the window may be the limit after all)"; exit 1; }
 echo "HS4: doubling the gains cuts the lag $a1 -> $a2 pm (ideal scanner) but $s1 -> $s2 pm with a 50 kHz one; a 9-sample window ($b9 pm) is no better than 18 ($b18 pm): ok"
+# HS7 (docs/high-speed.md): a gain rule that knows the Z scanner. Q 100 damped to Q 5, 1,000 pm step; the last argument tells the host the twin's scanner resonance (1) or not (0).
+h() { "$1" 1 "$2" 500 0 0 0 0 0 0 0 1000 0 0 0 0 0 0 100 0 0 1000 190 0 0 "$3"; }   # $1 binary, $2 Z scanner (4 = 30 kHz, 1 = 100 kHz), $3 known
+# (a) a 30 kHz scanner at 10 steps per pixel: the chosen gains ring (lag about 920 pm); the scaled ones do not
+k0=$(lag_rms h "$W/tw10" 4 0); k1=$(lag_rms h "$W/tw10" 4 1)
+awk -v a="$k0" -v b="$k1" 'BEGIN { exit !(b < 0.5 * a) }' || { echo "FAILED: a 30 kHz scanner: known $k1 pm against not known $k0 pm (HS7 is out of date)"; exit 1; }
+# (b) a 100 kHz scanner at 3 steps per pixel: the chosen gains are timid (about 300 pm); the scaled ones are not
+f0=$(lag_rms h "$W/tw3" 1 0); f1=$(lag_rms h "$W/tw3" 1 1)
+awk -v a="$f0" -v b="$f1" 'BEGIN { exit !(b < 0.5 * a) }' || { echo "FAILED: a 100 kHz scanner: known $f1 pm against not known $f0 pm (HS7 is out of date)"; exit 1; }
+# (c) an ideal scanner is not known to the host either way: the same scan
+[ "$(lag_rms h "$W/tw3" 0 0)" = "$(lag_rms h "$W/tw3" 0 1)" ] || { echo "FAILED: telling the host about an ideal scanner changed the scan"; exit 1; }
+# (d) a pixel shorter than 0.7 of a 30 kHz scanner's period (3 steps) is refused with 36 before the approach
+h "$W/tw3" 4 1 | head -n 1 | grep -qF 'failure code 36,' || { echo "FAILED: 3 steps per pixel with a 30 kHz scanner was not refused with 36"; h "$W/tw3" 4 1 | head -n 1; exit 1; }
+h "$W/tw3" 4 0 | head -n 1 | grep -qF 'failure code 0,' || { echo "FAILED: refused although the scanner was not known"; exit 1; }
+echo "HS7: a known scanner cuts the lag $k0 -> $k1 pm (30 kHz) and $f0 -> $f1 pm (100 kHz); 3 steps with 30 kHz refused with 36: ok"
 echo "hs rate: passed"

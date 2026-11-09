@@ -294,17 +294,21 @@ pub fn consume[&a, &b, &c, &d](ss: &!a [int], sf: &!b [float], out: &c [int], im
                 }
                 let g = tune.choose(t, t.peak / free_pm(), win_s(ss), float_of(setpoint_pct(p)) / 100.0);
                 ss[11] = g.shift; ss[13] = g.kp; ss[14] = g.ki; sf[3] = g.alpha;
-                if sf[6] > 0.0 {
-                    // sf[6]: a scale on the chosen loop gains, in percent (scan_twin argument 24; 0 = as chosen). A knob for measuring, not a setting: docs/high-speed.md, HS4 used it to ask whether better gains would let a shorter window win.
-                    var kp2 = truncate(float_of(ss[13]) * sf[6] / 100.0);
-                    var ki2 = truncate(float_of(ss[14]) * sf[6] / 100.0);
+                // sf[7]: the Z scanner's resonance in Hz, as the host was told it (scan_twin argument 25; 0 = not known). Known: the gains are scaled by tune.scanner_scale, and a pixel shorter than 0.7 of
+                // the scanner's period is refused with 36 before the approach (docs/high-speed.md, HS7). sf[6]: a further scale in percent (scan_twin argument 24; 0 = none), a knob for measuring.
+                var sc = tune.scanner_scale(win_s(ss), sf[7]);
+                if sf[6] > 0.0 { sc = sc * sf[6] / 100.0; }
+                if sc != 1.0 {
+                    var kp2 = truncate(float_of(ss[13]) * sc);
+                    var ki2 = truncate(float_of(ss[14]) * sc);
                     if kp2 < 1 { kp2 = 1; }
                     if kp2 > 65535 { kp2 = 65535; }
                     if ki2 < 1 { ki2 = 1; }
                     if ki2 > 65535 { ki2 = 65535; }
                     ss[13] = kp2; ss[14] = ki2;
                 }
-                ss[0] = 2;
+                if fast(p) == 1 && tune.pixel_reachable(pixdiv(p), win_s(ss), sf[7]) == 0 { ss[2] = 36; ss[0] = 98; }
+                else { ss[0] = 2; }
             }
         }
     }
