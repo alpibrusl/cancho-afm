@@ -8,6 +8,7 @@ import pid;
 import raster;
 import raster_sine;
 import plant;
+import qcontrol;
 
 // `board` -- a software twin of the whole instrument: the register interface of `afm_top` (docs/registers.md) in front of the detector, the
 // Z loop with its limit and deadman, the raster, and a model of the fork, the tip and a surface. A host program that talks to the real board
@@ -91,6 +92,14 @@ pub fn reset[&a, &b, &c](rf: &!a [int], st: &!b [int], fl: &!c [float]) -> [] in
 // The sample: its fork, its tip's contact range, a grating of `height` pm and `period` X-DAC codes (0 for none), ADC noise in counts.
 pub fn set_plant[&c](fl: &!c [float], f0: float, q: float, a0: float, contact_range: float, height: float, period: float, noise: float) -> [] int {
     fl[1] = f0; fl[2] = q; fl[3] = a0; fl[4] = contact_range; fl[5] = height; fl[6] = period; fl[7] = noise; fl[0] = a0;
+    return 0;
+}
+
+// Q control (sim/qcontrol.cho, docs/high-speed.md HS3): damp the lever with a feedback gain g and a phase error (degrees). Call after set_plant. Returns 1 and leaves the lever alone when
+// the feedback would not be stable; 0 when it took. The free amplitude is kept (the drive is assumed raised to hold it).
+pub fn set_qcontrol[&c](fl: &!c [float], g: float, phase_deg: float) -> [] int {
+    if qcontrol.stable(g, phase_deg) == 0 { return 1; }
+    fl[2] = qcontrol.q_eff(fl[2], g, phase_deg);
     return 0;
 }
 

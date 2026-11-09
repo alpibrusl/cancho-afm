@@ -61,11 +61,19 @@ pub fn gap_max() -> [] int { return 12000; }                     // the farthest
 pub fn step_budget() -> [] int { return 100000; }                // session steps a host allows a run (each is one script exchange; the time per step on a real link is not measured); the hosts' loops and approach.check_budget use it
 pub fn pm_per_step() -> [] int { return 198; }                   // ASSUMED: a 0.635 mm lead screw, 1.8 degrees, 1/16 microstepping; calibrate before trusting
 pub fn sweep_points() -> [] int { return 63; }
+pub fn coarse_step() -> [] float { return 12700.0; }                  // the fast profiles' coarse sweep step, Hz (sweep_f)
+// The frequency of point i of the sweep in use. The fork has one pass. The fast profiles have two: a coarse one (sweep_f), and, once it has found a resonance, a fine one centred on it
+// with a step of f0 / (8 Q) (eight points across the line, so a Q = 100 line of 5 kHz is not stepped over by the coarse pass's 12.7 kHz); ss[26] = 1 once the fine pass is set, sf[4] its
+// start and sf[5] its step.
+pub fn sweep_hz[&a, &b](p: int, ss: &a [int], sf: &b [float], i: int) -> [] float {
+    if ss[26] == 1 { return sf[4] + sf[5] * float_of(i); }
+    return sweep_f(p, i);
+}
 pub fn sweep_f(p: int, i: int) -> [] float {
-    if fast(p) == 1 { return 100000.0 + 12700.0 * float_of(i); }      // hs: 100 to 899 kHz in 12.7 kHz steps (a Q = 5 line at 500 kHz is 100 kHz wide: eight points; the fork's sweep is about eight line widths too)
+    if fast(p) == 1 { return 100000.0 + coarse_step() * float_of(i); }      // hs: 100 to 899 kHz in 12.7 kHz steps (a Q = 5 line at 500 kHz is 100 kHz wide: eight points; the fork's sweep is about eight line widths too)
     return 32520.0 + 8.0 * float_of(i);                          // fork: +-250 Hz about 32,768 Hz in 8 Hz steps
 }
-pub fn settle_clocks(p: int) -> [] int { if fast(p) == 1 { return 1000; } return 540000; }   // fork: 20 ms, four time constants of a Q = 500 fork (a Q = 5,000 one needs ten times as long); hs: 37 us, eleven of a Q = 5 cantilever at 500 kHz
+pub fn settle_clocks(p: int) -> [] int { if p == 1 { return 17000; } if fast(p) == 1 { return 1000; } return 540000; }   // fork: 20 ms, four time constants of a Q = 500 fork (a Q = 5,000 one needs ten times as long); profile 1 (air): 630 us, five time constants of a Q = 200 cantilever at 500 kHz (tau = Q / (pi f0) = 127 us); profile 2 (liquid, Q about 3): 37 us, eleven of a Q = 5 one. Profile 1 had the short one too, and a Q = 100 air cantilever (tau 64 us) was refused with code 21 (docs/high-speed.md, HS1, HS3): the sweep read each point before the lever had settled
 pub fn tuning_word(p: int, f: float) -> [] int { return truncate(f / fs(p) * 4294967296.0 + 0.5); }
 pub fn npix() -> [] int { return 12; }
 pub fn nlines() -> [] int { return 3; }
@@ -114,7 +122,7 @@ pub fn build[&a, &b, &c](ss: &a [int], sf: &b [float], sc: &!c [int]) -> [] int 
         n = script.write(sc, n, regs.man_z(), zmax() / 16);            // fully retracted, far from the surface
         var i = 0;
         while i < sweep_points() {
-            n = script.write(sc, n, regs.tuning(), tuning_word(p, sweep_f(p, i)));
+            n = script.write(sc, n, regs.tuning(), tuning_word(p, sweep_hz(p, ss, sf, i)));
             n = script.wait(sc, n, settle_clocks(p));
             n = script.read(sc, n, regs.amp());
             i = i + 1;
@@ -261,13 +269,22 @@ pub fn consume[&a, &b, &c, &d](ss: &!a [int], sf: &!b [float], out: &c [int], im
             let d = alloc_slice[r](63, 0.0);
             var i = 0;
             while i < sweep_points() {
-                f[i] = sweep_f(p, i);
+                f[i] = sweep_hz(p, ss, sf, i);
                 d[i] = float_of(out[1 + i]);
                 i = i + 1;
             }
             let t = tune.analyse(f, d, sweep_points());
             if t.ok == 0 {
                 ss[2] = 20 + t.why; ss[0] = 98;
+            } else if fast(p) == 1 && ss[26] == 0 && t.q > 1.0 && t.q < 100000.0 && t.f0 / t.q < 4.0 * coarse_step() {
+                // the coarse pass found a line narrower than four of its steps (a Q over about 10 at 500 kHz): sweep it again, finely. Its Q is only a first estimate, read low when the line is
+                // narrower than the step. A wide line (a liquid cantilever) keeps the coarse result: a fine pass about it would start below zero (found: Q 3 gave a negative frequency and a trap).
+                var q1 = t.q;
+                if q1 < 1.0 { q1 = 1.0; }
+                sf[5] = t.f0 / (8.0 * q1);
+                sf[4] = t.f0 - 31.0 * sf[5];
+                if sf[4] < 50000.0 { sf[4] = 50000.0; }          // never below 50 kHz, whatever the estimate
+                ss[26] = 1;
             } else {
                 sf[0] = t.f0; sf[1] = t.q; sf[2] = t.peak;
                 // the plant gain k (figure counts per pm) assumes the free amplitude above; with no calibration it is the one number the program takes on trust

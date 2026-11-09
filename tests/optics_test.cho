@@ -118,9 +118,13 @@ fn test_a_dark_photodiode_is_refused_as_no_resonance() -> [] int {
 fn test_a_wandering_baseline_is_refused_not_scanned() -> [] int {
     region r {
         let got = alloc_slice[r](8, 0);
-        test.assert_eq(run_optics(got, 0.0, 1.0, 0.2, 0.0), 43);
+        test.assert_eq(run_optics(got, 0.0, 1.0, 0.1, 0.0), 43);
         test.assert_eq(got[0], 98);
         test.assert_eq(got[1], 0);
+        // twice that wander is refused earlier, by the tune, as an ambiguous peak (25): profile 1 now settles 630 us per sweep point (HS3), so the same drift per window adds up to 17 times as much over the sweep
+        let twice = alloc_slice[r](8, 0);
+        test.assert_eq(run_optics(twice, 0.0, 1.0, 0.2, 0.0), 25);
+        test.assert_eq(twice[0], 98);
         // a gentle one (0.002 counts a window) runs
         let gentle = alloc_slice[r](8, 0);
         test.assert_eq(run_optics(gentle, 0.0, 1.0, 0.002, 0.0), 0);
