@@ -9,6 +9,7 @@ import raster;
 import raster_sine;
 import plant;
 import qcontrol;
+import membrane;
 
 // `board` -- a software twin of the whole instrument: the register interface of `afm_top` (docs/registers.md) in front of the detector, the
 // Z loop with its limit and deadman, the raster, and a model of the fork, the tip and a surface. A host program that talks to the real board
@@ -217,12 +218,35 @@ fn surface0[&a, &b, &c](rf: &a [int], st: &b [int], fl: &c [float]) -> [] float 
     let y = float_of(st[20]);
     var h = g;
     if y >= 3500.0 { h = h + fl[10]; }
+    if fl[46] > 1.5 {
+        // diffusing particles (docs/dynamics.md, D1): the three particles of the static sample, at positions the walk has moved them to; refreshed once per detector window (refresh_diffusion)
+        return h + bump(x, y, fl[48], fl[49], 4.0 * fl[10]) + bump(x, y, fl[50], fl[51], 3.0 * fl[10]) + bump(x, y, fl[52], fl[53], 4.0 * fl[10]);
+    }
     if fl[46] > 0.5 {
         // a sample that changes in time (docs/high-speed.md, the dynamic sample): the three fixed particles are replaced by four things that move or grow
         return h + dynamic(x, y, fl[10], fl[47] + fl[22] * float_of(rf[5]) * float_of(sample_clocks(rf)) / 27000000.0);
     }
     h = h + bump(x, y, 2200.0, 2300.0, 4.0 * fl[10]) + bump(x, y, 4200.0, 2800.0, 3.0 * fl[10]) + bump(x, y, 3300.0, 4300.0, 4.0 * fl[10]);
     return h;
+}
+
+// Diffusing particles (docs/dynamics.md, D1). The scan is 64 pixels over 100 nm: 1.5625 nm per pixel, 100 X/Y codes per pixel, so 64 codes per nm. The three particles start where the
+// static sample has them and each axis of each particle is its own stateless walk (membrane.walk) of coefficient D (um^2/s, fl[54]). The positions are kept in fl[48] to fl[53]
+// and recomputed at each detector window from the time fl[47] + fl[22] * window time: they cannot be recomputed at every ADC sample (a walk is 24 sines per axis). The caller allocates
+// at least 56 floats.
+pub fn set_diffusion[&a, &c](rf: &a [int], fl: &!c [float], d_um2s: float, t0: float) -> [] int {
+    fl[46] = 2.0; fl[47] = t0; fl[54] = d_um2s;
+    refresh_diffusion(rf, fl);
+    return 0;
+}
+
+pub fn refresh_diffusion[&a, &c](rf: &a [int], fl: &!c [float]) -> [] int {
+    if fl[46] < 1.5 { return 0; }
+    let t = fl[47] + fl[22] * float_of(rf[5]) * float_of(sample_clocks(rf)) / 27000000.0;
+    fl[48] = 2200.0 + 64.0 * membrane.walk(fl[54], 0, t); fl[49] = 2300.0 + 64.0 * membrane.walk(fl[54], 1, t);
+    fl[50] = 4200.0 + 64.0 * membrane.walk(fl[54], 2, t); fl[51] = 2800.0 + 64.0 * membrane.walk(fl[54], 3, t);
+    fl[52] = 3300.0 + 64.0 * membrane.walk(fl[54], 4, t); fl[53] = 4300.0 + 64.0 * membrane.walk(fl[54], 5, t);
+    return 0;
 }
 
 // A float x modulo p, for x >= 0.
@@ -455,6 +479,7 @@ fn step_one[&a, &b, &c](rf: &!a [int], st: &!b [int], fl: &!c [float]) -> [] int
             st[7] = ps.integ; st[8] = ps.prev; st[9] = ps.z;
             if scan == 1 {
                 fl[22] = fl[22] + 1.0;
+                if fl[46] > 1.5 { refresh_diffusion(rf, fl); }
                 var pd = rf[27];
                 if pd < 1 { pd = 1; }
                 if st[22] + 1 >= pd {

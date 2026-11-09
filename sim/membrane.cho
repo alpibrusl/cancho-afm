@@ -1,0 +1,85 @@
+edition 5;
+
+module membrane;
+
+// `membrane` -- the diffusion of molecules in a lipid membrane, as the simplest model that can be checked against published numbers (docs/dynamics.md, D1). NOT A MEASUREMENT OF ANY MEMBRANE.
+//
+//   * `sd_diffusion`: the Saffman-Delbrueck translational diffusion coefficient of a cylindrical inclusion of radius a in a membrane (thickness h, viscosity eta_m; the 2D viscosity eta_m h
+//     is the one argument) surrounded by a fluid of viscosity eta:
+//         D = kT / (4 pi eta_m h) * [ ln(l / a) - gamma ],     l = eta_m h / eta,    gamma = 0.5772...
+//     No-slip at the membrane/fluid boundary; valid for a below the Saffman-Delbrueck length L_sd = l / 2. (Demery & Lacoste, arXiv 1810.09910, Eq. 1; the Wikipedia article on the model, which
+//     writes it as ln(2 L_sd / a) - gamma. Experiments contest its logarithmic size dependence: docs/dynamics.md.)
+//   * the two tracking criteria of docs/dynamics.md: the molecule stays in the frame (Casuso et al. 2009: <r^2> = 4 D t against the field), and it can be linked from frame to frame among others
+//     (the displacement under half the nearest-neighbour distance).
+//   * `walk`: a stateless random walk, the position at any time t with no memory of the path, for a board that is asked for the surface at every sample. A sum of sinusoids with fixed
+//     pseudo-random phases on log-spaced frequencies, amplitudes chosen so the mean-square increment along one axis is 2 D tau for tau between about 10 ms and 2 s
+//     (a_k^2 = 4 D ln(r) / (pi w_k) for frequencies w_k with ratio r: the discrete form of (2/pi) integral S(w)(1 - cos w tau) dw with S = 2 D / w^2). Not a Brownian path in the strict sense
+//     (it is periodic over a very long time and Gaussian only by the central limit theorem over its 24 components); its mean-square displacement is what is checked.
+
+import std.math;
+
+pub fn boltzmann() -> [] float { return 1.380649e-23; }
+pub fn euler_gamma() -> [] float { return 0.5772156649015329; }
+
+// 1 when the Saffman-Delbrueck form applies: positive inputs and a below L_sd = eta_m_h / (2 eta)
+pub fn sd_valid(eta_m_h: float, a: float, eta: float) -> [] int {
+    if eta_m_h <= 0.0 || a <= 0.0 || eta <= 0.0 { return 0; }
+    if a >= eta_m_h / (2.0 * eta) { return 0; }
+    return 1;
+}
+
+// D in um^2/s; temp_k in kelvin, eta_m_h in Pa s m, a in m, eta in Pa s. 0 when the form does not apply (sd_valid is 0): the caller refuses, as a negative or zero D is no diffusion.
+pub fn sd_diffusion(temp_k: float, eta_m_h: float, a: float, eta: float) -> [] float {
+    if sd_valid(eta_m_h, a, eta) == 0 { return 0.0; }
+    let l = eta_m_h / eta;
+    let d = boltzmann() * temp_k / (4.0 * 3.141592653589793 * eta_m_h) * (math.log(l / a) - euler_gamma());
+    return d * 1000000000000.0;
+}
+
+// the root-mean-square 2D displacement in one frame, nm, for D in um^2/s and a frame time in s: sqrt(4 D dt)
+pub fn rms_nm(d_um2s: float, dt_s: float) -> [] float {
+    return sqrt(4.0 * d_um2s * 1000000.0 * dt_s);
+}
+
+// 1 when the molecule stays inside a field of `field_nm` in one frame (Casuso's criterion: the displacement under the field)
+pub fn stays_in_frame(d_um2s: float, dt_s: float, field_nm: float) -> [] int {
+    if rms_nm(d_um2s, dt_s) < field_nm { return 1; }
+    return 0;
+}
+
+// 1 when it can be linked from frame to frame among others whose nearest neighbour is `nn_nm` away: the displacement under half of it (a proposal from the particle-tracking literature, not read)
+pub fn linkable(d_um2s: float, dt_s: float, nn_nm: float) -> [] int {
+    if rms_nm(d_um2s, dt_s) < 0.5 * nn_nm { return 1; }
+    return 0;
+}
+
+// ---- the stateless walk ----
+pub fn components() -> [] int { return 24; }
+
+// the lowest angular frequency, rad/s (0.05 Hz) and the ratio between neighbours ((1000 Hz / 0.05 Hz) ^ (1 / 23))
+fn w_min() -> [] float { return 0.3141592653589793; }
+fn w_ratio() -> [] float { return 1.5382; }
+
+// a pseudo-random phase, radians, from an index (a fixed hash: the same index always gives the same phase)
+fn phase(idx: int) -> [] float {
+    let s = math.fabs(math.sin(float_of(idx) * 12.9898 + 78.233)) * 43758.5453;
+    return 6.283185307179586 * (s - math.floor(s));
+}
+
+// The displacement, nm, along one axis at time t (s) of the walk number `id` (each id its own phases, so each axis of each particle is independent), for D in um^2/s. It is zero at t = 0
+// (each component is measured from its own value there: without that the walk starts at a random offset, of about 50 nm at D = 0.001 um^2/s, found by the board test); the increments, which are
+// what the mean-square displacement is made of, are the same either way.
+pub fn walk(d_um2s: float, id: int, t: float) -> [] float {
+    let lnr = math.log(w_ratio());
+    var w = w_min();
+    var x = 0.0;
+    var k = 0;
+    while k < components() {
+        let a = sqrt(4.0 * d_um2s * 1000000.0 * lnr / (3.141592653589793 * w));
+        let ph = phase(id * 64 + k);
+        x = x + a * (math.sin(w * t + ph) - math.sin(ph));
+        w = w * w_ratio();
+        k = k + 1;
+    }
+    return x;
+}
