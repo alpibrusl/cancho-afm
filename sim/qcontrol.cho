@@ -1,0 +1,44 @@
+edition 5;
+
+module qcontrol;
+
+// `qcontrol` -- active damping of a cantilever (Q control), as the simplest model with the right shape. NOT A MEASUREMENT OF ANY CANTILEVER, AMPLIFIER OR LOOP (docs/high-speed.md, HS3).
+//
+// The idea (as published for HS-AFM in air): feed the lever's own velocity back to the drive, so the lever behaves as if it were more damped. A feedback gain g, measured against the
+// lever's own damping, takes its quality factor from Q0 to Q0 / (1 + g), and its response time tau = Q / (pi f0) with it. A real feedback path is not perfectly in phase with the velocity:
+// a phase error `phi` leaves only the in-phase part, g cos(phi), as damping (the rest shifts the resonance). So
+//
+//     Q_eff = Q0 / (1 + g cos(phi))
+//
+// The model is held to what that one line gives, and says so on every result:
+//   * the free amplitude is kept (the drive is assumed to be raised by 1 + g to hold it); the DRIVE it would take is not checked against the DAC's range;
+//   * the thermal and electronic noise the feedback adds is NOT modelled (the main practical cost of Q control); nor the resonance shift (g sin(phi) / (2 Q0));
+//   * the feedback is stable only while 1 + g cos(phi) stays above `margin()`; a phase error past 90 degrees turns damping into anti-damping and the model refuses it.
+
+import std.math;
+
+// the least 1 + g cos(phi) the model accepts: below it the loop is within a tenth of oscillating by itself (an assumption, not a derived margin)
+pub fn margin() -> [] float { return 0.1; }
+
+// the damping the feedback adds, g cos(phi) (phi in degrees)
+pub fn damping(g: float, phase_deg: float) -> [] float {
+    return g * math.sin((phase_deg + 90.0) * 0.017453292519943295);
+}
+
+// 1 when the feedback is stable (1 + damping above the margin), else 0
+pub fn stable(g: float, phase_deg: float) -> [] int {
+    if 1.0 + damping(g, phase_deg) > margin() { return 1; }
+    return 0;
+}
+
+// the quality factor the lever behaves with; Q0 itself when the feedback is unstable (the caller refuses before it asks)
+pub fn q_eff(q0: float, g: float, phase_deg: float) -> [] float {
+    if stable(g, phase_deg) == 0 { return q0; }
+    return q0 / (1.0 + damping(g, phase_deg));
+}
+
+// the gain (at no phase error) that takes Q0 to q_target; 0 when q_target is not below Q0
+pub fn gain_for(q0: float, q_target: float) -> [] float {
+    if q_target >= q0 || q_target <= 0.0 { return 0.0; }
+    return q0 / q_target - 1.0;
+}

@@ -106,7 +106,8 @@ Built: `board.set_optics` (fl 39 to 43), `board.light`, `board.sum_now` and `boa
 | 2% of the light | runs, free figure 287 (the detector still finds the lever) |
 | no light (dark) | **refused, code 22 (no resonance)** |
 | baseline wander up to 0.05 counts per window | runs |
-| wander of 0.1 or 0.2 | **refused, code 43** (see below) |
+| wander of 0.1 | **refused, code 43** (see below) |
+| wander of 0.2 | refused, code 43; **since HS3 (`docs/high-speed.md`) refused earlier, by the tune, as an ambiguous peak (code 25)**: profile 1 now settles 17 times longer per sweep point, so a drift per window adds up to 17 times as much over the sweep. The table's other rows were not re-measured and are pinned only where `tests/optics_test.cho` pins them |
 | light loss 2 ppm per window | runs |
 | light loss 10 ppm per window | **runs to code 0, but finishes with Z pinned at 0 pm (a silent wrong result)** |
 | light loss 20 ppm per window | refused, code 43 |

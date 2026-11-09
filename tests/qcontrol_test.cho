@@ -1,0 +1,54 @@
+import std.test;
+import board;
+import qcontrol;
+
+// docs/high-speed.md, HS3: the Q control model. Everything here is the twin's own model, not a measurement.
+
+fn close(got: float, want: float, tol: float) -> [] int {
+    var d = got - want;
+    if d < 0.0 { d = 0.0 - d; }
+    if d <= tol { return 1; }
+    return 0;
+}
+
+fn test_a_gain_of_nine_takes_q_100_to_10() -> [] int {
+    test.assert(close(qcontrol.q_eff(100.0, 9.0, 0.0), 10.0, 0.0001) == 1);
+    test.assert(close(qcontrol.q_eff(100.0, 0.0, 0.0), 100.0, 0.0001) == 1);
+    test.assert(close(qcontrol.gain_for(100.0, 10.0), 9.0, 0.0001) == 1);
+    test.assert(close(qcontrol.gain_for(100.0, 100.0), 0.0, 0.0001) == 1);
+    test.assert(close(qcontrol.gain_for(100.0, 0.0), 0.0, 0.0001) == 1);
+    return 0;
+}
+
+fn test_a_phase_error_costs_damping() -> [] int {
+    // 60 degrees leaves cos = 0.5 of the gain: 1 + 4.5
+    test.assert(close(qcontrol.q_eff(100.0, 9.0, 60.0), 100.0 / 5.5, 0.001) == 1);
+    test.assert(qcontrol.q_eff(100.0, 9.0, 60.0) > qcontrol.q_eff(100.0, 9.0, 0.0));
+    return 0;
+}
+
+fn test_a_phase_past_ninety_degrees_is_refused() -> [] int {
+    test.assert_eq(qcontrol.stable(9.0, 0.0), 1);
+    test.assert_eq(qcontrol.stable(9.0, 80.0), 1);
+    test.assert_eq(qcontrol.stable(9.0, 100.0), 0);
+    test.assert_eq(qcontrol.stable(9.0, 180.0), 0);
+    // unstable feedback leaves the quality factor as it was
+    test.assert(close(qcontrol.q_eff(100.0, 9.0, 100.0), 100.0, 0.0001) == 1);
+    return 0;
+}
+
+fn test_the_board_takes_the_damping_or_refuses() -> [] int {
+    region r {
+        let rf = alloc_slice[r](64, 0);
+        let st = alloc_slice[r](32, 0);
+        let fl = alloc_slice[r](48, 0.0);
+        board.reset(rf, st, fl);
+        board.set_plant(fl, 500000.0, 100.0, 2000.0, 2000.0, 100.0, 1200.0, 2.0);
+        test.assert_eq(board.set_qcontrol(fl, 9.0, 0.0), 0);
+        test.assert(close(fl[2], 10.0, 0.0001) == 1);
+        board.set_plant(fl, 500000.0, 100.0, 2000.0, 2000.0, 100.0, 1200.0, 2.0);
+        test.assert_eq(board.set_qcontrol(fl, 9.0, 100.0), 1);
+        test.assert(close(fl[2], 100.0, 0.0001) == 1);
+    }
+    return 0;
+}

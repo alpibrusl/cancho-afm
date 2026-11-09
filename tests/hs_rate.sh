@@ -22,9 +22,20 @@ for prof in "1 0" "2 30"; do
     [ "$a" = 645200 ] && [ "$b" = 322600 ] && [ "$c" = 129040 ] || { echo "FAILED: frame times for profile $1: $a $b $c (expected 645200 322600 129040)"; exit 1; }
 done
 echo "frame time follows the loop steps per pixel (profiles 1 and 2): ok"
-# an air cantilever (Q 100): the tune sweep's 12.7 kHz step misses a 5 kHz line, so the run is refused with 21 (no resonance), not scanned
-"$W/tw20" 1 0 500 0 0 0 0 0 0 0 1000 | head -n 1 | grep -qF 'failure code 21,' || { echo "FAILED: Q 100 was not refused with code 21 (docs/high-speed.md, HS1, is out of date)"; "$W/tw20" 1 0 500 0 0 0 0 0 0 0 1000 | head -n 1; exit 1; }
-# the same profile at Q 5 (the twin's default) completes
+# an air cantilever (Q 100). The tune needs a settle longer than the lever's own time constant and a second, finer pass (docs/high-speed.md, HS3); before that it was refused with code 21.
+# lag_rms: the trace-minus-retrace rms over columns 2 to 61, in pm, from the scan records of mode 0 (a figure of the loop's lag, as in HS1)
+lag_rms() { "$@" | awk 'NF == 3 && $1 ~ /^[0-9]+$/ { if ($2 < 64) tr[$1 "," $2] = $3; else if ($2 < 126) rt[$1 "," (126 - $2)] = $3 } END { for (k in tr) { split(k, a, ","); if (a[2] >= 2 && a[2] <= 61 && (k in rt)) { d = tr[k] - rt[k]; s += d * d; n++ } } if (n == 0) print "nan"; else printf "%.1f\n", sqrt(s / n) }'; }
+air() { "$W/tw20" 1 0 500 0 0 0 0 0 0 0 "$1" 0 0 0 0 0 0 100 0 0 1000 "$2" "$3"; }   # $1 Q in tenths, $2 Q control gain in tenths, $3 its phase error in degrees
+air 1000 0 0 | head -n 1 | grep -qF 'failure code 0,' || { echo "FAILED: Q 100 no longer completes"; air 1000 0 0 | head -n 1; exit 1; }
+l0=$(lag_rms air 1000 0 0); l9=$(lag_rms air 1000 90 0); lq5=$(lag_rms air 0 0 0)
+# without Q control the lag is large (1,014 pm in the table); with a gain of 9 (Q 100 -> 10) it is small (11 pm)
+awk -v a="$l0" 'BEGIN { exit !(a > 500) }' || { echo "FAILED: Q 100 without control lags only $l0 pm (HS3 is out of date)"; exit 1; }
+awk -v a="$l9" 'BEGIN { exit !(a < 50) }' || { echo "FAILED: a gain of 9 leaves a lag of $l9 pm (HS3 is out of date)"; exit 1; }
+# a gain of 19 takes Q 100 to 5, the default profile: the same scan
+[ "$(lag_rms air 1000 190 0)" = "$lq5" ] || { echo "FAILED: Q 100 with a gain of 19 is not the Q 5 scan"; exit 1; }
+# a phase error past 90 degrees is refused with 85 before anything runs
+air 1000 90 100 | head -n 1 | grep -qF 'failure code 85,' || { echo "FAILED: a phase error of 100 degrees was not refused with 85"; exit 1; }
+# the default profile 1 still completes
 "$W/tw20" 1 0 500 0 | head -n 1 | grep -qF 'failure code 0,' || { echo "FAILED: the default profile 1 no longer completes"; exit 1; }
-echo "air Q 100 refused with code 21, default completes: ok"
+echo "air Q 100 completes, Q control cuts the lag from $l0 to $l9 pm, 100 degrees refused with 85: ok"
 echo "hs rate: passed"

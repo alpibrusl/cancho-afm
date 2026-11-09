@@ -358,6 +358,8 @@ fn main(world: World) -> [] int {
     var ow = 0;
     var ol = 0;
     var stp = 150;
+    var qg = 0;       // argument 22: Q control gain in tenths (docs/high-speed.md, HS3); 0 is off
+    var qph = 0;      // argument 23: its phase error in degrees
     borrow args as &g in {
         if arg_count(g) > 1 { prof = number_of(arg(g, 1)); }
         if arg_count(g) > 2 { scn = number_of(arg(g, 2)); }
@@ -380,6 +382,8 @@ fn main(world: World) -> [] int {
         if arg_count(g) > 19 { ow = number_of(arg(g, 19)); }
         if arg_count(g) > 20 { ol = number_of(arg(g, 20)); }
         if arg_count(g) > 21 { stp = number_of(arg(g, 21)); }
+        if arg_count(g) > 22 { qg = number_of(arg(g, 22)); }
+        if arg_count(g) > 23 { qph = number_of(arg(g, 23)); }
     }
     release(args); release(net); release(clock); release(signals); release(exec);
     borrow mut heap as &!h in {
@@ -392,6 +396,8 @@ fn main(world: World) -> [] int {
             if prof >= 1 { var fc = 500000.0; if fk > 0 { fc = 1000.0 * float_of(fk); } var qq = 5.0; if lq > 0 { qq = float_of(lq) / 10.0; } board.set_plant(fl, fc, qq, 2000.0, 2000.0, 100.0, 1200.0, 2.0); board.set_forest(fl, float_of(fr) / 100.0, 1000.0 * float_of(fsp), 15.0, 3); board.set_soft(fl, float_of(lk) / 100.0, float_of(lks) / 100.0, float_of(lth)); }
             else { board.set_plant(fl, 32781.4, 500.0, 2000.0, 2000.0, 100.0, 1200.0, 2.0); }
             fl[10] = float_of(stp);
+            var qrefused = 0;
+            if qg > 0 { qrefused = board.set_qcontrol(fl, float_of(qg) / 10.0, float_of(qph)); }
             if on > 0 || oa != 100 || ow > 0 || ol > 0 || prof == 2 { board.set_optics(fl, 2000.0, float_of(oa) / 100.0, float_of(on), float_of(ow) / 1000.0, float_of(ol) / 1000000.0); }
             // argument 2, the Z scanner: 0 ideal, 1 a good small stack (100 kHz, Q 3), 2 a slow one (20 kHz, Q 10), 3 the good one behind a 20 pm/us amplifier, 4 to 6 a Q = 3 stack at 30, 50, 70 kHz (docs/high-speed.md, H2)
             if scn == 1 { board.set_scanner(fl, 100000.0, 3.0, 0.0); }
@@ -412,6 +418,7 @@ fn main(world: World) -> [] int {
             let pic = alloc_slice[r](4096, 0);
             let req = alloc_slice[r](16, byte_of(0));
             let rsp = alloc_slice[r](16, byte_of(0));
+            if qrefused == 1 { ss[2] = 85; ss[0] = 98; }          // the Q control would not be stable (sim/qcontrol.cho): refuse before anything runs
             var guard = 0;
             var failures = 0;
             while ss[0] != 5 && ss[0] != 98 && guard < session.step_budget() {

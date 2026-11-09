@@ -81,7 +81,7 @@ H1 and H2 are cancho and need no hardware. H3 is generated hardware and runs und
 `host/session.cho` takes a profile (`ss[3]`: 0 fork, 1 hs); `host/scan_twin.cho` scans 64 x 64 over the made-up sample for either (`./scan_twin 1`). Hs profile: 4.5 MS/s
 (divider 6 of the 27 MHz clock), an 18-sample window, 20 loop updates per pixel, a sweep of 100 to 899 kHz. The full procedure ran with no operator input and no refused write.
 
-* **Tune found the cantilever:** f0 = 508.3 kHz against the twin's 500 kHz (1.7% high: the sweep step is 12.7 kHz), Q = 6 against 5. Contact at Z = 2704 pm, as for the fork. A first sweep of 376 to 628 kHz was refused (no resonance well above the floor: the edges were only 2.7 times lower than the peak); the sweep must span several line widths.
+* **Tune found the cantilever:** f0 = 508.3 kHz against the twin's 500 kHz (1.7% high: the sweep step is 12.7 kHz), Q = 6 against 5. **(Since HS3, profile 1 settles 17 times longer per sweep point and finds f0 = 487.0 kHz, Q = 4 for the same lever; the 508.3 kHz was biased high by the short settle. Profile 2 is unchanged: 508.3 kHz, Q 6.)** Contact at Z = 2704 pm, as for the fork. A first sweep of 376 to 628 kHz was refused (no resonance well above the floor: the edges were only 2.7 times lower than the peak); the sweep must span several line widths.
 * **The window must be a whole number of cycles.** With 16 samples (1.8 cycles at 4.5 MS/s) the amplitude figure rippled by 12% from window to window and the approach saw a false contact at the top of the Z range: the scan was all zeros. 18 samples (2.05 cycles) worked. Of the windows tried (9, 14, 15, 16, 18 at dividers 6 and 7) only 18 at divider 6 completed. **H3 below explains this and fixes it.**
 * **Frame rate predicted:** 0.65 s per 64 x 64 frame with trace and retrace, 1.5 frames/s; 3.1 frames/s if only the trace were scanned (the formula's 3.05 to 3.4 /s for a 4 to 4.5 MS/s, 16 to 18 sample window). The twin counts the clocks it simulates, so this agrees with the formula by construction; it is not a check of the formula.
 * **The loop did not limit the image: something in the detector did.** Over the same sample the hs image had a trace-minus-retrace rms of 87 pm against 28 pm for the fork's, and the same numbers at 20, 40 and 60 updates per pixel. This note first read that as the cost of a shorter window (about 4% of the figure). **That was wrong, corrected by H3:** it was the beating of a drive that did not span a whole number of cycles per window; with the drive snapped (below) the same 18-sample window gives 28 to 31 pm, the fork's own figure.
@@ -155,7 +155,7 @@ Issue #64. The frame rate the twin predicts when the loop steps per pixel (`pixd
 * **The step height is not a sensitive figure:** every cell with a scanner at 50 kHz or faster reads the 1,000 pm step within 0.5%. The lag in the trace-minus-retrace figure is what degrades first.
 * **Against an error bound of 100 pm (my proposal, not derived):** profile 1 holds it at 3.1 frames/s with a scanner of 50 kHz or faster and at 5.2 with 70 kHz or faster; profile 2 holds it at 3.1 with 70 kHz or faster, never with a 50 kHz scanner (112 pm already at 1.55 frames/s), and its 7.7 frames/s run is lost whatever the scanner is. A 30 kHz scanner fails everywhere (as in H2). **The design note's goal of 1 to 5 frames/s at 64 x 64 stands for the twin only if the Z scanner resonates at 70 kHz or more**; a 50 kHz one caps it near 3 in air and below 1.5 in liquid.
 * **The detector window was not swept.** `lockin.snap` picks the shortest window of at least 16 samples that fits a whole number of cycles at 8 or more samples per period, so the window is 18 here and cannot be cut by a constant. Windows under one cycle are the fast detector of issue #67.
-* **The profile called "air" is not air.** Profile 1 defaults to Q 5. Asked for a cantilever of Q 20 and Q 50 the tune stage finds Q 17 and Q 21 (probably the 12.7 kHz sweep step: the line is 25, 10 and 5 kHz wide at Q 20, 50 and 100, so it is under-sampled and Q reads low; the cause was not isolated), and **at Q 100 it refuses with code 21 (no resonance)**: an air cantilever is not supported by the tune sweep. Pinned in `tests/hs_rate.sh`. This is the entry point of issue #66 (Q control for air), and it means every "air" figure in this note and in `docs/liquid.md` is a low-Q figure.
+* **The profile called "air" is not air.** Profile 1 defaults to Q 5. Asked for a cantilever of Q 20 and Q 50 the tune stage finds Q 17 and Q 21 (probably the 12.7 kHz sweep step: the line is 25, 10 and 5 kHz wide at Q 20, 50 and 100, so it is under-sampled and Q reads low; the cause was not isolated), and **at Q 100 it refused with code 21 (peak at the edge of the sweep)**: an air cantilever was not supported by the tune. **Corrected by HS3 below: the cause was the settle time, not the step, and Q 100 now completes.** Every "air" figure above (and in `docs/liquid.md`) was a low-Q figure, which HS3 now separates from Q 100.
 
 ## What HS2 found (twin, 2026-11-09; predictions, not measurements)
 
@@ -174,7 +174,33 @@ Issue #65. Rule 5 of the approach, the step budget: **the approach is host-drive
 
 ## Open slices, as issues
 
-#64 HS1 and #65 HS2 are above. Not started: #66 HS3 (Q control for air), #67 HS4 (a detector for windows under one cycle), #68 HS5 (tapping dynamics at speed), #69 HS6 (hardware; blocked on a bench).
+#64 HS1, #65 HS2 and (the twin side of) #66 HS3 are above. Not started: #67 HS4 (a detector for windows under one cycle), #68 HS5 (tapping dynamics at speed), #69 HS6 (hardware; blocked on a bench).
+
+## What HS3 found (twin, 2026-11-09; predictions, not measurements)
+
+Issue #66. An air cantilever of Q 100 has a response time tau = Q / (pi f0) = 64 us at 500 kHz, and the loop gets a new reading every 4 us. Three things were built in the twin and cancho; the Verilog and the real feedback path were not.
+
+1. **The tune could not see a Q of 100, and the cause was the settle time.** The sweep waited 37 us per point (eleven time constants of a Q = 5 lever) before reading; a Q = 100 lever needs five of 64 us. Profile 1 now waits 630 us per point (five time constants of a Q = 200 lever); profile 2 keeps 37 us, so the liquid numbers do not move. With that alone the sweep completes (Q read as 41).
+2. **A second, finer pass** (`session.sweep_hz`, `ss[26]`): when the coarse pass finds a line narrower than four of its steps (`coarse_step()` = 12.7 kHz), the line is swept again, centred, with a step of f0 / (8 Q). Q reads 85 for a Q 100 lever and 86 for a Q 200 one (it reads low as the line narrows: the settle is only five time constants at Q 200); 23 and 46 for Q 20 and 50. **A fault found on the way: my first version refined every line, and for a liquid lever (Q 3) the fine pass started at a negative frequency and the program died with a trap (exit 132).** Now refined only for narrow lines and the start is clamped at 50 kHz. `tuning_word` itself still does not guard a negative frequency; the callers do.
+3. **Q control** (`sim/qcontrol.cho`, `board.set_qcontrol`, `scan_twin` arguments 22 and 23: the gain in tenths and the phase error in degrees): Q_eff = Q0 / (1 + g cos(phi)). Unstable feedback (1 + g cos(phi) below 0.1) is refused with **code 85** before anything runs. The tune sees the damped lever (Q control is on from the start; in a real instrument it would be switched on after the first sweep).
+
+Q 100 in air, 64 x 64, the ideal scanner, a 1,000 pm step, no noise; the figure is the trace-minus-retrace rms (pm) as in HS1; one run per cell:
+
+| loop steps per pixel | frames/s | no control | gain 4 (Q 20) | gain 9 (Q 10) | gain 19 (Q 5) |
+|---|---|---|---|---|---|
+| 160 | 0.19 | 39 | | 2.5 | |
+| 80 | 0.39 | **74** | | 2.9 | |
+| 40 | 0.77 | 466 | | 4.5 | |
+| 20 | 1.55 | **1,014** | 53 | 11 | 8.1 |
+| 10 | 3.1 | 802 | 567 | 93 | 38 |
+| 6 | 5.2 | 535 | 935 | **92** | 90 |
+| 4 | 7.7 | 363 | 954 | 467 | 85 |
+
+* **Without Q control the lag stays under 100 pm only at 0.39 frames/s or slower**; with a gain of 9 it stays under 100 pm up to 5.2 frames/s. That is **about 13 times the rate, for a Q 10 times lower**, as tau = Q / (pi f0) suggests. A gain of 19 reproduces the Q 5 scan of HS1 exactly (8.1, 38, 90 pm), which checks the plumbing (pinned in `tests/hs_rate.sh`).
+* **The lag figure is not monotonic where the loop is marginal** (gain 4 is worse than none at 6 and 4 steps per pixel). One run per cell; the table is not a smooth law.
+* **The phase error matters** (gain 9): at 45 degrees the lag is 60, 66, 474 and 812 pm at 20, 10, 6 and 4 steps per pixel (fine up to 3 frames/s, lost at 5); at 80 degrees it is lost everywhere; at 100 degrees it is refused (85). The feedback path would need a phase held well inside 45 degrees. **For scale: one sample of the 4.5 MS/s converter is 40 degrees of a 500 kHz cycle**, so a path of several samples is a design problem of its own, not designed here.
+* **Not modelled, and each one decides whether this pays on a real lever:** the noise the feedback adds (the main practical cost), the resonance shift (g sin(phi) / (2 Q0)), the drive range (a gain of 9 holds the free amplitude with ten times the drive), a detector or DAC that is not instantaneous, and the lever's own higher modes.
+* **Verdict for #66:** in the twin the idea pays by an order of magnitude. That is the condition the issue set for generating Verilog; **the Verilog was not written**, because the part that would decide it (the feedback path's delay and noise at 500 kHz) is not in the twin. #66 stays open for the design of that path.
 
 ## Risks
 
