@@ -126,6 +126,28 @@ pub fn choose(t: T, k: float, window_s: float, frac: float) -> [] G {
     return G { drive_hz: t.f0, shift: shift, setpoint: truncate(frac * t.peak / div), kp: kp, ki: ki, alpha: alpha, gloop: float_of(kp) * keff / 65536.0 };
 }
 
+// A scale on the gains `choose` returns, from the Z scanner's resonance `f_scan` (Hz; 0 or less = not known, scale 1, the old behaviour) and the loop's update period `window_s`:
+//     scale = 5 f_scan window_s, kept between 0.1 and 1.5.
+// Found in the twin (docs/high-speed.md, HS7): the gain at which the lag blows up tracks the scanner's resonance against the loop's update rate (a 30 kHz scanner at a 250 kHz update rate
+// loses the loop above about 0.6 of the chosen gains, 50 kHz above 1.1, 70 kHz above 1.6, 100 kHz above 2.3), and below that limit more gain is better. The constants 5 and 1.5 were
+// chosen on a grid of 40 twin runs (two levers, four scanners, four pixel times) as the pair that never made a cell more than 1.5 times worse than the unscaled gains and cut the
+// geometric-mean lag from 215 to 146 pm. A fit to the twin's scanner model, a guess about a real one.
+pub fn scanner_scale(window_s: float, f_scan: float) -> [] float {
+    if f_scan <= 0.0 { return 1.0; }
+    var s = 5.0 * f_scan * window_s;
+    if s > 1.5 { s = 1.5; }
+    if s < 0.1 { s = 0.1; }
+    return s;
+}
+
+// 1 when a pixel of `updates` loop updates is at least 0.7 of the scanner's period long (updates * window_s * f_scan >= 0.7), else 0: shorter than that, no gain rescued any of the twin's
+// runs (lag 575 pm and up in every cell below 0.7; the cells above are not all good, and the rule says nothing about them). Unknown scanner (f_scan 0 or less): 1.
+pub fn pixel_reachable(updates: int, window_s: float, f_scan: float) -> [] int {
+    if f_scan <= 0.0 { return 1; }
+    if float_of(updates) * window_s * f_scan < 0.7 { return 0; }
+    return 1;
+}
+
 // The tapping force the setpoint asks for, pN: stiffness k (N/m) times the amplitude given up, free_pm * (1 - setpoint / free). A PROXY (N/m times pm is pN), the same
 // formula the twin's `fl[35]` uses, so against the twin it is a check of the arithmetic and not of the physics; the real peak force depends on the Q and the dissipation too
 // (docs/liquid.md, S9.3). `frac` is the setpoint as a fraction of the free amplitude.

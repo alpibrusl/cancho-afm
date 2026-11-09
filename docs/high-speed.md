@@ -106,7 +106,7 @@ HS profile, 64 x 64, the loop's gains as the session chooses them (it knows noth
 
 * **The scanner's resonance must be about a fifth of the loop update rate or more** for these gains: 50 kHz works, 30 kHz does not. The fork profile (a 4 kHz loop) is unaffected even by a 20 kHz, Q = 10 scanner. That is the acceptance: ringing when the loop is faster than the scanner, none when slower.
 * **A slew limit breaks the loop at a step**: with 20 pm/us the amplifier cannot follow the 150 pm terrace within a loop update, and the loop oscillates. An amplifier for HS has to be specified in pm per us for the largest step, not only in bandwidth.
-* **The session's gain choice (`tune.choose`) ignores the scanner.** Taking its resonance into account, or a slower loop, would widen what works, at the cost of rate. Not done; the table is for the gains as they are.
+* **The session's gain choice (`tune.choose`) ignores the scanner.** Taking its resonance into account, or a slower loop, would widen what works, at the cost of rate. Not done; the table is for the gains as they are. **(Done in part by HS7 below: a scale from the scanner's resonance.)**
 * **Not shown:** a measured scanner, hysteresis and creep, the amplifier of `docs/amplifier.md` (far too slow: its bandwidth is for the fork).
 
 ## What H3 found (generated Verilog and the twin, 2026-11-03)
@@ -174,7 +174,7 @@ Issue #65. Rule 5 of the approach, the step budget: **the approach is host-drive
 
 ## Open slices, as issues
 
-#64 HS1, #65 HS2 and (the twin side of) #66 HS3 are above. #67 HS4 tested its premise (above) and built nothing. Not started: #68 HS5 (tapping dynamics at speed), #69 HS6 (hardware; blocked on a bench).
+#64 HS1, #65 HS2, (the twin side of) #66 HS3 and #72 HS7 are above. #67 HS4 tested its premise (above) and built nothing. Not started: #68 HS5 (tapping dynamics at speed), #69 HS6 (hardware; blocked on a bench).
 
 ## What HS3 found (twin, 2026-11-09; predictions, not measurements)
 
@@ -223,6 +223,28 @@ How it was tested. `lockin.snap` was allowed to pick a one-cycle window (m = 1, 
 * **Detector noise did not matter in the twin** (0 to 30 counts at gains 1, 2 and 3 times: 819/205/57 pm against 780/187/64 pm at 30 counts). That is small against a figure of about 12,000 counts and is not a statement about a real photodiode and amplifier.
 * **A knob was added to measure this:** `scan_twin` argument 24 scales the chosen gains in percent (`sf[6]`); 0 is as chosen.
 * **What this leaves for #67:** the issue's acceptance cannot be met honestly; the condition it depended on is false in the twin. It is not closed: a peak-hold detector could still matter for reasons the twin does not model (a window of 4 us adds a delay the loop sees; a real photodiode's noise against a shorter window). Both need the hardware (#69). The next measurable thing is a loop gain rule that knows the Z scanner (issue #72).
+
+## What HS7 found (twin, 2026-11-09; predictions, not measurements)
+
+Issue #72. A gain rule that knows the Z scanner. **Built, with one regression on cells it was not fitted to.**
+
+**The pattern.** On a grid of 40 twin runs (Q 5 and liquid Q 3 levers; ideal, 100, 70, 50 and 30 kHz scanners; 10, 6, 4 and 3 loop steps per pixel; gains scaled 25 to 300% of the tune's), the gain at which the lag blows up tracks the scanner's resonance against the loop's update rate (250 kHz here): a 30 kHz scanner loses the loop above about 0.6 of the chosen gains, 50 kHz above 1.1, 70 kHz above 1.6, 100 kHz above 2.3, an ideal one not below 3. Below that limit, more gain is better.
+
+**The rule** (`tune.scanner_scale`): scale the chosen gains by `5 f_scan window_s`, kept between 0.1 and 1.5; `f_scan` unknown (0) leaves them alone. The 5 and the 1.5 are the pair, among those tried, that never made a grid cell more than 1.5 times worse than the unscaled gains and cut the geometric-mean lag from 215 to 146 pm (the best any gain gave per cell: 107 pm; 24 cells of 40 under 100 pm against 15 for the old gains and 17 for the rule). **Those figures for the rule are interpolated between the measured gain scales, not re-run at the rule's gain; only the held-out cells below are real runs of the rule.** **They are a fit to the twin's scanner model, a guess about a real scanner.**
+
+**The refusal** (`tune.pixel_reachable`, code **36**, before the approach): a pixel shorter than 0.7 of the scanner's period (`updates * window_s * f_scan < 0.7`). In every grid cell below 0.7 the lag was 575 pm or more at any gain tried; the cells above 0.7 are not all good, and the rule says nothing about them. It is a refusal of the hopeless, not a promise.
+
+**How the host learns the scanner:** `sf[7]` holds the resonance in Hz (0 = not known, the default); `scan_twin` argument 25 = 1 tells the host the twin's own value. In a real instrument it would be measured (a step test of the Z stack, needs #69). Every earlier result is unchanged because the default is "not known".
+
+**Checked on cells not used to fit it** (3 pixel times of 20, 8 and 5 steps, a 20 kHz Q 10 scanner and 30, 50 and 70 kHz ones, both levers: 24 cells):
+
+* **6 refused with 36** (20 kHz at 8 and 5 steps, 30 kHz at 5 steps); the unscaled lag of every one was 581 to 1,209 pm, so none was a good run lost.
+* **7 clearly better:** 20 kHz Q 10 at 20 steps 931 to 364 pm (Q 5) and 1,255 to 237 pm (liquid); 30 kHz at 20 steps 919 to 284 and 306 to 156; at 8 steps 914 to 299 and 311 to 202; 70 kHz liquid at 5 steps 273 to 70.
+* **8 unchanged** (within 10%): all six 50 kHz cells (the scale is exactly 1.0 there), and 70 kHz at 8 steps (Q 5) and 20 steps (liquid).
+* **3 worse:** 70 kHz Q 5 at 20 steps 9 to 15 pm (small), 70 kHz liquid at 8 steps 77 to 94 pm, and **70 kHz Q 5 at 5 steps 90 to 142 pm (1.6 times)**. So the property "never more than 1.5 times worse" held on the grid it was fitted on and **failed once off it**. The 70 kHz cells, where the scale is 1.4 and the limit is about 1.6, sit too near the edge; a scale of 1.2 would likely fix them, and I did not tune it further on the held-out cells, which would have made them fitting data too.
+* **After 100 pm:** the rule leaves a large gap to the best per-cell gain (the best gain also depends on the lever and the pixel time, not only the scanner), and a 50 kHz scanner is not helped at all.
+
+**Not modelled:** a scanner with a slew limit (`scan_twin` scanner 3 reports 100 kHz and is treated as such), hysteresis and creep, the scanner's own Q (the table used Q 3, and Q 10 for the 20 kHz one), and the amplifier. The scanner's resonance is an input the host must be given.
 
 ## Risks
 
