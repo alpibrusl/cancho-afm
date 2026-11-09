@@ -363,6 +363,9 @@ fn main(world: World) -> [] int {
     var gsc = 0;      // argument 24: a scale on the loop gains in percent (host/session.cho, sf[6]); 0 is as chosen
     var ksc = 0;      // argument 25: 1 tells the host the twin's Z scanner resonance (host/session.cho, sf[7]); 0 leaves it not known
     var air = 0;      // argument 26: 1 prints the windows the tip spent a full free amplitude or more from the sample (docs/high-speed.md, HS5)
+    var dyn = 0;      // argument 27: 1 images the dynamic sample (sim/board.cho, `dynamic`); argument 28: the time the frame starts, ms; argument 29: 1 also prints the true surface at the middle of the frame
+    var dt0 = 0;
+    var dtr = 0;
     borrow args as &g in {
         if arg_count(g) > 1 { prof = number_of(arg(g, 1)); }
         if arg_count(g) > 2 { scn = number_of(arg(g, 2)); }
@@ -390,6 +393,9 @@ fn main(world: World) -> [] int {
         if arg_count(g) > 24 { gsc = number_of(arg(g, 24)); }
         if arg_count(g) > 25 { ksc = number_of(arg(g, 25)); }
         if arg_count(g) > 26 { air = number_of(arg(g, 26)); }
+        if arg_count(g) > 27 { dyn = number_of(arg(g, 27)); }
+        if arg_count(g) > 28 { dt0 = number_of(arg(g, 28)); }
+        if arg_count(g) > 29 { dtr = number_of(arg(g, 29)); }
     }
     release(args); release(net); release(clock); release(signals); release(exec);
     borrow mut heap as &!h in {
@@ -402,6 +408,7 @@ fn main(world: World) -> [] int {
             if prof >= 1 { var fc = 500000.0; if fk > 0 { fc = 1000.0 * float_of(fk); } var qq = 5.0; if lq > 0 { qq = float_of(lq) / 10.0; } board.set_plant(fl, fc, qq, 2000.0, 2000.0, 100.0, 1200.0, 2.0); board.set_forest(fl, float_of(fr) / 100.0, 1000.0 * float_of(fsp), 15.0, 3); board.set_soft(fl, float_of(lk) / 100.0, float_of(lks) / 100.0, float_of(lth)); }
             else { board.set_plant(fl, 32781.4, 500.0, 2000.0, 2000.0, 100.0, 1200.0, 2.0); }
             fl[10] = float_of(stp);
+            fl[46] = float_of(dyn); fl[47] = float_of(dt0) / 1000.0;
             var qrefused = 0;
             if qg > 0 { qrefused = board.set_qcontrol(fl, float_of(qg) / 10.0, float_of(qph)); }
             if on > 0 || oa != 100 || ow > 0 || ol > 0 || prof == 2 { board.set_optics(fl, 2000.0, float_of(oa) / 100.0, float_of(on), float_of(ow) / 1000.0, float_of(ol) / 1000000.0); }
@@ -497,6 +504,20 @@ fn main(world: World) -> [] int {
             if lv != 3 && lv != 5 && lv != 6 && lv != 7 && lv != 8 && lk > 0 { o = text(h, o, "force_pn_max "); o = num(h, o, truncate(fl[36] + 0.5)); o = text(h, o, " windows_over_threshold "); o = num(h, o, truncate(fl[37])); o = text(h, o, " indentation_pm "); o = num(h, o, truncate(fl[38] + 0.5)); o = text(h, o, "\n"); var fmax = 0; var fover = 0; var fn_ = 0; var kk = 0; while kk < 4096 { if tr_of(pic[kk]) > 0 { fn_ = fn_ + 1; if force_of(pic[kk]) > fmax { fmax = force_of(pic[kk]); } if lth > 0 && force_of(pic[kk]) > lth { fover = fover + 1; } } kk = kk + 1; } o = text(h, o, "force_map_max "); o = num(h, o, fmax); o = text(h, o, " pixels_over_threshold "); o = num(h, o, fover); o = text(h, o, " of "); o = num(h, o, fn_); o = text(h, o, "\n"); }
             if lv == 0 && air == 1 { o = text(h, o, "airborne_windows "); o = num(h, o, truncate(fl[44])); o = text(h, o, " of "); o = num(h, o, truncate(fl[45])); o = text(h, o, "\n"); }
             if lv != 3 && lv != 5 && lv != 6 && lv != 7 && lv != 8 { o = text(h, o, "frame_us "); o = num(h, o, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27); o = text(h, o, "\n"); }
+            if lv == 0 && dtr == 1 && dyn > 0 {
+                // the sample's true surface (heights in pm) at the middle of the frame, one "truth line pixel z" per pixel; the scan above is of the sample as it moved
+                fl[22] = float_of(calls * session.pixdiv(prof) / 2);
+                var jt = 0;
+                while jt < 64 {
+                    var it = 0;
+                    while it < 64 {
+                        st[19] = 1000 + 100 * it; st[20] = 1000 + 100 * jt;
+                        o = text(h, o, "truth "); o = num(h, o, jt); o = text(h, o, " "); o = num(h, o, it); o = text(h, o, " "); o = num(h, o, truncate(board.surface_at(rf, st, fl) + 0.5)); o = text(h, o, "\n");
+                        it = it + 1;
+                    }
+                    jt = jt + 1;
+                }
+            }
         }
         var code = 0;
         borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
