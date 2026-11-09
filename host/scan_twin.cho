@@ -293,6 +293,16 @@ fn scan_out[&h, &a](heap: &!h Heap, o: buffer.Buffer, pic: &a [int], mode: int, 
                         k = 0;
                         while k < 4096 { lev[k] = t[k]; if t[k] < lo { lo = t[k]; } if t[k] > hi { hi = t[k]; } k = k + 1; }
                     }
+                    if mode == 8 {
+                        // the force map (docs/liquid.md, S9.3): each pixel's tapping force from 0 to the larger of the map's largest value and the damage threshold, so a threshold shows as the top of the scale; 0 where the scan did not go
+                        var fm = fth;
+                        if fm < 1 { fm = 1; }
+                        k = 0;
+                        while k < 4096 { if force_of(pic[k]) > fm { fm = force_of(pic[k]); } k = k + 1; }
+                        k = 0;
+                        while k < 4096 { lev[k] = float_of(force_of(pic[k])); k = k + 1; }
+                        lo = 0.0; hi = float_of(fm);
+                    }
                     var span = hi - lo;
                     if span < 1.0 { span = 1.0; }
                     k = 0;
@@ -311,7 +321,7 @@ fn scan_out[&h, &a](heap: &!h Heap, o: buffer.Buffer, pic: &a [int], mode: int, 
     return b;
 }
 
-// the profile: argument 1 (the scanner, argument 2, and for the high-speed profile the cantilever's resonance in kHz, argument 3, the same way; default 500; argument 4 = 1 prints the levelling check, 2 the metrics check, 5 the console's scan.json, 6 its levelled image as a PNG, 7 the raw trace as a PNG, 4 the drift check (arguments 5 and 6: the sample's drift along x in milli-pixels per tick and in height in milli-pm per tick; 7 to 10: a tilt along x in pm per pixel, a tilt along y in pm per line, a bow in pm and line offsets of up to that many pm), of docs/image-processing.md instead of the pixels), `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md), `2` the same lever in liquid (docs/liquid.md, S9.6: the optical lever is always on, its defaults a sum of 2,000 counts and no noise, and the run reads its light); for profiles 1 and 2, arguments 11 to 13 make it a liquid lever (docs/liquid.md, S9.2): its Q in tenths (30 = 3.0; default 50), a forest of fluid-cell peaks whose nearest is this many percent of the lever's height (0 = none), and their spacing in kHz; arguments 14 to 16: the lever's stiffness in hundredths of N/m (15 = 0.15; 0 = force not modelled), the soft sample's stiffness in hundredths of N/m (0 = rigid) and the damage threshold in pN (docs/liquid.md, S9.3), which add a force line to the output; arguments 17 to 20 turn on the optical lever (docs/liquid.md, S9.4): its noise in ADC counts, the share of light reaching the photodiode in percent (default 100), the deflection's DC wander in thousandths of a count per detector window and the light lost in millionths per window
+// the profile: argument 1 (the scanner, argument 2, and for the high-speed profile the cantilever's resonance in kHz, argument 3, the same way; default 500; argument 4 = 1 prints the levelling check, 2 the metrics check, 5 the console's scan.json, 6 its levelled image as a PNG, 7 the raw trace as a PNG, 8 the force map as a PNG (needs a stiffness, arguments 14 to 16), 4 the drift check (arguments 5 and 6: the sample's drift along x in milli-pixels per tick and in height in milli-pm per tick; 7 to 10: a tilt along x in pm per pixel, a tilt along y in pm per line, a bow in pm and line offsets of up to that many pm), of docs/image-processing.md instead of the pixels), `0` the tuning fork (the default), `1` the high-speed cantilever (docs/high-speed.md), `2` the same lever in liquid (docs/liquid.md, S9.6: the optical lever is always on, its defaults a sum of 2,000 counts and no noise, and the run reads its light); for profiles 1 and 2, arguments 11 to 13 make it a liquid lever (docs/liquid.md, S9.2): its Q in tenths (30 = 3.0; default 50), a forest of fluid-cell peaks whose nearest is this many percent of the lever's height (0 = none), and their spacing in kHz; arguments 14 to 16: the lever's stiffness in hundredths of N/m (15 = 0.15; 0 = force not modelled), the soft sample's stiffness in hundredths of N/m (0 = rigid) and the damage threshold in pN (docs/liquid.md, S9.3), which add a force line to the output; arguments 17 to 20 turn on the optical lever (docs/liquid.md, S9.4): its noise in ADC counts, the share of light reaching the photodiode in percent (default 100), the deflection's DC wander in thousandths of a count per detector window and the light lost in millionths per window
 fn number_of[&t](text: &t [byte]) -> [] int {
     var n = 0;
     var i = 0;
@@ -408,7 +418,7 @@ fn main(world: World) -> [] int {
                 session.consume(ss, sf, out, img);
                 guard = guard + 1;
             }
-            if lv != 3 && lv != 5 && lv != 6 && lv != 7 {
+            if lv != 3 && lv != 5 && lv != 6 && lv != 7 && lv != 8 {
             o = text(h, o, "twin scan; failure code "); o = num(h, o, ss[2]); o = text(h, o, ", refused writes "); o = num(h, o, failures);
             o = text(h, o, ", contact Z "); o = num(h, o, ss[9]); o = text(h, o, " pm; f0 "); o = num(h, o, truncate(sf[0])); o = text(h, o, " Hz, Q "); o = num(h, o, truncate(sf[1])); o = text(h, o, ", free figure "); o = num(h, o, ss[10]);
             o = text(h, o, ", window "); o = num(h, o, ss[15]); o = text(h, o, ", shift "); o = num(h, o, ss[11]); o = text(h, o, ", setpoint "); o = num(h, o, ss[12]); o = text(h, o, ", motor steps "); o = num(h, o, ss[21]); o = text(h, o, ", settled Z "); o = num(h, o, ss[22]); o = text(h, o, " pm\n");
@@ -458,10 +468,10 @@ fn main(world: World) -> [] int {
             if lv == 1 { o = analyse(h, o, pic); }
             if lv == 2 { o = metrics_check(h, o, pic, rf, st, fl); }
             if lv == 3 { o = particles_csv(h, o, pic); }
-            if lv == 5 || lv == 6 || lv == 7 { o = scan_out(h, o, pic, lv, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27, prof, lk, lth); }
+            if lv == 5 || lv == 6 || lv == 7 || lv == 8 { o = scan_out(h, o, pic, lv, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27, prof, lk, lth); }
             if lv == 4 { o = drift_check(h, o, pic, rf, st, fl, session.pixdiv(prof), xd, zd); }
-            if lv != 3 && lv != 5 && lv != 6 && lv != 7 && lk > 0 { o = text(h, o, "force_pn_max "); o = num(h, o, truncate(fl[36] + 0.5)); o = text(h, o, " windows_over_threshold "); o = num(h, o, truncate(fl[37])); o = text(h, o, " indentation_pm "); o = num(h, o, truncate(fl[38] + 0.5)); o = text(h, o, "\n"); var fmax = 0; var fover = 0; var fn_ = 0; var kk = 0; while kk < 4096 { if tr_of(pic[kk]) > 0 { fn_ = fn_ + 1; if force_of(pic[kk]) > fmax { fmax = force_of(pic[kk]); } if lth > 0 && force_of(pic[kk]) > lth { fover = fover + 1; } } kk = kk + 1; } o = text(h, o, "force_map_max "); o = num(h, o, fmax); o = text(h, o, " pixels_over_threshold "); o = num(h, o, fover); o = text(h, o, " of "); o = num(h, o, fn_); o = text(h, o, "\n"); }
-            if lv != 3 && lv != 5 && lv != 6 && lv != 7 { o = text(h, o, "frame_us "); o = num(h, o, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27); o = text(h, o, "\n"); }
+            if lv != 3 && lv != 5 && lv != 6 && lv != 7 && lv != 8 && lk > 0 { o = text(h, o, "force_pn_max "); o = num(h, o, truncate(fl[36] + 0.5)); o = text(h, o, " windows_over_threshold "); o = num(h, o, truncate(fl[37])); o = text(h, o, " indentation_pm "); o = num(h, o, truncate(fl[38] + 0.5)); o = text(h, o, "\n"); var fmax = 0; var fover = 0; var fn_ = 0; var kk = 0; while kk < 4096 { if tr_of(pic[kk]) > 0 { fn_ = fn_ + 1; if force_of(pic[kk]) > fmax { fmax = force_of(pic[kk]); } if lth > 0 && force_of(pic[kk]) > lth { fover = fover + 1; } } kk = kk + 1; } o = text(h, o, "force_map_max "); o = num(h, o, fmax); o = text(h, o, " pixels_over_threshold "); o = num(h, o, fover); o = text(h, o, " of "); o = num(h, o, fn_); o = text(h, o, "\n"); }
+            if lv != 3 && lv != 5 && lv != 6 && lv != 7 && lv != 8 { o = text(h, o, "frame_us "); o = num(h, o, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27); o = text(h, o, "\n"); }
         }
         var code = 0;
         borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
