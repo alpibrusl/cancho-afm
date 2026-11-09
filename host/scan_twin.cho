@@ -366,6 +366,7 @@ fn main(world: World) -> [] int {
     var dyn = 0;      // argument 27: 1 images the dynamic sample (sim/board.cho, `dynamic`); argument 28: the time the frame starts, ms; argument 29: 1 also prints the true surface at the middle of the frame
     var dt0 = 0;
     var dtr = 0;
+    var dco = 0;      // argument 30: with argument 27 = 2, the particles diffuse with D = this / 100,000 um^2/s (docs/dynamics.md, D1)
     borrow args as &g in {
         if arg_count(g) > 1 { prof = number_of(arg(g, 1)); }
         if arg_count(g) > 2 { scn = number_of(arg(g, 2)); }
@@ -396,6 +397,7 @@ fn main(world: World) -> [] int {
         if arg_count(g) > 27 { dyn = number_of(arg(g, 27)); }
         if arg_count(g) > 28 { dt0 = number_of(arg(g, 28)); }
         if arg_count(g) > 29 { dtr = number_of(arg(g, 29)); }
+        if arg_count(g) > 30 { dco = number_of(arg(g, 30)); }
     }
     release(args); release(net); release(clock); release(signals); release(exec);
     borrow mut heap as &!h in {
@@ -403,12 +405,13 @@ fn main(world: World) -> [] int {
         region r {
             let rf = alloc_slice[r](64, 0);
             let st = alloc_slice[r](32, 0);
-            let fl = alloc_slice[r](48, 0.0);
+            let fl = alloc_slice[r](64, 0.0);
             board.reset(rf, st, fl);
             if prof >= 1 { var fc = 500000.0; if fk > 0 { fc = 1000.0 * float_of(fk); } var qq = 5.0; if lq > 0 { qq = float_of(lq) / 10.0; } board.set_plant(fl, fc, qq, 2000.0, 2000.0, 100.0, 1200.0, 2.0); board.set_forest(fl, float_of(fr) / 100.0, 1000.0 * float_of(fsp), 15.0, 3); board.set_soft(fl, float_of(lk) / 100.0, float_of(lks) / 100.0, float_of(lth)); }
             else { board.set_plant(fl, 32781.4, 500.0, 2000.0, 2000.0, 100.0, 1200.0, 2.0); }
             fl[10] = float_of(stp);
             fl[46] = float_of(dyn); fl[47] = float_of(dt0) / 1000.0;
+            if dyn == 2 { board.set_diffusion(rf, fl, float_of(dco) / 100000.0, float_of(dt0) / 1000.0); }
             var qrefused = 0;
             if qg > 0 { qrefused = board.set_qcontrol(fl, float_of(qg) / 10.0, float_of(qph)); }
             if on > 0 || oa != 100 || ow > 0 || ol > 0 || prof == 2 { board.set_optics(fl, 2000.0, float_of(oa) / 100.0, float_of(on), float_of(ow) / 1000.0, float_of(ol) / 1000000.0); }
@@ -507,6 +510,7 @@ fn main(world: World) -> [] int {
             if lv == 0 && dtr == 1 && dyn > 0 {
                 // the sample's true surface (heights in pm) at the middle of the frame, one "truth line pixel z" per pixel; the scan above is of the sample as it moved
                 fl[22] = float_of(calls * session.pixdiv(prof) / 2);
+                board.refresh_diffusion(rf, fl);
                 var jt = 0;
                 while jt < 64 {
                     var it = 0;

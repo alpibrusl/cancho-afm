@@ -1,0 +1,131 @@
+import std.test;
+import membrane;
+
+// docs/dynamics.md, D1: the Saffman-Delbrueck coefficient, the tracking criteria, and the stateless walk. The numbers compared with are the ones of the design note's verification table:
+// computed here from the formula (the sources' own values are quoted there), and the only experimental ones are the detection limit of Casuso et al. 2009 and the sizes of Sullivan et al. 2020.
+
+fn close(got: float, want: float, tol: float) -> [] int {
+    var d = got - want;
+    if d < 0.0 { d = 0.0 - d; }
+    if d <= tol { return 1; }
+    return 0;
+}
+
+// Demery & Lacoste's parameters: eta_m / eta = 100, h = 5 nm, eta = 0.96 mPa s, 295 K, a = 5 nm. l = 500 nm (the review's "about 500 nm") and D = 2.72 um^2/s; the review quotes 2.5.
+fn test_saffman_delbrueck_with_the_reviews_parameters() -> [] int {
+    let eta = 0.00096;
+    let eta_m_h = 100.0 * eta * 0.000000005;
+    test.assert(close(eta_m_h / eta, 0.0000005, 0.000000001) == 1);
+    let d = membrane.sd_diffusion(295.0, eta_m_h, 0.000000005, eta);
+    test.assert(close(d, 2.72, 0.02) == 1);
+    // against the review's 2.5: within 10%
+    test.assert(close(d, 2.5, 0.25) == 1);
+    return 0;
+}
+
+// Wikipedia: with L_sd = 1 um, changing a from 1 nm to 10 nm lowers D by about 30%; the formula gives 32.8%
+fn test_the_weak_size_dependence() -> [] int {
+    let eta = 0.001;
+    let eta_m_h = 2.0 * 0.000001 * eta;      // L_sd = eta_m_h / (2 eta) = 1 um
+    let d1 = membrane.sd_diffusion(295.0, eta_m_h, 0.000000001, eta);
+    let d10 = membrane.sd_diffusion(295.0, eta_m_h, 0.00000001, eta);
+    test.assert(d1 > d10);
+    test.assert(close(1.0 - d10 / d1, 0.328, 0.005) == 1);
+    return 0;
+}
+
+fn test_a_bulk_viscosity_barely_slows_a_membrane_protein() -> [] int {
+    // eta_m h = 1e-9 Pa s m, a = 2.5 nm, 25 degrees C: water (0.89 mPa s) and a 6 mPa s mixture
+    let w = membrane.sd_diffusion(298.15, 0.000000001, 0.0000000025, 0.00089);
+    let g = membrane.sd_diffusion(298.15, 0.000000001, 0.0000000025, 0.006);
+    test.assert(close(w, 1.81, 0.02) == 1);
+    test.assert(close(g, 1.18, 0.02) == 1);
+    // seven times the viscosity, a third less D
+    test.assert(g / w > 0.6 && g / w < 0.7);
+    return 0;
+}
+
+fn test_the_form_is_refused_outside_its_validity() -> [] int {
+    // a above L_sd (a 2 um inclusion where L_sd = 1 um), and non-positive inputs: no diffusion coefficient, 0
+    test.assert_eq(membrane.sd_valid(0.000000002, 0.000002, 0.001), 0);
+    test.assert(close(membrane.sd_diffusion(295.0, 0.000000002, 0.000002, 0.001), 0.0, 0.0) == 1);
+    test.assert_eq(membrane.sd_valid(0.0, 0.000000005, 0.001), 0);
+    test.assert_eq(membrane.sd_valid(0.000000001, 0.0, 0.001), 0);
+    test.assert_eq(membrane.sd_valid(0.000000001, 0.000000005, 0.0), 0);
+    test.assert_eq(membrane.sd_valid(0.000000001, 0.000000005, 0.001), 1);
+    return 0;
+}
+
+// the table of the design note, and Casuso's detection limit: 0.025 um^2/s at 100 ms is a 100 nm displacement, the field of their movies
+fn test_the_displacement_per_frame_table() -> [] int {
+    test.assert(close(membrane.rms_nm(1.0, 0.1), 632.5, 0.1) == 1);
+    test.assert(close(membrane.rms_nm(0.025, 0.1), 100.0, 0.01) == 1);
+    test.assert(close(membrane.rms_nm(0.001, 0.5), 44.7, 0.1) == 1);
+    test.assert(close(membrane.rms_nm(0.0001, 0.645), 16.1, 0.1) == 1);
+    return 0;
+}
+
+fn test_the_two_tracking_criteria() -> [] int {
+    // stays in the frame: Casuso's limit, against their 100 nm field (just under, just over)
+    test.assert_eq(membrane.stays_in_frame(0.025, 0.1, 100.5), 1);
+    test.assert_eq(membrane.stays_in_frame(0.025, 0.1, 99.5), 0);
+    // a free protein (1 um^2/s) leaves a 100 nm frame at 100 ms; a mica-hindered one (0.001) stays
+    test.assert_eq(membrane.stays_in_frame(1.0, 0.1, 100.0), 0);
+    test.assert_eq(membrane.stays_in_frame(0.001, 0.1, 100.0), 1);
+    // linkable among particles 50 nm apart: D = 0.001 at 100 ms (20 nm) yes, at 200 ms (28 nm) no
+    test.assert_eq(membrane.linkable(0.001, 0.1, 50.0), 1);
+    test.assert_eq(membrane.linkable(0.001, 0.2, 50.0), 0);
+    return 0;
+}
+
+// the mean-square increment along one axis over `n` walks (ids 0 to n - 1) and start times from 0 to 20 s in steps of 0.05 s, for the lag tau, in nm^2
+fn msd_axis(d: float, n: int, tau: float) -> [] float {
+    var sum = 0.0;
+    var cnt = 0.0;
+    var id = 0;
+    while id < n {
+        var t = 0.0;
+        while t < 20.0 {
+            let dx = membrane.walk(d, id, t + tau) - membrane.walk(d, id, t);
+            sum = sum + dx * dx;
+            cnt = cnt + 1.0;
+            t = t + 0.05;
+        }
+        id = id + 1;
+    }
+    return sum / cnt;
+}
+
+// the walk starts at zero whatever D is (a particle starts where it is placed)
+fn test_the_walk_starts_at_zero() -> [] int {
+    test.assert(close(membrane.walk(0.001, 0, 0.0), 0.0, 0.000001) == 1);
+    test.assert(close(membrane.walk(1.0, 5, 0.0), 0.0, 0.000001) == 1);
+    test.assert(membrane.walk(1.0, 5, 0.5) > 1.0 || membrane.walk(1.0, 5, 0.5) < 0.0 - 1.0);
+    return 0;
+}
+
+// 2 D tau per axis (D in um^2/s: 2e6 D tau nm^2), within 35%, from 10 ms to 2 s (the acceptance of issue 77); and proportional to D
+fn test_the_walks_mean_square_displacement_is_2_d_tau() -> [] int {
+    let d = 0.01;
+    var i = 0;
+    while i < 5 {
+        let tau = lag_of(i);
+        let want = 2.0 * d * 1000000.0 * tau;
+        let got = msd_axis(d, 12, tau);
+        test.assert(got > 0.65 * want && got < 1.35 * want);
+        i = i + 1;
+    }
+    // ten times the coefficient, ten times the mean-square displacement
+    let a = msd_axis(0.01, 12, 0.1);
+    let b = msd_axis(0.1, 12, 0.1);
+    test.assert(close(b / a, 10.0, 0.001) == 1);
+    return 0;
+}
+
+fn lag_of(i: int) -> [] float {
+    if i == 0 { return 0.01; }
+    if i == 1 { return 0.05; }
+    if i == 2 { return 0.2; }
+    if i == 3 { return 0.8; }
+    return 2.0;
+}
