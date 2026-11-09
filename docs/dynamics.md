@@ -136,6 +136,28 @@ Issue #77. Built: `sim/membrane.cho` (Saffman-Delbrueck, the two tracking criter
 
 **Not done from the acceptance:** the movie at three frame rates (the table above is the measurement it would illustrate); the Petrov-Schwille interpolation (not needed for `a` of a few nm and `L_sd` of 0.1 to 10 um); anomalous diffusion, obstacles, particle-particle interaction, reflecting edges (a particle walks out of the field and stays out).
 
+## What D6 found, first slice: the port from nanoindent (2026-11-09; predictions, not measurements)
+
+Issue #82. The instrument's software stays in cancho, and the force-curve analysis already exists as validated Python in `nanoindent` (github.com/alpibrusl/afm-finite-elements, commit c04820a; the repository beside this one). So this slice is a **port, with nanoindent as the oracle** (not a dependency): `sim/forcecurve.cho` and `tests/forcecurve_test.cho`, whose "oracle" numbers were computed by nanoindent's Python on the same inputs and recorded with its commit.
+
+**Ported:** the contact laws (Hertz; Dimitriadis 2002 bonded, general nu; Garcia & Garcia 2018; Chadwick 2002; Das/Connell 2010 for a fluid bilayer; Sneddon cone), the calibration of a raw curve (baseline from the first 10%, noise, contact point as the first sustained rise above max(5 sigma, 1% of the range), force and indentation with the cantilever-compliance correction), the closed-form modulus fit with the 40-point contact-point scan, and the supported-bilayer analysis of one curve (breakthrough force, step height, modulus per model, area compressibility). **Not ported:** the instrument file readers (JPK, Bruker, Asylum), the free-film Dimitriadis form (published for nu = 1/2 only), force maps, the finite-element solver, the viscoelastic and video modules. A curve is passed in acquisition order as one monotonic segment (the Python sorts it).
+
+**Parity with the oracle** (ten tests pass; relative tolerance 1e-9 for the laws, 1e-6 for the pipelines):
+
+| Quantity | Oracle | cancho |
+|---|---|---|
+| Hertz, Dimitriadis, Garcia, Chadwick, Connell, Sneddon at four indentations (R = 17 nm, E = 130 MPa, nu = 0.3, h = 7 nm) | analytics.py | equal to 1e-9 |
+| modulus from a synthetic raw curve (E = 130, Dimitriadis, no noise, baseline 2 nm): Hertz / Dimitriadis / Garcia / Chadwick | 398.16 / 133.01 / 64.07 / 172.66 MPa | equal to 1e-6, contact points too |
+| a deterministic 4.5 nm bilayer curve: breakthrough force, step height, four moduli, area compressibility | 5,088.3 pN, 4.5 nm, 118.3 / 10.99 / 5.92 / 21.18 MPa, 211.26 mN/m | equal to 1e-6 |
+
+* **A discrepancy the oracle caught:** the first port gave a different area compressibility (18.8 against 211.3 mN/m). nanoindent, with no capacitive height channel, **falls back to the piezo Z** to compute the contact-to-substrate height (its definition A) and then uses that height, not the film thickness given, as the bilayer's 2d in the Das/Connell fit. I had left that out, believing it needed a capacitive channel. It is now ported and tested. **That fallback is a weak point of the oracle itself:** the piezo Z includes the cantilever's deflection, so on the test curve (a bilayer built 4.5 nm thick) it returns **7.77 nm**, and the area compressibility is fitted with a thickness that is wrong by 70%. Reproduced for parity, not endorsed; a measured-height channel, or the film thickness, should be preferred.
+* **What the pipeline's accuracy is, on noiseless data:** the right model (Dimitriadis, for a curve built with it) recovers 133.0 MPa for a true 130 (2.3% high), because the contact point is found from the deflection by a threshold; naive Hertz reads **398 MPa, three times too stiff**, and the other two finite-thickness models read 64 and 173. The same fit, on real data, would also carry the cantilever calibration, the tip radius and the contact-point noise, none of which is in this test.
+* **Refusals (each tagged, none traps):** 1 too few points; 2 not one monotonic segment; 3 no contact found; 4 no breakthrough (no force drop of the minimum size); 5 too few points in the elastic branch; 6 no valid fit.
+
+**Compared with an experiment:** nanoindent's README reports, on **a real gel-phase supported-bilayer map of 400 curves**, a breakthrough force of about 22 nN, a height of about 2.6 nm, an apparent Hertz modulus of about 48 MPa and a bottom-effect-corrected 4 to 14 MPa. **The curves themselves are not in either repository, so this port was not run on them**; the comparison is the reported summary, and the port reproduces nanoindent's code, not its data. The README's lipid atlas (LipidHub) predictions are tagged heuristic and headgroup-blind there.
+
+**Still design only (D6, and sources not obtained):** viscoelastic relaxation and dynamic force spectroscopy. The sources for the standard linear solid (the RSC review: HTTP 403) and for the Bell-Evans formula (PMC and the arXiv PDF: not readable by the fetch tool) were **not read**; the formula in this note is from a search result that quotes Evans. The arXiv paper on dynamic AFM viscoelasticity that was read uses a different model (a moving-surface piecewise-linear one) and gives no Kelvin-Voigt or Zener equations.
+
 ## What stays out of scope, and why
 
 * **Real molecular dynamics, hydrodynamic interactions between molecules, crowding, and anything that depends on a force field.** The twin's particles are shapes that move.

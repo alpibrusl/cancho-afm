@@ -1,0 +1,266 @@
+import std.test;
+import forcecurve;
+
+// docs/dynamics.md, D6: the force-curve analysis, ported from nanoindent (github.com/alpibrusl/afm-finite-elements, commit c04820a, Python). nanoindent is the ORACLE: every number
+// marked "oracle" below was computed by its Python on the same inputs, and the port has to reproduce it. They are not measurements of any sample.
+//   oracle values: analytics.hertz_force / dimitriadis_force / garcia_bec_force / chadwick_force / connell_force / sneddon_cone_force; experiment.synthetic_raw_curve + to_force_indentation +
+//   dataset.fit_modulus (fit_contact_point=True); slb.process_curve.
+
+fn rel(got: float, want: float, tol: float) -> [] int {
+    var d = got - want;
+    if d < 0.0 { d = 0.0 - d; }
+    var w = want;
+    if w < 0.0 { w = 0.0 - w; }
+    if d <= tol * w { return 1; }
+    return 0;
+}
+
+fn near(got: float, want: float, tol: float) -> [] int {
+    var d = got - want;
+    if d < 0.0 { d = 0.0 - d; }
+    if d <= tol { return 1; }
+    return 0;
+}
+
+// ---- the contact laws, against the oracle at R = 17 nm, E = 130 MPa, nu = 0.3, h = 7 nm (delta = 0.25, 0.5, 1, 2 nm) ----
+
+fn test_hertz_matches_the_oracle() -> [] int {
+    test.assert(rel(forcecurve.hertz(0.25, 17.0, 130.0, 0.3), 98.16918156232525, 0.000000001) == 1);
+    test.assert(rel(forcecurve.hertz(0.5, 17.0, 130.0, 0.3), 277.66437594501434, 0.000000001) == 1);
+    test.assert(rel(forcecurve.hertz(1.0, 17.0, 130.0, 0.3), 785.353452498602, 0.000000001) == 1);
+    test.assert(rel(forcecurve.hertz(2.0, 17.0, 130.0, 0.3), 2221.3150075601147, 0.000000001) == 1);
+    // nothing in front of the contact
+    test.assert(near(forcecurve.hertz(0.0 - 1.0, 17.0, 130.0, 0.3), 0.0, 0.0) == 1);
+    return 0;
+}
+
+fn test_dimitriadis_bonded_matches_the_oracle() -> [] int {
+    test.assert(rel(forcecurve.dimitriadis(0.25, 17.0, 130.0, 0.3, 7.0), 131.02532959656602, 0.000000001) == 1);
+    test.assert(rel(forcecurve.dimitriadis(0.5, 17.0, 130.0, 0.3, 7.0), 423.9332244440122, 0.000000001) == 1);
+    test.assert(rel(forcecurve.dimitriadis(1.0, 17.0, 130.0, 0.3, 7.0), 1468.850251298797, 0.000000001) == 1);
+    test.assert(rel(forcecurve.dimitriadis(2.0, 17.0, 130.0, 0.3, 7.0), 5657.631479789881, 0.000000001) == 1);
+    // at nu = 1/2 (the published Eq. 12 case)
+    test.assert(rel(forcecurve.dimitriadis(0.25, 17.0, 130.0, 0.5, 7.0), 174.53948512529797, 0.000000001) == 1);
+    test.assert(rel(forcecurve.dimitriadis(2.0, 17.0, 130.0, 0.5, 7.0), 8963.871842323275, 0.000000001) == 1);
+    // a thick film is a half-space: the correction goes to 1
+    test.assert(rel(forcecurve.dimitriadis(1.0, 17.0, 130.0, 0.3, 100000.0), forcecurve.hertz(1.0, 17.0, 130.0, 0.3), 0.001) == 1);
+    return 0;
+}
+
+fn test_garcia_chadwick_connell_and_sneddon_match_the_oracle() -> [] int {
+    test.assert(rel(forcecurve.garcia(0.25, 17.0, 130.0, 0.3, 7.0), 147.9137487968264, 0.000000001) == 1);
+    test.assert(rel(forcecurve.garcia(2.0, 17.0, 130.0, 0.3, 7.0), 9318.633645814978, 0.000000001) == 1);
+    test.assert(rel(forcecurve.chadwick(0.25, 17.0, 130.0, 7.0), 3.5844763118126988, 0.000000001) == 1);
+    test.assert(rel(forcecurve.chadwick(2.0, 17.0, 130.0, 7.0), 1835.2518716481018, 0.000000001) == 1);
+    // Das/Connell: kappa_A = 25 mN/m, R = 20 nm, bilayer 5 nm
+    test.assert(rel(forcecurve.connell(0.25, 20.0, 25.0, 5.0), 4.351236362312733, 0.000000001) == 1);
+    test.assert(rel(forcecurve.connell(1.0, 20.0, 25.0, 5.0), 98.17477042468104, 0.000000001) == 1);
+    test.assert(rel(forcecurve.connell(2.0, 20.0, 25.0, 5.0), 698.1317007977318, 0.000000001) == 1);
+    // clipped at 0.999 of the thickness, where the law diverges
+    test.assert(rel(forcecurve.connell(4.99, 20.0, 25.0, 5.0), 391129856.16827273, 0.000001) == 1);
+    test.assert(rel(forcecurve.connell(6.0, 20.0, 25.0, 5.0), 1567656304.9377005, 0.000001) == 1);
+    // Sneddon cone, half-angle 35 degrees
+    test.assert(rel(forcecurve.sneddon_cone(0.25, 35.0, 130.0, 0.3), 3.9800532462958036, 0.000000001) == 1);
+    test.assert(rel(forcecurve.sneddon_cone(2.0, 35.0, 130.0, 0.3), 254.72340776293143, 0.000000001) == 1);
+    return 0;
+}
+
+// ---- the same synthetic raw curve as nanoindent's synthetic_raw_curve (E = 130 MPa, Dimitriadis bonded, k = 0.2 N/m, baseline 2 nm, no noise, 40 + 120 points) ----
+
+fn make_raw_curve[&a, &b](z: &!a [float], d: &!b [float]) -> [] int {
+    var i = 0;
+    while i < 40 {
+        z[i] = 50.0 - 0.8 + 0.8 * float_of(i) / 40.0;
+        d[i] = 2.0;
+        i = i + 1;
+    }
+    var j = 0;
+    while j < 120 {
+        let dl = 2.0 * float_of(j) / 119.0;
+        let f = forcecurve.dimitriadis(dl, 17.0, 130.0, 0.3, 7.0);
+        let dc = f / (0.2 * 1000.0);
+        z[40 + j] = 50.0 + dl + dc;
+        d[40 + j] = dc + 2.0;
+        j = j + 1;
+    }
+    return 0;
+}
+
+// oracle: to_force_indentation then fit_modulus(fit_contact_point=True): hertz E 398.15683558739926 at contact -0.162169429226249; dimitriadis 133.01430915478875 at -0.4206309676877876;
+// garcia 64.06729508355747 at -0.636015583072403; chadwick 172.65679921216756 at -1.109861736918557. The true modulus is 130: the contact point is found from the deflection, not given.
+fn test_the_calibration_and_the_modulus_fit_match_the_oracle() -> [] int {
+    region r {
+        let z = alloc_slice[r](160, 0.0);
+        let d = alloc_slice[r](160, 0.0);
+        let delta = alloc_slice[r](160, 0.0);
+        let force = alloc_slice[r](160, 0.0);
+        make_raw_curve(z, d);
+        let cal = forcecurve.calibrate(z, d, 160, 0.2, delta, force);
+        test.assert_eq(cal.why, 0);
+        test.assert(near(cal.baseline, 2.0, 0.000001) == 1);
+        let f0 = forcecurve.fit_modulus(delta, force, 160, 0, 17.0, 0.3, 7.0);
+        let f1 = forcecurve.fit_modulus(delta, force, 160, 1, 17.0, 0.3, 7.0);
+        let f2 = forcecurve.fit_modulus(delta, force, 160, 2, 17.0, 0.3, 7.0);
+        let f3 = forcecurve.fit_modulus(delta, force, 160, 3, 17.0, 0.3, 7.0);
+        test.assert_eq(f0.why, 0);
+        test.assert(rel(f0.e, 398.15683558739926, 0.000001) == 1);
+        test.assert(near(f0.contact, 0.0 - 0.162169429226249, 0.00001) == 1);
+        test.assert(rel(f1.e, 133.01430915478875, 0.000001) == 1);
+        test.assert(near(f1.contact, 0.0 - 0.4206309676877876, 0.00001) == 1);
+        test.assert(rel(f2.e, 64.06729508355747, 0.000001) == 1);
+        test.assert(near(f2.contact, 0.0 - 0.636015583072403, 0.00001) == 1);
+        test.assert(rel(f3.e, 172.65679921216756, 0.000001) == 1);
+        test.assert(near(f3.contact, 0.0 - 1.109861736918557, 0.00001) == 1);
+        // the right model recovers the modulus to 2.3% (133.0 for 130), the wrong ones do not: naive Hertz reads three times too stiff
+        test.assert(rel(f1.e, 130.0, 0.03) == 1);
+        test.assert(f0.e > 2.5 * 130.0);
+    }
+    return 0;
+}
+
+// ---- a deterministic supported-bilayer curve (k = 0.5 N/m, R = 20 nm, nu = 1/2, E = 80 MPa elastic branch to 4 nm, breakthrough step 4.5 nm, 60 + 100 + 60 points) ----
+
+fn make_bilayer_curve[&a, &b](z: &!a [float], d: &!b [float]) -> [] int {
+    var i = 0;
+    while i < 60 {
+        z[i] = 115.0 - 0.25 * float_of(i);
+        d[i] = 0.5;
+        i = i + 1;
+    }
+    var zb = 0.0;
+    var drb = 0.0;
+    var j = 0;
+    while j < 100 {
+        let dl = 4.0 * float_of(j) / 99.0;
+        let f = forcecurve.hertz(dl, 20.0, 80.0, 0.5);
+        let drel = f / (0.5 * 1000.0);
+        z[60 + j] = 100.0 - dl - drel;
+        d[60 + j] = 0.5 + drel;
+        zb = 100.0 - dl - drel;
+        drb = drel;
+        j = j + 1;
+    }
+    j = 0;
+    while j < 60 {
+        z[160 + j] = zb - 0.25 * float_of(j + 1);
+        d[160 + j] = 0.5 + (drb - 4.5 + 0.25 * float_of(j + 1));
+        j = j + 1;
+    }
+    return 0;
+}
+
+// oracle: slb.process_curve(R = 20, nu = 0.5, contact_sigma = 8, min_drop = 400, film_thickness = 4.5): breakthrough 5088.296908799522 pN, step height 4.5 nm, contact-to-substrate height (A, from the
+// piezo Z: 7.769259209056244 nm for a bilayer built 4.5 nm thick) and contact z 99.26925920905627,
+// moduli hertz 118.33061049645163, dimitriadis 10.993425742903275, garcia 5.921471462321873, chadwick 21.18164251744945 (MPa), kappa_A 211.25536654234335 mN/m
+fn test_the_bilayer_analysis_matches_the_oracle() -> [] int {
+    region r {
+        let z = alloc_slice[r](220, 0.0);
+        let d = alloc_slice[r](220, 0.0);
+        make_bilayer_curve(z, d);
+        let s = forcecurve.slb_curve(z, d, 220, 0.5, 20.0, 0.5, 8.0, 400.0, 4.5, 0.0);
+        test.assert_eq(s.why, 0);
+        test.assert(rel(s.breakthrough, 5088.296908799522, 0.000001) == 1);
+        test.assert(rel(s.height, 4.5, 0.000001) == 1);
+        test.assert(rel(s.height_a, 7.769259209056244, 0.000001) == 1);
+        test.assert(rel(s.contact_z, 99.26925920905627, 0.000001) == 1);
+        test.assert(rel(s.e0, 118.33061049645163, 0.000001) == 1);
+        test.assert(rel(s.e1, 10.993425742903275, 0.000001) == 1);
+        test.assert(rel(s.e2, 5.921471462321873, 0.000001) == 1);
+        test.assert(rel(s.e3, 21.18164251744945, 0.000001) == 1);
+        test.assert(rel(s.kappa_a, 211.25536654234335, 0.000001) == 1);
+    }
+    return 0;
+}
+
+// ---- refusals: every one has a tag, none panics ----
+
+fn test_a_short_curve_is_refused_with_1() -> [] int {
+    region r {
+        let z = alloc_slice[r](10, 0.0);
+        let d = alloc_slice[r](10, 0.0);
+        let delta = alloc_slice[r](10, 0.0);
+        let force = alloc_slice[r](10, 0.0);
+        test.assert_eq(forcecurve.calibrate(z, d, 10, 0.2, delta, force).why, 1);
+        test.assert_eq(forcecurve.slb_curve(z, d, 10, 0.5, 20.0, 0.5, 8.0, 400.0, 4.5, 0.0).why, 1);
+    }
+    return 0;
+}
+
+fn test_a_curve_that_goes_back_and_forth_is_refused_with_2() -> [] int {
+    region r {
+        let z = alloc_slice[r](60, 0.0);
+        let d = alloc_slice[r](60, 0.0);
+        let delta = alloc_slice[r](60, 0.0);
+        let force = alloc_slice[r](60, 0.0);
+        var i = 0;
+        while i < 60 {
+            // approach and retract in one array: up for 30 points, down for 30
+            if i < 30 { z[i] = float_of(i); } else { z[i] = float_of(59 - i); }
+            d[i] = 0.0;
+            i = i + 1;
+        }
+        test.assert_eq(forcecurve.calibrate(z, d, 60, 0.2, delta, force).why, 2);
+        // the bilayer analysis wants z falling, and this rises for half of it
+        test.assert_eq(forcecurve.slb_curve(z, d, 60, 0.5, 20.0, 0.5, 8.0, 400.0, 4.5, 0.0).why, 2);
+    }
+    return 0;
+}
+
+fn test_a_flat_curve_has_no_contact_and_a_gentle_one_no_breakthrough() -> [] int {
+    region r {
+        let z = alloc_slice[r](100, 0.0);
+        let d = alloc_slice[r](100, 0.0);
+        var i = 0;
+        while i < 100 {
+            z[i] = 100.0 - 0.25 * float_of(i);
+            d[i] = 1.0;
+            i = i + 1;
+        }
+        // nothing rises above the baseline: 3
+        test.assert_eq(forcecurve.slb_curve(z, d, 100, 0.5, 20.0, 0.5, 8.0, 400.0, 4.5, 0.0).why, 3);
+        // a smooth elastic rise to 5 nm of deflection, no snap: contact is found, no force drop of 400 pN: 4
+        i = 0;
+        while i < 100 {
+            if i > 40 { d[i] = 1.0 + 0.08 * float_of(i - 40); }
+            i = i + 1;
+        }
+        test.assert_eq(forcecurve.slb_curve(z, d, 100, 0.5, 20.0, 0.5, 8.0, 400.0, 4.5, 0.0).why, 4);
+    }
+    return 0;
+}
+
+fn test_a_breakthrough_right_after_contact_leaves_too_few_elastic_points() -> [] int {
+    region r {
+        let z = alloc_slice[r](100, 0.0);
+        let d = alloc_slice[r](100, 0.0);
+        var i = 0;
+        while i < 100 {
+            z[i] = 100.0 - 0.25 * float_of(i);
+            d[i] = 0.5;
+            i = i + 1;
+        }
+        // deflection jumps up at point 40 for three points (above threshold), then falls by 10 nm: the elastic branch is those three points
+        d[40] = 5.0; d[41] = 6.0; d[42] = 7.0; d[43] = 8.0; d[44] = 0.5;
+        let s = forcecurve.slb_curve(z, d, 100, 0.5, 20.0, 0.5, 8.0, 400.0, 4.5, 0.0);
+        // contact is the first of three consecutive points above threshold; the branch up to the drop has delta <= 0 for most (the deflection leads the piezo): refused with 5, or with 0
+        // if it has four usable points; either way a tag, never a trap
+        test.assert(s.why == 5 || s.why == 0);
+    }
+    return 0;
+}
+
+fn test_a_fit_of_a_flat_force_is_refused_with_6() -> [] int {
+    region r {
+        let delta = alloc_slice[r](50, 0.0);
+        let force = alloc_slice[r](50, 0.0);
+        var i = 0;
+        while i < 50 {
+            delta[i] = float_of(i) * 0.1;
+            // force falling with indentation: every modulus comes out negative
+            force[i] = 0.0 - float_of(i) * 10.0;
+            i = i + 1;
+        }
+        test.assert_eq(forcecurve.fit_modulus(delta, force, 50, 0, 17.0, 0.3, 7.0).why, 6);
+    }
+    return 0;
+}

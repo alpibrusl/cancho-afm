@@ -1,0 +1,437 @@
+edition 5;
+
+module forcecurve;
+
+// `forcecurve` -- analysis of AFM force curves, ported from nanoindent (github.com/alpibrusl/afm-finite-elements, commit c04820a; Python) so the instrument's software stays in cancho.
+// nanoindent is the ORACLE, not a dependency: tests/forcecurve_test.cho holds numbers computed by its Python on the same inputs, and the port must reproduce them. NOT TESTED ON ANY REAL CURVE.
+// docs/dynamics.md, D6.
+//
+// Units, as in nanoindent: indentation delta, tip radius R, film thickness h and distances in nm; modulus E in MPa; spring constant k in N/m; forces in pN (1 MPa * 1 nm^2 = 1 pN).
+//
+// What is ported: the contact laws (Hertz, Dimitriadis 2002 bonded, Garcia & Garcia 2018, Chadwick 2002, Das/Connell 2010, Sneddon cone), the calibration of a raw curve (baseline, noise, contact
+// point, force and indentation with the cantilever-compliance correction), the closed-form modulus fit with the contact-point scan, and the supported-bilayer analysis of one curve (breakthrough
+// force, step height, modulus per model, area compressibility). What is NOT ported: instrument file readers, the free (not bonded) Dimitriadis form (published for nu = 1/2 only), the
+// capacitive-height measure of bilayer thickness, force maps, the finite-element solver. A curve is passed in acquisition order, one monotonic segment: the Python sorts it, this does not.
+//
+// Every refusal has a tag (`why`); nothing here panics on a short, flat or noisy curve.
+//   why: 0 ok; 1 too few points; 2 not one monotonic segment; 3 no contact found; 4 no breakthrough (no force drop of the minimum size after contact); 5 too few points in the elastic branch;
+//        6 no valid fit (the modulus came out zero or negative at every contact point tried)
+
+import std.math;
+
+pub fn pi() -> [] float { return 3.141592653589793; }
+
+// ---- the contact laws: force (pN) from the indentation `delta` (nm) ----
+
+fn pos(x: float) -> [] float { if x < 0.0 { return 0.0; } return x; }
+
+// Hertz, rigid sphere on an elastic half-space: F = (4/3) E/(1 - nu^2) sqrt(R) delta^1.5
+pub fn hertz(delta: float, r: float, e: float, nu: float) -> [] float {
+    let d = pos(delta);
+    return (4.0 / 3.0) * (e / (1.0 - nu * nu)) * sqrt(r) * d * sqrt(d);
+}
+
+fn alpha0(nu: float) -> [] float {
+    return 0.0 - (1.2876 - 1.4678 * nu + 1.3442 * nu * nu) / (1.0 - nu);
+}
+
+fn beta0(nu: float) -> [] float {
+    return (0.6387 - 1.0277 * nu + 1.5164 * nu * nu) / (1.0 - nu);
+}
+
+// Dimitriadis et al. 2002, bonded film, general nu: the Hertz force times a quartic in chi = sqrt(R delta) / h. (At nu = 1/2 it reproduces the published Eq. 12.)
+pub fn dimitriadis(delta: float, r: float, e: float, nu: float, h: float) -> [] float {
+    let chi = sqrt(r * pos(delta)) / h;
+    let a = alpha0(nu);
+    let b = beta0(nu);
+    let p = pi();
+    let poly = 1.0 - (2.0 * a / p) * chi + (4.0 * a * a / (p * p)) * chi * chi - (8.0 / (p * p * p)) * (a * a * a + (4.0 * p * p / 15.0) * b) * chi * chi * chi
+        - (16.0 * a / (p * p * p * p)) * (a * a * a + (3.0 * p * p / 5.0) * b) * chi * chi * chi * chi;
+    return hertz(delta, r, e, nu) * poly;
+}
+
+// Garcia & Garcia 2018, bonded, paraboloid: the Hertz force times 1 + 1.133 chi + 1.497 chi^2 + 1.469 chi^3 + 0.755 chi^4
+pub fn garcia(delta: float, r: float, e: float, nu: float, h: float) -> [] float {
+    let chi = sqrt(r * pos(delta)) / h;
+    let poly = 1.0 + 1.133 * chi + 1.497 * chi * chi + 1.469 * chi * chi * chi + 0.755 * chi * chi * chi * chi;
+    return hertz(delta, r, e, nu) * poly;
+}
+
+// Chadwick 2002, thin bonded incompressible film (contact radius >> h): F = (2 pi / 3) E R^2 delta^3 / h^3. Does not reduce to Hertz for a thick film.
+pub fn chadwick(delta: float, r: float, e: float, h: float) -> [] float {
+    let d = pos(delta);
+    return (2.0 * pi() / 3.0) * e * r * r * d * d * d / (h * h * h);
+}
+
+// Das, Sheikh, Olmsted & Connell 2010, thinning of a supported FLUID bilayer: F = pi kappa_A R z0^2 / (2d - z0)^2, kappa_A in mN/m, `two_d` = 2d, the bilayer thickness, in nm; z0 limited to 0.999 two_d
+pub fn connell(delta: float, r: float, kappa_a: float, two_d: float) -> [] float {
+    var z0 = pos(delta);
+    if z0 > 0.999 * two_d { z0 = 0.999 * two_d; }
+    return pi() * kappa_a * r * z0 * z0 / ((two_d - z0) * (two_d - z0));
+}
+
+// Sneddon, rigid cone of half-angle `half_deg` (from the indentation axis): F = (2/pi) E/(1 - nu^2) tan(half-angle) delta^2
+pub fn sneddon_cone(delta: float, half_deg: float, e: float, nu: float) -> [] float {
+    let d = pos(delta);
+    return (2.0 / pi()) * (e / (1.0 - nu * nu)) * math.tan(half_deg * pi() / 180.0) * d * d;
+}
+
+// the models of the modulus fit: 0 Hertz, 1 Dimitriadis (bonded), 2 Garcia & Garcia, 3 Chadwick
+pub fn models() -> [] int { return 4; }
+
+// the force per unit modulus (E = 1 MPa) of model `m`: the shape the fit scales
+pub fn shape(m: int, delta: float, r: float, nu: float, h: float) -> [] float {
+    if m == 0 { return hertz(delta, r, 1.0, nu); }
+    if m == 1 { return dimitriadis(delta, r, 1.0, nu, h); }
+    if m == 2 { return garcia(delta, r, 1.0, nu, h); }
+    return chadwick(delta, r, 1.0, h);
+}
+
+// ---- small statistics on the head of an array ----
+
+// the median of the first n values of x (n >= 1): numpy's, the mean of the two middle values when n is even
+pub fn median_head[&a](x: &a [float], n: int) -> [] float {
+    var m = 0.0;
+    region r {
+        let c = alloc_slice[r](n, 0.0);
+        var i = 0;
+        while i < n {
+            // insertion into the sorted prefix
+            let v = x[i];
+            var j = i;
+            while j > 0 && c[j - 1] > v {
+                c[j] = c[j - 1];
+                j = j - 1;
+            }
+            c[j] = v;
+            i = i + 1;
+        }
+        if n % 2 == 1 { m = c[n / 2]; }
+        else { m = 0.5 * (c[n / 2 - 1] + c[n / 2]); }
+    }
+    return m;
+}
+
+// the population standard deviation (numpy's default) of the first n values
+pub fn std_head[&a](x: &a [float], n: int) -> [] float {
+    var s = 0.0;
+    var i = 0;
+    while i < n { s = s + x[i]; i = i + 1; }
+    let mean = s / float_of(n);
+    var q = 0.0;
+    i = 0;
+    while i < n { q = q + (x[i] - mean) * (x[i] - mean); i = i + 1; }
+    return sqrt(q / float_of(n));
+}
+
+// ---- calibration of a raw curve ----
+
+// One monotonic segment? 0 when the oriented position is non-decreasing for all but at most 5% of the steps (noise in Z is tolerated, a second segment is not), 1 when it is decreasing the same way,
+// 2 when it is neither.
+fn direction[&a](zc: &a [float], n: int) -> [] int {
+    var up = 0;
+    var down = 0;
+    var i = 0;
+    while i < n - 1 {
+        if zc[i + 1] > zc[i] { up = up + 1; }
+        if zc[i + 1] < zc[i] { down = down + 1; }
+        i = i + 1;
+    }
+    let tol = (n - 1) / 20;
+    if down <= tol { return 0; }
+    if up <= tol { return 1; }
+    return 2;
+}
+
+pub struct Cal { why: int, baseline: float, noise: float, contact: float, contact_index: int }
+
+// Calibrate a curve given in acquisition order with the tip moving toward the sample (z oriented so that it increases toward the sample: the caller flips a descending Z by passing -z). Writes
+// `delta` (nm) and `force` (pN) for every point and returns the baseline (the median of the first 10%, at least 3 points), the noise (its standard deviation), and the contact point (the first
+// sustained rise above max(5 noise, 1% of the deflection range), as nanoindent's `to_force_indentation`). Refuses with why = 1 for under 20 points, 2 for a curve that is not one monotonic segment.
+pub fn calibrate[&a, &b, &c, &d](z: &a [float], defl: &b [float], n: int, k: float, delta: &!c [float], force: &!d [float]) -> [] Cal {
+    if n < 20 { return Cal { why: 1, baseline: 0.0, noise: 0.0, contact: 0.0, contact_index: 0 }; }
+    if direction(z, n) != 0 { return Cal { why: 2, baseline: 0.0, noise: 0.0, contact: 0.0, contact_index: 0 }; }
+    var ntail = n / 10;
+    if ntail < 3 { ntail = 3; }
+    let base = median_head(defl, ntail);
+    let noise = std_head(defl, ntail);
+    var lo = defl[0] - base;
+    var hi = lo;
+    var i = 1;
+    while i < n {
+        let v = defl[i] - base;
+        if v < lo { lo = v; }
+        if v > hi { hi = v; }
+        i = i + 1;
+    }
+    var thresh = 5.0 * noise;
+    if 0.01 * (hi - lo) > thresh { thresh = 0.01 * (hi - lo); }
+    // the first i with two consecutive points above the threshold; else the highest point
+    var ci = 0 - 1;
+    i = 0;
+    while i < n - 1 && ci < 0 {
+        if defl[i] - base > thresh && defl[i + 1] - base > thresh { ci = i; }
+        i = i + 1;
+    }
+    if ci < 0 {
+        var am = 0;
+        i = 1;
+        while i < n { if defl[i] > defl[am] { am = i; } i = i + 1; }
+        ci = am;
+    }
+    let contact = z[ci];
+    i = 0;
+    while i < n {
+        let dr = defl[i] - base;
+        force[i] = k * dr * 1000.0;
+        delta[i] = (z[i] - contact) - dr;
+        i = i + 1;
+    }
+    return Cal { why: 0, baseline: base, noise: noise, contact: contact, contact_index: ci };
+}
+
+// ---- the modulus fit ----
+
+pub struct Fit { why: int, e: float, std: float, rmse: float, n: int, contact: float }
+
+// E at a fixed contact point and baseline, by closed-form least squares over the points with delta above the contact point: E = <f, s> / <s, s>, s = shape. why = 5 with under 3 points, 6 when <s, s> is 0.
+pub fn fit_at[&a, &b](delta: &a [float], force: &b [float], n: int, m: int, r: float, nu: float, h: float, cp: float, base: float) -> [] Fit {
+    var cnt = 0;
+    var ss = 0.0;
+    var fs = 0.0;
+    var i = 0;
+    while i < n {
+        let d = delta[i] - cp;
+        if d > 0.0 {
+            let s = shape(m, d, r, nu, h);
+            ss = ss + s * s;
+            fs = fs + (force[i] - base) * s;
+            cnt = cnt + 1;
+        }
+        i = i + 1;
+    }
+    if cnt < 3 { return Fit { why: 5, e: 0.0, std: 0.0, rmse: 0.0, n: cnt, contact: cp }; }
+    if ss <= 0.0 { return Fit { why: 6, e: 0.0, std: 0.0, rmse: 0.0, n: cnt, contact: cp }; }
+    let e = fs / ss;
+    var rr = 0.0;
+    i = 0;
+    while i < n {
+        let d = delta[i] - cp;
+        if d > 0.0 {
+            let miss = (force[i] - base) - e * shape(m, d, r, nu, h);
+            rr = rr + miss * miss;
+        }
+        i = i + 1;
+    }
+    var dof = cnt - 1;
+    if dof < 1 { dof = 1; }
+    return Fit { why: 0, e: e, std: sqrt(rr / float_of(dof) / ss), rmse: sqrt(rr / float_of(cnt)), n: cnt, contact: cp };
+}
+
+// The mean of the force over the points at or below the contact point (0 when there are none): the baseline nanoindent uses while it scans the contact point.
+fn base_at[&a, &b](delta: &a [float], force: &b [float], n: int, cp: float) -> [] float {
+    var s = 0.0;
+    var c = 0;
+    var i = 0;
+    while i < n {
+        if delta[i] <= cp { s = s + force[i]; c = c + 1; }
+        i = i + 1;
+    }
+    if c == 0 { return 0.0; }
+    return s / float_of(c);
+}
+
+// nanoindent's `fit_modulus(..., fit_contact_point=True)`: scan 40 contact points from the smallest delta to min(0.5 max delta, lo + 0.6 (max - lo)) and keep the positive modulus with the smallest
+// rmse. why = 6 when none qualifies.
+pub fn fit_modulus[&a, &b](delta: &a [float], force: &b [float], n: int, m: int, r: float, nu: float, h: float) -> [] Fit {
+    var lo = delta[0];
+    var hi = delta[0];
+    var i = 1;
+    while i < n {
+        if delta[i] < lo { lo = delta[i]; }
+        if delta[i] > hi { hi = delta[i]; }
+        i = i + 1;
+    }
+    var top = hi * 0.5;
+    if lo + 0.6 * (hi - lo) < top { top = lo + 0.6 * (hi - lo); }
+    var best = Fit { why: 6, e: 0.0, std: 0.0, rmse: 0.0, n: 0, contact: 0.0 };
+    var have = 0;
+    var j = 0;
+    while j < 40 {
+        let cp = lo + (top - lo) * float_of(j) / 39.0;
+        let f = fit_at(delta, force, n, m, r, nu, h, cp, base_at(delta, force, n, cp));
+        if f.why == 0 && f.e > 0.0 {
+            if have == 0 || f.rmse < best.rmse { best = f; have = 1; }
+        }
+        j = j + 1;
+    }
+    return best;
+}
+
+// ---- the supported-bilayer analysis of one curve (nanoindent.slb.process_curve) ----
+
+// moduli: one per model (hertz, dimitriadis, garcia, chadwick), 0 where a model did not give a positive finite value. kappa_a in mN/m, 0 when not fitted. `height` is nanoindent's definition (B), the
+// jump in indentation across the breakthrough. `height_a` is its definition (A), the distance from the contact point to where the post-breakthrough hard wall extrapolates to zero force, 0 when
+// there is none. nanoindent takes it from a capacitive (measured-height) channel when the file has one; with none it uses the piezo Z, as here. THE PIEZO Z INCLUDES THE CANTILEVER'S DEFLECTION, so
+// it is not the bilayer's thickness (7.77 nm for a 4.5 nm bilayer in tests/forcecurve_test.cho); the area compressibility below uses it as 2d when it exists, as nanoindent does, which makes
+// kappa_a depend on it. Reproduced for parity, not endorsed.
+pub struct Slb { why: int, breakthrough: float, height: float, height_a: float, contact_z: float, e0: float, e1: float, e2: float, e3: float, kappa_a: float, n_elastic: int }
+
+fn slb_refused(why: int) -> [] Slb {
+    return Slb { why: why, breakthrough: 0.0, height: 0.0, height_a: 0.0, contact_z: 0.0, e0: 0.0, e1: 0.0, e2: 0.0, e3: 0.0, kappa_a: 0.0, n_elastic: 0 };
+}
+
+// The curve is z (nm, decreasing toward the sample: far to near, as the Python sorts it) and the deflection (nm), n points. The breakthrough is the largest single force drop after contact and must be
+// at least `min_drop` pN (400 in nanoindent). `film_thickness` (nm, 0 = use the step height) is the h of the finite-thickness models and `fit_max_delta` (nm, 0 = h) caps the indentation they are fit on.
+pub fn slb_curve[&a, &b](z: &a [float], defl: &b [float], n: int, k: float, r: float, nu: float, contact_sigma: float, min_drop: float, film_thickness: float, fit_max_delta: float) -> [] Slb {
+    if n < 20 { return slb_refused(1); }
+    // far to near: z non-increasing for all but at most 5% of the steps
+    var up = 0;
+    var i = 0;
+    while i < n - 1 {
+        if z[i + 1] > z[i] { up = up + 1; }
+        i = i + 1;
+    }
+    if up > (n - 1) / 20 { return slb_refused(2); }
+    var nb = (3 * n) / 10;
+    if nb < 5 { nb = 5; }
+    let d0 = median_head(defl, nb);
+    var noise = std_head(defl, nb);
+    if noise == 0.0 { noise = 0.000001; }
+    var thr = contact_sigma * noise;
+    if thr < 0.3 { thr = 0.3; }
+    var ci = 0 - 1;
+    i = 0;
+    while i < n - 2 && ci < 0 {
+        if defl[i] - d0 > thr && defl[i + 1] - d0 > thr && defl[i + 2] - d0 > thr { ci = i; }
+        i = i + 1;
+    }
+    if ci < 0 || ci >= n - 4 { return slb_refused(3); }
+    let zc = z[ci];
+    // the largest force drop after contact
+    var bi = ci;
+    var worst = 0.0;
+    i = ci;
+    while i < n - 1 {
+        let step = k * (defl[i + 1] - defl[i]) * 1000.0;
+        if step < worst { worst = step; bi = i; }
+        i = i + 1;
+    }
+    let drop = 0.0 - worst;
+    if drop < min_drop { return slb_refused(4); }
+    let fb = k * (defl[bi] - d0) * 1000.0;
+    // (B) the jump in indentation across the snap-through
+    var height = ((zc - z[bi + 1]) - (defl[bi + 1] - d0)) - ((zc - z[bi]) - (defl[bi] - d0));
+    if height <= 0.3 || height >= 15.0 { height = (defl[bi] - d0) - (defl[bi + 1] - d0); }
+    // (A) contact point to substrate: a straight line fit of force against z over the points after the breakthrough, extrapolated to zero force
+    var height_a = 0.0;
+    let npost = n - (bi + 1);
+    if npost >= 4 {
+        var zlo = z[bi + 1];
+        var zhi = z[bi + 1];
+        i = bi + 1;
+        while i < n {
+            if z[i] < zlo { zlo = z[i]; }
+            if z[i] > zhi { zhi = z[i]; }
+            i = i + 1;
+        }
+        if zhi - zlo > 0.000001 {
+            var sz = 0.0;
+            var sf = 0.0;
+            i = bi + 1;
+            while i < n {
+                sz = sz + z[i];
+                sf = sf + k * (defl[i] - d0) * 1000.0;
+                i = i + 1;
+            }
+            let zm = sz / float_of(npost);
+            let fm = sf / float_of(npost);
+            var sxx = 0.0;
+            var sxy = 0.0;
+            i = bi + 1;
+            while i < n {
+                sxx = sxx + (z[i] - zm) * (z[i] - zm);
+                sxy = sxy + (z[i] - zm) * (k * (defl[i] - d0) * 1000.0 - fm);
+                i = i + 1;
+            }
+            let slope = sxy / sxx;
+            let icpt = fm - slope * zm;
+            if slope < 0.0 {
+                let hc = zc - (0.0 - icpt / slope);
+                if hc > 0.0 && hc < 60.0 { height_a = hc; }
+            }
+        }
+    }
+    // the elastic branch: contact to breakthrough, delta > 0
+    var ne = 0;
+    i = ci;
+    while i <= bi {
+        let de = (zc - z[i]) - (defl[i] - d0);
+        if de > 0.0 { ne = ne + 1; }
+        i = i + 1;
+    }
+    if ne < 4 { return slb_refused(5); }
+    var h_fit = film_thickness;
+    if h_fit <= 0.0 { h_fit = height; }
+    if h_fit < 0.5 { h_fit = 0.5; }
+    var cap = fit_max_delta;
+    if cap <= 0.0 { cap = h_fit; }
+    if cap < 1.0 { cap = 1.0; }
+    var e0 = 0.0;
+    var e1 = 0.0;
+    var e2 = 0.0;
+    var e3 = 0.0;
+    var kappa = 0.0;
+    var m = 0;
+    while m < models() {
+        var ss = 0.0;
+        var fs = 0.0;
+        var cnt = 0;
+        i = ci;
+        while i <= bi {
+            let de = (zc - z[i]) - (defl[i] - d0);
+            if de > 0.0 && de <= cap {
+                let s = shape(m, de, r, nu, h_fit);
+                let f = k * (defl[i] - d0) * 1000.0;
+                ss = ss + s * s;
+                fs = fs + f * s;
+                cnt = cnt + 1;
+            }
+            i = i + 1;
+        }
+        if cnt >= 4 && ss > 0.0 {
+            let e = fs / ss;
+            if e > 0.0 {
+                if m == 0 { e0 = e; }
+                if m == 1 { e1 = e; }
+                if m == 2 { e2 = e; }
+                if m == 3 { e3 = e; }
+            }
+        }
+        m = m + 1;
+    }
+    // Connell: kappa_A over delta < 0.85 two_d, with two_d = the contact-to-substrate height (A) when there is one, else the film thickness, else twice the step height (nanoindent's order)
+    var two_d = height_a;
+    if two_d <= 0.0 { two_d = film_thickness; }
+    if two_d <= 0.0 { two_d = 2.0 * height; if height < 0.5 { two_d = 1.0; } }
+    var kss = 0.0;
+    var kfs = 0.0;
+    var kc = 0;
+    i = ci;
+    while i <= bi {
+        let de = (zc - z[i]) - (defl[i] - d0);
+        if de > 0.0 && de < 0.85 * two_d {
+            let s = pi() * r * de * de / ((two_d - de) * (two_d - de));
+            let f = k * (defl[i] - d0) * 1000.0;
+            kss = kss + s * s;
+            kfs = kfs + f * s;
+            kc = kc + 1;
+        }
+        i = i + 1;
+    }
+    if kc >= 4 && kss > 0.0 {
+        let kk = kfs / kss;
+        if kk > 0.0 { kappa = kk; }
+    }
+    return Slb { why: 0, breakthrough: fb, height: height, height_a: height_a, contact_z: zc, e0: e0, e1: e1, e2: e2, e3: e3, kappa_a: kappa, n_elastic: ne };
+}
