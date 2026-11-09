@@ -72,4 +72,32 @@ awk -v a="$f0" -v b="$f1" 'BEGIN { exit !(b < 0.5 * a) }' || { echo "FAILED: a 1
 h "$W/tw3" 4 1 | head -n 1 | grep -qF 'failure code 36,' || { echo "FAILED: 3 steps per pixel with a 30 kHz scanner was not refused with 36"; h "$W/tw3" 4 1 | head -n 1; exit 1; }
 h "$W/tw3" 4 0 | head -n 1 | grep -qF 'failure code 0,' || { echo "FAILED: refused although the scanner was not known"; exit 1; }
 echo "HS7: a known scanner cuts the lag $k0 -> $k1 pm (30 kHz) and $f0 -> $f1 pm (100 kHz); 3 steps with 30 kHz refused with 36: ok"
+# HS5 (docs/high-speed.md): the tip off the surface on a step taller than the free amplitude (parachuting). Profile 2 (liquid, Q 3), a 100 nm Z range so the made-up sample's particles (4 times the step) fit,
+# lever 0.15 N/m; the last arguments: gain scale, host knows scanner (0), print the airborne windows (1).
+buildw() {  # $1 loop steps per pixel
+    sed "s/pub fn zmax() -> \\[\\] int { return 10000; }/pub fn zmax() -> [] int { return 100000; }/; s/if fast(p) == 1 { return 20; } return 60;/if fast(p) == 1 { return $1; } return 60;/" host/session.cho > "$W/w$1.cho"
+    grep -q 'return 100000; }' "$W/w$1.cho" && grep -q "return $1; } return 60;" "$W/w$1.cho" || { echo "FAILED: the wide-range session ($1) was not made"; exit 1; }
+    "$CANCHO" build host/scan_twin.cho $(echo "$MODS" | sed "s#SESSION#$W/w$1.cho#") --std -o "$W/tww$1" > /dev/null
+}
+buildw 20; buildw 3
+a5() { "$W/tww$1" 2 0 500 0 0 0 0 0 0 0 30 0 0 15 0 100 0 100 0 0 "$2" 0 0 "$3" 0 1; }   # $1 steps per pixel, $2 step in pm, $3 gain scale
+air_win() { sed -n 's/^airborne_windows \([0-9]*\) of .*/\1/p'; }
+air_tot() { sed -n 's/^airborne_windows [0-9]* of \([0-9]*\)/\1/p'; }
+slow=$(a5 20 4000 0); fast=$(a5 3 4000 0)
+sw=$(echo "$slow" | air_win); st=$(echo "$slow" | air_tot); fw=$(echo "$fast" | air_win); ft=$(echo "$fast" | air_tot)
+# (a) the share of the image the tip spends off the surface rises with the line rate (1.9% at 1.55 frames/s, 13% at 10): parachuting
+awk -v a="$sw" -v b="$st" -v c="$fw" -v d="$ft" 'BEGIN { exit !(c / d > 4 * a / b) }' || { echo "FAILED: airborne share $fw/$ft at 10 frames/s against $sw/$st at 1.5 (HS5 is out of date)"; exit 1; }
+# (b) in windows (time) it is about the same at both rates: the tip stays up for a time, so a faster line covers more of the image in it
+awk -v a="$sw" -v c="$fw" 'BEGIN { exit !(c > 0.75 * a && c < 1.25 * a) }' || { echo "FAILED: airborne windows $fw against $sw are not about equal (HS5 is out of date)"; exit 1; }
+# (c) a step under the free amplitude (500 pm against 2,000) leaves the tip on the surface at the slow rate; the tall one does not
+small=$(a5 20 500 0); smw=$(echo "$small" | air_win); smt=$(echo "$small" | air_tot)
+awk -v a="$smw" -v b="$smt" -v c="$sw" -v d="$st" 'BEGIN { exit !(a / b < 0.005 && c / d > 0.01) }' || { echo "FAILED: airborne share small step $smw/$smt, tall step $sw/$st (HS5 is out of date)"; exit 1; }
+# (d) more loop gain shortens the time off the surface (3,142 windows at the chosen gains, 1,636 at three times)
+hi=$(a5 3 4000 300 | air_win)
+awk -v a="$fw" -v b="$hi" 'BEGIN { exit !(b < 0.7 * a) }' || { echo "FAILED: gain x3 left $hi airborne windows against $fw (HS5 is out of date)"; exit 1; }
+# (e) the per-pixel force map misses the transient: at the slow rate, on a 1 nm step, the largest force in any detector window is several times the map's largest
+fx=$("$W/tww20" 2 0 500 0 0 0 0 0 0 0 30 0 0 15 0 100 0 100 0 0 1000 | sed -n 's/^force_pn_max \([0-9]*\) .*/\1/p')
+fm=$("$W/tww20" 2 0 500 0 0 0 0 0 0 0 30 0 0 15 0 100 0 100 0 0 1000 | sed -n 's/^force_map_max \([0-9]*\) .*/\1/p')
+awk -v a="$fx" -v b="$fm" 'BEGIN { exit !(a > 3 * b) }' || { echo "FAILED: per-window peak force $fx pN against the map's $fm pN (HS5 is out of date)"; exit 1; }
+echo "HS5: airborne share $sw/$st at 1.5 frames/s, $fw/$ft at 10 (4 nm step); small step $smw/$smt; gain x3 $hi windows; peak force $fx pN against the map's $fm pN: ok"
 echo "hs rate: passed"

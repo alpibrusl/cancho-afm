@@ -362,6 +362,7 @@ fn main(world: World) -> [] int {
     var qph = 0;      // argument 23: its phase error in degrees
     var gsc = 0;      // argument 24: a scale on the loop gains in percent (host/session.cho, sf[6]); 0 is as chosen
     var ksc = 0;      // argument 25: 1 tells the host the twin's Z scanner resonance (host/session.cho, sf[7]); 0 leaves it not known
+    var air = 0;      // argument 26: 1 prints the windows the tip spent a full free amplitude or more from the sample (docs/high-speed.md, HS5)
     borrow args as &g in {
         if arg_count(g) > 1 { prof = number_of(arg(g, 1)); }
         if arg_count(g) > 2 { scn = number_of(arg(g, 2)); }
@@ -388,6 +389,7 @@ fn main(world: World) -> [] int {
         if arg_count(g) > 23 { qph = number_of(arg(g, 23)); }
         if arg_count(g) > 24 { gsc = number_of(arg(g, 24)); }
         if arg_count(g) > 25 { ksc = number_of(arg(g, 25)); }
+        if arg_count(g) > 26 { air = number_of(arg(g, 26)); }
     }
     release(args); release(net); release(clock); release(signals); release(exec);
     borrow mut heap as &!h in {
@@ -493,6 +495,7 @@ fn main(world: World) -> [] int {
             if lv == 5 || lv == 6 || lv == 7 || lv == 8 { o = scan_out(h, o, pic, lv, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27, prof, lk, lth); }
             if lv == 4 { o = drift_check(h, o, pic, rf, st, fl, session.pixdiv(prof), xd, zd); }
             if lv != 3 && lv != 5 && lv != 6 && lv != 7 && lv != 8 && lk > 0 { o = text(h, o, "force_pn_max "); o = num(h, o, truncate(fl[36] + 0.5)); o = text(h, o, " windows_over_threshold "); o = num(h, o, truncate(fl[37])); o = text(h, o, " indentation_pm "); o = num(h, o, truncate(fl[38] + 0.5)); o = text(h, o, "\n"); var fmax = 0; var fover = 0; var fn_ = 0; var kk = 0; while kk < 4096 { if tr_of(pic[kk]) > 0 { fn_ = fn_ + 1; if force_of(pic[kk]) > fmax { fmax = force_of(pic[kk]); } if lth > 0 && force_of(pic[kk]) > lth { fover = fover + 1; } } kk = kk + 1; } o = text(h, o, "force_map_max "); o = num(h, o, fmax); o = text(h, o, " pixels_over_threshold "); o = num(h, o, fover); o = text(h, o, " of "); o = num(h, o, fn_); o = text(h, o, "\n"); }
+            if lv == 0 && air == 1 { o = text(h, o, "airborne_windows "); o = num(h, o, truncate(fl[44])); o = text(h, o, " of "); o = num(h, o, truncate(fl[45])); o = text(h, o, "\n"); }
             if lv != 3 && lv != 5 && lv != 6 && lv != 7 && lv != 8 { o = text(h, o, "frame_us "); o = num(h, o, calls * session.pixdiv(prof) * session.win_clocks(ss) / 27); o = text(h, o, "\n"); }
         }
         var code = 0;
