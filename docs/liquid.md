@@ -206,3 +206,21 @@ Tags as above, plus **[search]**: a number from a web search on 2026-11-08, a li
 ## What the force map found (twin, 2026-11-09)
 
 `scan_twin` mode 8 prints the per-pixel force of S9.3 as a PNG (0 to the larger of the largest force and the damage threshold), and the console's `scan.html` draws it under the height image when `scan.json` carries a force. **On the profile 2 run behind the video (0.15 N/m lever, threshold 100 pN) the map is nearly flat: 28 to 32 pN everywhere.** That is what the proxy (stiffness times the amplitude given up) gives when the loop holds the amplitude at its setpoint, so the map shows the loop's regulation, not the sample. It would differ where the loop lags or saturates (a step, a particle); on this sample it does not, by more than 4 pN. **Not a measured force**, and it misses transient peaks (the proxy's own caveat). Checked by `tests/liquid_flow.sh` only for being a PNG that differs from a scan without a force; **the colours were looked at once, not tested.**
+
+## What the Z range found (twin, 2026-11-09)
+
+The open conflict of S9.1 (the twin's Z range is 10,000 pm, the hard sample's step 20,000 pm) measured. `scan_twin` argument 21 now sets the made-up sample's step height (default 150 pm; its three particles are four times that, so they grow with it). Profile 2, 0.15 N/m lever, the twin's 10 nm range:
+
+| step set (pm) | step read (pm) | error | largest force (pN) |
+|---|---|---|---|
+| 150 | 151.3 | +0.9% | 32 |
+| 1,000 | 998.9 | -0.1% | 44 |
+| 2,000 to 6,000 | within 0.2% | | 300 |
+| 8,000 | 7,228 | **-9.6%** | 300 |
+| 20,000 | 7,226 | **-63.9%** | 300 |
+
+* **The twin reads a step within 0.2% up to 6 nm, and loses it from about 8 nm: a 20 nm step reads as 7.2 nm**, the loop having run out of range. The "within 10%" of the S9.1 acceptance cannot be met on a 20 nm step at this range, and the twin says so (pinned in `tests/liquid_flow.sh`).
+* **The 300 pN is the cap of the force proxy, reached from a 2 nm step on; it comes from the particles, which scale with the step (8 nm at 2 nm), not from the step alone.** I did not separate the two; the force column above is not a statement about a plain step.
+* **The twin's 10 nm is a setting of the twin. The real scanner's range is about 1 um (the 2025 paper's buzzers, their figure) and unmeasured.** What a 20 nm step needs is its height plus the free amplitude plus margin, about 30 nm **[computed]**, far under 1 um. The conflict is a limit of the twin, not yet a finding about the instrument.
+* **Raising the twin's range is not just a constant. Found and not fixed:** with `zmax()` in `host/session.cho` at 100,000 pm the run ends with **code 0 and an image pinned at the top (every Z 100,000, no step, no particles; the approach reports a contact Z of 0)**. A refusal with a tag was expected, as for the light (S9.6); the cause was not found (the twin's tip-sample distance at Z = 0 is 11,000 pm, `host/scan_twin.cho`, and the approach's step and limits were written for 10 nm). **This is the same kind of fault as the slow fade of S9.6: success reported on a dead image.**
+* **What this changes in S9.1:** the hard sample stays mica first. A grating whose step is under about 6 nm would be tracked by the twin as it is; whether one exists as a calibrated standard was not checked. The 20 nm grating waits for either the hardware's measured range or a twin range that works.
