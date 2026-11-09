@@ -7,6 +7,7 @@ import livecurve;
 import dfs;
 import bilayer;
 import domains;
+import histogram;
 
 // A FORCE-VOLUME MAP of a mixed gel and fluid bilayer (docs/dynamics.md, "Force-volume map"): at every pixel of an N by N grid a force curve is ramped (sim/bilayer.cho) and analysed as it is acquired
 // (sim/livecurve.cho, then the whole-curve analysis). One JSON line per pixel. A prediction of this software, not a measurement: the sample is made up (sim/domains.cho) and the rupture kinetics are free
@@ -16,6 +17,8 @@ import domains;
 //   fv_twin [N] [LAW] [STRIDE] [KIND]      N pixels a side (default 16, 2 to 64); LAW 0 half-space, 1 bonded film (default 0); STRIDE points between those printed of each curve (default 3);
 //                                          KIND 0 the lever of Khadka et al. 2021, 1 of Et-Thakafy et al. 2019 (default 0)
 // A line: {"px":p,"ix":..,"iy":..,"n":N,"truth":0|1 (gel),"ok":0|1,"why":tag,"e":MPa,"bt_nn":nN,"height_nm":..,"zc_nm":contact point above the fluid's,"force":[pN..],"delta":[nm..]}
+// After the last pixel, one more line: {"hist":{"bt_lo":0,"bt_hi":16,"e_lo":8,"e_hi":28,"bins":32,"bt_all":[counts],"bt_fluid":[..],"bt_gel":[..],"e_all":[..],"e_fluid":[..],"e_gel":[..]}} (sim/histogram.cho; refused
+// pixels are in none; "fluid" and "gel" are the TRUE phase, which a real map does not have: they show what the two peaks of "all" are made of).
 // The curves are the pixel's, thinned to every STRIDE-th point; "ok" is 0 when the analysis refused (its tag in "why"), and the maps then hold nothing for that pixel.
 
 fn text[&h, &r](heap: &!h Heap, b: buffer.Buffer, s: &r [byte]) -> [heap] buffer.Buffer { return buffer.append(heap, b, s); }
@@ -73,6 +76,19 @@ fn arr[&h, &a, &c](heap: &!h Heap, o: buffer.Buffer, key: &a [byte], xs: &c [flo
     return text(heap, b, "]");
 }
 
+fn iarr[&h, &a, &c](heap: &!h Heap, o: buffer.Buffer, key: &a [byte], xs: &c [int], n: int) -> [heap] buffer.Buffer {
+    var b = text(heap, o, ",\"");
+    b = text(heap, b, key);
+    b = text(heap, b, "\":[");
+    var i = 0;
+    while i < n {
+        if i > 0 { b = text(heap, b, ","); }
+        b = num(heap, b, xs[i]);
+        i = i + 1;
+    }
+    return text(heap, b, "]");
+}
+
 fn field[&h, &a](heap: &!h Heap, o: buffer.Buffer, key: &a [byte], v: float, places: int) -> [heap] buffer.Buffer {
     var b = text(heap, o, ",\"");
     b = text(heap, b, key);
@@ -106,6 +122,12 @@ fn main(world: World) -> [] int {
             let gs = alloc_slice[r](8, 0.0);
             let si = alloc_slice[r](8, 0);
             let sf = alloc_slice[r](16, 0.0);
+            let bt_all = alloc_slice[r](32, 0);
+            let bt_fl = alloc_slice[r](32, 0);
+            let bt_ge = alloc_slice[r](32, 0);
+            let e_all = alloc_slice[r](32, 0);
+            let e_fl = alloc_slice[r](32, 0);
+            let e_ge = alloc_slice[r](32, 0);
             let base = bilayer.lever_khadka();
             var sigma = 0.02;
             var l0 = base;
@@ -153,6 +175,17 @@ fn main(world: World) -> [] int {
                     o = field(h, o, "height_nm", fin.height, 2);
                     o = field(h, o, "zc_nm", fin.contact_z - 100.0, 2);
                 }
+                if fin.why == 0 {
+                    histogram.add(bt_all, fin.breakthrough / 1000.0, 0.0, 16.0, 32);
+                    histogram.add(e_all, fin.e0, 8.0, 28.0, 32);
+                    if ph == 1 {
+                        histogram.add(bt_ge, fin.breakthrough / 1000.0, 0.0, 16.0, 32);
+                        histogram.add(e_ge, fin.e0, 8.0, 28.0, 32);
+                    } else {
+                        histogram.add(bt_fl, fin.breakthrough / 1000.0, 0.0, 16.0, 32);
+                        histogram.add(e_fl, fin.e0, 8.0, 28.0, 32);
+                    }
+                }
                 // the curve, thinned
                 var m = 0;
                 var q = 0;
@@ -164,6 +197,17 @@ fn main(world: World) -> [] int {
                 buffer.drop(h, o);
                 p = p + 1;
             }
+            var o = buffer.empty(h, 4096);
+            o = text(h, o, "{\"hist\":{\"bt_lo\":0,\"bt_hi\":16,\"e_lo\":8,\"e_hi\":28,\"bins\":32");
+            o = iarr(h, o, "bt_all", bt_all, 32);
+            o = iarr(h, o, "bt_fluid", bt_fl, 32);
+            o = iarr(h, o, "bt_gel", bt_ge, 32);
+            o = iarr(h, o, "e_all", e_all, 32);
+            o = iarr(h, o, "e_fluid", e_fl, 32);
+            o = iarr(h, o, "e_gel", e_ge, 32);
+            o = text(h, o, "}}\n");
+            borrow mut io as &!w in { borrow o as &b in { buffer.write(w, b); } }
+            buffer.drop(h, o);
         }
     }
     release(heap);
