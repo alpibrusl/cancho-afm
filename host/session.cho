@@ -57,6 +57,8 @@ pub fn free_pm() -> [] float { return 2000.0; }                   // the free am
 pub fn zmax() -> [] int { return 10000; }
 pub fn motor_rate() -> [] int { return 27000; }                  // clocks per microstep: 1 kHz, gentle for a driver and a small stepper
 pub fn coarse_steps() -> [] int { return 30; }                   // microsteps per approach "coarse step"
+pub fn gap_max() -> [] int { return 12000; }                     // the farthest initial tip-sample gap the approach is asked to cover, pm: the twin's is 11,000 (host/scan_twin.cho); a real one is a decision about the pre-approach, not made here
+pub fn step_budget() -> [] int { return 100000; }                // session steps a host allows a run (each is one script exchange; the time per step on a real link is not measured); the hosts' loops and approach.check_budget use it
 pub fn pm_per_step() -> [] int { return 198; }                   // ASSUMED: a 0.635 mm lead screw, 1.8 degrees, 1/16 microstepping; calibrate before trusting
 pub fn sweep_points() -> [] int { return 63; }
 pub fn sweep_f(p: int, i: int) -> [] float {
@@ -77,7 +79,7 @@ fn pow2(n: int) -> [] int {
 }
 
 fn params[&a](ss: &a [int]) -> [] approach.P {
-    return approach.P { free_r: ss[10], free_pm: truncate(free_pm()), contact_pct: contact_pct(ss[3]), dz: 192, dwell: 40, zmin: 0, zmax: zmax(), coarse: coarse_steps() * pm_per_step(), max_motor: 20 };
+    return approach.P { free_r: ss[10], free_pm: truncate(free_pm()), contact_pct: contact_pct(ss[3]), dz: 192, dwell: 40, zmin: 0, zmax: zmax(), coarse: coarse_steps() * pm_per_step(), max_motor: (gap_max() + coarse_steps() * pm_per_step() - 1) / (coarse_steps() * pm_per_step()) };
 }
 
 // ---- building the script of a stage; returns the number of operations ----
@@ -228,7 +230,7 @@ pub fn consume[&a, &b, &c, &d](ss: &!a [int], sf: &!b [float], out: &c [int], im
     let stage = ss[0];
     let p = ss[3];
     ss[1] = ss[1] + 1;
-    if ss[1] > 40000 { ss[2] = 6; ss[0] = 98; return 0; }
+    if ss[1] > step_budget() { ss[2] = 6; ss[0] = 98; return 0; }
     // profile 2: the light is looked at after every stage, before anything else is believed (its two readings are the last two of the stage's reads)
     if opt(p) > 0 && stage <= 6 {
         let sum = out[out[0] - 1];
@@ -284,6 +286,8 @@ pub fn consume[&a, &b, &c, &d](ss: &!a [int], sf: &!b [float], out: &c [int], im
         ss[12] = (out[1] * setpoint_pct(p) / 100) / pow2(ss[11]);
         if approach.check(params(ss), sf[3]) != 0 {
             ss[2] = 3; ss[0] = 98;
+        } else if approach.check_budget(params(ss), step_budget(), 1000) != 0 {
+            ss[2] = 35; ss[0] = 98;                  // the worst-case approach does not fit in the step budget (rule 5): refused before anything moves
         } else {
             let ap = params(ss);
             let a0 = approach.start(ap);

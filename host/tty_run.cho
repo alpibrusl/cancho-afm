@@ -75,7 +75,7 @@ fn main(world: World) -> [] int {
                                         let out = alloc_slice[r](128, 0);
                                         let img = alloc_slice[r](64, 0 - 1);
                                         var guard = 0;
-                                        while ss[0] != 99 && ss[0] != 98 && guard < 40000 {
+                                        while ss[0] != 99 && ss[0] != 98 && guard < session.step_budget() {
                                             let nops = session.build(ss, sf, sc);
                                             var reads = 0;
                                             var i = 0;

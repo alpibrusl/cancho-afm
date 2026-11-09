@@ -45,6 +45,8 @@ if [ -n "${KICAD_CLI:-}" ]; then
 fi
 # the alignment steps and the force in the report, against the twin (S9.7); needs only the compiler
 sh tests/liquid_flow.sh
+# the frame rate the twin predicts as the loop steps per pixel are cut, and the air Q the tune stage refuses (HS1)
+sh tests/hs_rate.sh
 # the scan -> particles.csv -> cancho-table flow (I3) needs a built `table`; it runs only when TABLE names one
 if [ -n "${TABLE:-}" ]; then
   sh tests/particles_flow.sh
