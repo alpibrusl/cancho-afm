@@ -420,6 +420,7 @@ fn main(world: World) -> [] int {
                 session.consume(ss, sf, out, img);
                 guard = guard + 1;
             }
+            session.budget_spent(ss, 5);
             if lv != 3 && lv != 5 && lv != 6 && lv != 7 && lv != 8 {
             o = text(h, o, "twin scan; failure code "); o = num(h, o, ss[2]); o = text(h, o, ", refused writes "); o = num(h, o, failures);
             o = text(h, o, ", contact Z "); o = num(h, o, ss[9]); o = text(h, o, " pm; f0 "); o = num(h, o, truncate(sf[0])); o = text(h, o, " Hz, Q "); o = num(h, o, truncate(sf[1])); o = text(h, o, ", free figure "); o = num(h, o, ss[10]);
