@@ -7,8 +7,10 @@ module membrane;
 //   * `sd_diffusion`: the Saffman-Delbrueck translational diffusion coefficient of a cylindrical inclusion of radius a in a membrane (thickness h, viscosity eta_m; the 2D viscosity eta_m h
 //     is the one argument) surrounded by a fluid of viscosity eta:
 //         D = kT / (4 pi eta_m h) * [ ln(l / a) - gamma ],     l = eta_m h / eta,    gamma = 0.5772...
-//     No-slip at the membrane/fluid boundary; valid for a below the Saffman-Delbrueck length L_sd = l / 2. (Demery & Lacoste, arXiv 1810.09910, Eq. 1; the Wikipedia article on the model, which
-//     writes it as ln(2 L_sd / a) - gamma. Experiments contest its logarithmic size dependence: docs/dynamics.md.)
+//     No-slip at the membrane/fluid boundary. The same formula is Eq. 1 of Gambin et al. 2006 and of Weiss et al. 2013, ln(2/eps) - gamma with eps = a / L_sd of Petrov & Schwille 2008 (L_sd = l / 2 for
+//     the same fluid on both sides), and Demery & Lacoste's Eq. 1 (all read in full, docs/dynamics.md). Valid for eps = a / L_sd well under 1: Petrov & Schwille find it a good approximation only for
+//     eps < 0.1 (against their fit of the exact model it is 0.3% low at eps = 0.01, 4.4% at 0.1 and 35% at 0.5), so `sd_valid` stops at 0.1, not at 1 as the Wikipedia article's "a < L_sd" would.
+//     Experiments contest its logarithmic size dependence (Gambin: 1/a; Weiss: SD holds): docs/dynamics.md.
 //   * the two tracking criteria of docs/dynamics.md: the molecule stays in the frame (Casuso et al. 2009: <r^2> = 4 D t against the field), and it can be linked from frame to frame among others
 //     (the displacement under half the nearest-neighbour distance).
 //   * `walk`: a stateless random walk, the position at any time t with no memory of the path, for a board that is asked for the surface at every sample. A sum of sinusoids with fixed
@@ -21,10 +23,10 @@ import std.math;
 pub fn boltzmann() -> [] float { return 1.380649e-23; }
 pub fn euler_gamma() -> [] float { return 0.5772156649015329; }
 
-// 1 when the Saffman-Delbrueck form applies: positive inputs and a below L_sd = eta_m_h / (2 eta)
+// 1 when the Saffman-Delbrueck form applies: positive inputs and eps = a / L_sd under 0.1, with L_sd = eta_m_h / (2 eta) (Petrov & Schwille 2008)
 pub fn sd_valid(eta_m_h: float, a: float, eta: float) -> [] int {
     if eta_m_h <= 0.0 || a <= 0.0 || eta <= 0.0 { return 0; }
-    if a >= eta_m_h / (2.0 * eta) { return 0; }
+    if a >= 0.1 * eta_m_h / (2.0 * eta) { return 0; }
     return 1;
 }
 

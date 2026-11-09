@@ -1,0 +1,165 @@
+import std.test;
+import std.math;
+import dfs;
+
+// docs/dynamics.md, D6: dynamic force spectroscopy. The formulas are Bell's law and the Bell-Evans peak (derived in sim/dfs.cho and checked here against the maximum of the rupture-force density) and
+// the Dudko-Hummer-Szabo lifetime (PNAS 105:15755, 2008, Eq. 5, read in full). The system is their ddFLN4 protein unfolding (Schlierf & Rief's data): tau0 = 120 s, x = 1.1 nm, dG = 15.0 kT for nu = 1/2
+// (14.7 kT for nu = 2/3), pulled at 200 to 4,000 nm/s with a 4.9 pN/nm spring (a loading rate of 980 to 19,600 pN/s, before the linker's own stiffness). Values below are computed from the formulas,
+// NOT read from the paper's figures: they check the implementation, not the physics.
+
+fn rel(got: float, want: float, tol: float) -> [] int {
+    var d = got - want;
+    if d < 0.0 { d = 0.0 - d; }
+    var w = want;
+    if w < 0.0 { w = 0.0 - w; }
+    if d <= tol * w { return 1; }
+    return 0;
+}
+
+fn near(got: float, want: float, tol: float) -> [] int {
+    var d = got - want;
+    if d < 0.0 { d = 0.0 - d; }
+    if d <= tol { return 1; }
+    return 0;
+}
+
+fn test_kt_is_4_1_pn_nm_at_room_temperature() -> [] int {
+    test.assert(near(dfs.kt(298.15), 4.1164, 0.001) == 1);
+    return 0;
+}
+
+// the peak of p(F), found by scanning the density, is the closed form: this is what makes the Evans formula checked and not just copied
+fn argmax_density(r: float, k_off: float, x: float, kt: float) -> [] float {
+    var best = 0.0;
+    var bf = 0.0;
+    var f = 0.0;
+    while f < 300.0 {
+        let p = dfs.rupture_density(f, r, k_off, x, kt);
+        if p > best { best = p; bf = f; }
+        f = f + 0.01;
+    }
+    return bf;
+}
+
+fn test_the_bell_evans_peak_is_the_maximum_of_the_rupture_density() -> [] int {
+    let kt = dfs.kt(298.15);
+    // ddFLN4: x = 1.1 nm, k_off = 1 / 120 s; 980 pN/s (200 nm/s at 4.9 pN/nm) and 19,600 pN/s (4,000 nm/s)
+    test.assert(near(dfs.bell_evans_peak(980.0, 1.0 / 120.0, 1.1, kt), 38.752, 0.001) == 1);
+    test.assert(near(dfs.bell_evans_peak(19600.0, 1.0 / 120.0, 1.1, kt), 49.962, 0.001) == 1);
+    test.assert(near(argmax_density(980.0, 1.0 / 120.0, 1.1, kt), 38.752, 0.02) == 1);
+    test.assert(near(argmax_density(19600.0, 1.0 / 120.0, 1.1, kt), 49.962, 0.02) == 1);
+    // and a quicker bond at another rate
+    let want = dfs.bell_evans_peak(1000.0, 1.0, 0.5, kt);
+    test.assert(near(argmax_density(1000.0, 1.0, 0.5, kt), want, 0.02) == 1);
+    return 0;
+}
+
+fn test_the_rupture_density_integrates_to_one() -> [] int {
+    let kt = dfs.kt(298.15);
+    var total = 0.0;
+    var f = 0.0;
+    while f < 300.0 {
+        total = total + dfs.rupture_density(f, 980.0, 1.0 / 120.0, 1.1, kt) * 0.01;
+        f = f + 0.01;
+    }
+    test.assert(near(total, 1.0, 0.002) == 1);
+    return 0;
+}
+
+// slower than its own off-rate a bond ruptures at zero force
+fn test_a_slow_loading_ruptures_at_zero_force() -> [] int {
+    let kt = dfs.kt(298.15);
+    // r x / (k_off kT) = 0.001 * 1.1 / (0.0083 * 4.1) = 0.03: under 1
+    test.assert(near(dfs.bell_evans_peak(0.001, 1.0 / 120.0, 1.1, kt), 0.0, 0.0) == 1);
+    return 0;
+}
+
+fn rate_of(i: int) -> [] float {
+    if i == 0 { return 100.0; }
+    if i == 1 { return 1000.0; }
+    if i == 2 { return 10000.0; }
+    if i == 3 { return 100000.0; }
+    return 1000000.0;
+}
+
+// the analysis recovers the parameters that made the data (exactly, from formula values; then with a +-1.5 pN deterministic scatter)
+fn test_the_fit_recovers_the_barrier_distance_and_the_off_rate() -> [] int {
+    let kt = dfs.kt(298.15);
+    region r {
+        let rs = alloc_slice[r](5, 0.0);
+        let fs = alloc_slice[r](5, 0.0);
+        var i = 0;
+        while i < 5 {
+            rs[i] = rate_of(i);
+            fs[i] = dfs.bell_evans_peak(rs[i], 1.0 / 120.0, 1.1, kt);
+            i = i + 1;
+        }
+        let fit = dfs.fit(rs, fs, 5, kt);
+        test.assert_eq(fit.why, 0);
+        test.assert(rel(fit.x, 1.1, 0.000001) == 1);
+        test.assert(rel(fit.k_off, 1.0 / 120.0, 0.000001) == 1);
+        // with scatter: the sin hash of the index, +-1.5 pN
+        i = 0;
+        while i < 5 {
+            fs[i] = fs[i] + 1.5 * math.sin(12.9898 * float_of(i) + 78.233);
+            i = i + 1;
+        }
+        let noisy = dfs.fit(rs, fs, 5, kt);
+        test.assert_eq(noisy.why, 0);
+        // x within 25%, and k_off within a factor of 5 (it sits in an exponential of the intercept: the weak half of this analysis)
+        test.assert(rel(noisy.x, 1.1, 0.25) == 1);
+        test.assert(noisy.k_off > (1.0 / 120.0) / 5.0 && noisy.k_off < (1.0 / 120.0) * 5.0);
+    }
+    return 0;
+}
+
+fn test_the_fit_is_refused_with_a_tag() -> [] int {
+    let kt = dfs.kt(298.15);
+    region r {
+        let rs = alloc_slice[r](5, 0.0);
+        let fs = alloc_slice[r](5, 0.0);
+        // too few points: 1
+        test.assert_eq(dfs.fit(rs, fs, 2, kt).why, 1);
+        // rates within a factor of 10: 3
+        rs[0] = 100.0; rs[1] = 200.0; rs[2] = 400.0; rs[3] = 600.0; rs[4] = 800.0;
+        fs[0] = 20.0; fs[1] = 25.0; fs[2] = 30.0; fs[3] = 33.0; fs[4] = 35.0;
+        test.assert_eq(dfs.fit(rs, fs, 5, kt).why, 3);
+        // the force does not rise with the rate: 2
+        rs[0] = 100.0; rs[1] = 1000.0; rs[2] = 10000.0; rs[3] = 100000.0; rs[4] = 1000000.0;
+        fs[0] = 50.0; fs[1] = 45.0; fs[2] = 40.0; fs[3] = 35.0; fs[4] = 30.0;
+        test.assert_eq(dfs.fit(rs, fs, 5, kt).why, 2);
+    }
+    return 0;
+}
+
+// ---- Dudko-Hummer-Szabo Eq. 5 ----
+
+fn test_dhs_gives_bells_formula_for_nu_1_and_the_zero_force_lifetime() -> [] int {
+    let kt = dfs.kt(298.15);
+    let dg = 15.0 * kt;
+    // nu = 1: Bell's tau0 exp(-F x / kT), up to the force at which the barrier vanishes (dG / x = 56 pN here)
+    test.assert(rel(dfs.dhs_lifetime(20.0, 120.0, 1.1, dg, 1.0, kt), dfs.bell_lifetime(20.0, 120.0, 1.1, kt), 0.000001) == 1);
+    test.assert(rel(dfs.dhs_lifetime(50.0, 120.0, 1.1, dg, 1.0, kt), dfs.bell_lifetime(50.0, 120.0, 1.1, kt), 0.000001) == 1);
+    // no force: the zero-force lifetime, whatever nu
+    test.assert(rel(dfs.dhs_lifetime(0.0, 120.0, 1.1, dg, 0.5, kt), 120.0, 0.000001) == 1);
+    test.assert(rel(dfs.dhs_lifetime(0.0, 120.0, 1.1, dg, 2.0 / 3.0, kt), 120.0, 0.000001) == 1);
+    return 0;
+}
+
+fn test_dhs_lifetimes_of_the_ddfln4_barrier() -> [] int {
+    let kt = dfs.kt(298.15);
+    let dg = 15.0 * kt;
+    // computed from Eq. 5 (nu = 1/2): 1.122 s at 20 pN, 6.68 ms at 50 pN, 0.441 ms at 80 pN; Bell's: 0.573 s, 0.189 ms, 62 ns
+    test.assert(rel(dfs.dhs_lifetime(20.0, 120.0, 1.1, dg, 0.5, kt), 1.122181400352883, 0.000001) == 1);
+    test.assert(rel(dfs.dhs_lifetime(50.0, 120.0, 1.1, dg, 0.5, kt), 0.006678420046247436, 0.000001) == 1);
+    test.assert(rel(dfs.dhs_lifetime(80.0, 120.0, 1.1, dg, 0.5, kt), 0.00044092953386796243, 0.000001) == 1);
+    // Bell's formula is a lower bound on the lifetime (DHS): the generalisation is above it from low forces up to well past 80 pN here
+    test.assert(dfs.dhs_lifetime(20.0, 120.0, 1.1, dg, 0.5, kt) > dfs.bell_lifetime(20.0, 120.0, 1.1, kt));
+    test.assert(dfs.dhs_lifetime(80.0, 120.0, 1.1, dg, 0.5, kt) > dfs.bell_lifetime(80.0, 120.0, 1.1, kt));
+    // nu = 2/3 with dG = 14.7 kT: 0.923 s at 20 pN, 3.0 ms at 50 pN
+    test.assert(rel(dfs.dhs_lifetime(20.0, 120.0, 1.1, 14.7 * kt, 2.0 / 3.0, kt), 0.9232050548334918, 0.000001) == 1);
+    test.assert(rel(dfs.dhs_lifetime(50.0, 120.0, 1.1, 14.7 * kt, 2.0 / 3.0, kt), 0.002995379418829508, 0.000001) == 1);
+    // at or above the force where the barrier vanishes (dG / (nu x) = 112 pN for nu = 1/2) the formula does not apply: 0
+    test.assert(near(dfs.dhs_lifetime(113.0, 120.0, 1.1, dg, 0.5, kt), 0.0, 0.0) == 1);
+    return 0;
+}
