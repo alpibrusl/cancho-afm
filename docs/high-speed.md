@@ -60,7 +60,7 @@ at 4.5 MS/s a 0.5 MHz, Q = 5 cantilever has alpha = 0.07, so the lag is modelled
   (`host/session.cho`): it must sweep a megahertz-scale range, with a wider step. That is a parameter, not new logic.
 * **Can, with a small model (H2):** a Z scanner as a second-order system (resonance, damping), and an amplifier slew limit, in `sim/plant.cho`: it shows ringing and the
   line-rate limit **when the loop is faster than the scanner**. The parameters would be guesses until a scanner is measured.
-* **Cannot:** photodiode and laser noise, optical alignment, tip-sample dynamics at speed (tapping with very small amplitudes), liquid damping, the real scanner.
+* **Cannot:** photodiode and laser noise, optical alignment, tip-sample dynamics at speed (tapping with very small amplitudes), liquid damping, the real scanner. **(Corrected by HS5 below: the twin does model the lever's amplitude lag and the loss of signal when the tip is a full free amplitude from the sample, which is enough to show parachuting; what it does not model is listed there.)**
   The twin must say so on every HS result, as it does now.
 
 ## Slices, acceptance written first
@@ -174,7 +174,7 @@ Issue #65. Rule 5 of the approach, the step budget: **the approach is host-drive
 
 ## Open slices, as issues
 
-#64 HS1, #65 HS2, (the twin side of) #66 HS3 and #72 HS7 are above. #67 HS4 tested its premise (above) and built nothing. Not started: #68 HS5 (tapping dynamics at speed), #69 HS6 (hardware; blocked on a bench).
+#64 HS1, #65 HS2, (the twin side of) #66 HS3, #72 HS7 and #68 HS5 are above. #67 HS4 tested its premise (above) and built nothing. Not started: #69 HS6 (hardware; blocked on a bench).
 
 ## What HS3 found (twin, 2026-11-09; predictions, not measurements)
 
@@ -245,6 +245,32 @@ Issue #72. A gain rule that knows the Z scanner. **Built, with one regression on
 * **After 100 pm:** the rule leaves a large gap to the best per-cell gain (the best gain also depends on the lever and the pixel time, not only the scanner), and a 50 kHz scanner is not helped at all.
 
 **Not modelled:** a scanner with a slew limit (`scan_twin` scanner 3 reports 100 kHz and is treated as such), hysteresis and creep, the scanner's own Q (the table used Q 3, and Q 10 for the 20 kHz one), and the amplifier. The scanner's resonance is an input the host must be given.
+
+## What HS5 found (twin, 2026-11-09; predictions, not measurements)
+
+Issue #68 said the twin has no tip-sample dynamics at speed. **That was too strong, and is corrected here.** The twin has two things that produce parachuting: the amplitude follows its target with the lever's own response time (a first-order lag per ADC sample, `alpha = pi f0 / (Q fs)`, `tau = Q / (pi f0)`), and the target is the free amplitude whenever the tip is a free amplitude or more from the sample (`gap >= free`: the signal saturates, so the loop knows only that it is far, not how far). What was missing was a **measurement** of it, which this adds: `scan_twin` argument 26 = 1 prints `airborne_windows A of N`, the detector windows in which the tip was a full free amplitude from the sample (the board's `fl[44]` and `fl[45]`).
+
+Profile 2 (liquid, Q 3), a 100 nm Z range so the made-up sample's particles (4 times the step) fit, lever 0.15 N/m (rigid sample), the loop gains as chosen, 64 x 64 with trace and retrace, one run per cell. The share of the detector windows with the tip off the surface:
+
+| step | 1.55 frames/s | 3.1 | 5.2 | 10.3 |
+|---|---|---|---|---|
+| 500 pm | 0.1% | 0.3% | 0.5% | 1.8% |
+| 1,000 pm | 0.5% | 0.9% | 1.6% | 4.3% |
+| 4,000 pm | 1.9% | 3.9% | 7.1% | **13.0%** |
+| 8,000 pm | 2.8% | 5.8% | 9.3% | 15.7% |
+
+* **Parachuting is a fixed time, not a fixed distance.** For the 4 nm step the count of airborne windows is the same at every rate (3,039, 3,145, 3,435 and 3,142), so a faster line, with fewer windows per pixel, covers more of the image while the tip is up: 1.9% of the image at 1.55 frames/s, 13% at 10. A step under the free amplitude (500 pm against 2,000) barely does it (0.1% at the slow rate). Pinned in `tests/hs_rate.sh`.
+* **More loop gain shortens it** (4 nm step, 10.3 frames/s): 3,731 airborne windows at half the chosen gains, 3,142 at the chosen, 2,146 at twice, 1,636 at three times (15.4% down to 6.8%). That is another reason the gain rule of HS4 and HS7 matters, and it pulls against the scanner's limit on gain (HS7).
+* **The per-pixel force map misses the transient, and it matters more at speed.** The largest force in any detector window against the largest in the per-pixel map, in pN (the proxy is capped at 300):
+
+| step | 1.55 frames/s | 3.1 | 5.2 | 10.3 |
+|---|---|---|---|---|
+| 1,000 pm | 248 / 42 | 239 / 73 | 230 / 81 | 242 / 169 |
+| 4,000 pm | 300 / 118 | 300 / 205 | 300 / 202 | 300 / 300 |
+
+  At the slow rate the map reads about a sixth of the largest window force on a 1 nm step. At the fast rate it catches up because each pixel is a few windows long, which says the map is a sampling artefact of the pixel time, not a better measurement. **Neither is a measured force**; both are the same linear law (stiffness times the amplitude given up).
+* **Parameters of the model, all guesses until a lever is measured:** `tau` from the tuned Q and f0, the contact law `amplitude = free * gap / free` for gaps under the free amplitude, the loop gains, and the 2 nm free amplitude.
+* **Not modelled:** a tip-sample force law (the contact is linear, not the real attraction and repulsion), the lever falling faster in contact than it rises off the surface (dissipation on contact; the twin uses one `tau` for both), motion within a cycle (the detector sees an 18-sample window, two cycles), liquid squeeze-film damping, the lever's higher modes, and a soft sample's recovery. The airborne share is a prediction of the twin's one-line physics, not of an instrument.
 
 ## Risks
 
