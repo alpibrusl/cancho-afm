@@ -1,0 +1,64 @@
+import std.test;
+import adequacy;
+
+// docs/dynamics.md, D7: the discrepancy between ensembles of summaries. Models 0, 1 and 2 of the library (critical density only; plus edge-induced rupture; plus a tip that ruptures vesicles). Twin data
+// standing in for an experiment; 16 movies an ensemble.
+
+fn test_a_model_reproduces_itself_and_not_the_others() -> [] int {
+    region r {
+        let gm = alloc_slice[r](24, 0.0);
+        let gv = alloc_slice[r](24, 0.0);
+        let pm = alloc_slice[r](24, 0.0);
+        let pv = alloc_slice[r](24, 0.0);
+        let am = alloc_slice[r](8, 0.0);
+        let av = alloc_slice[r](8, 0.0);
+        let bm = alloc_slice[r](8, 0.0);
+        let bv = alloc_slice[r](8, 0.0);
+        let z = alloc_slice[r](8, 0.0);
+        var i = 0;
+        while i < 3 {
+            adequacy.ensemble(i, 16, 1, am, av);
+            adequacy.ensemble(i, 16, 1001, bm, bv);
+            var t = 0;
+            while t < 8 { gm[i * 8 + t] = am[t]; gv[i * 8 + t] = av[t]; pm[i * 8 + t] = bm[t]; pv[i * 8 + t] = bv[t]; t = t + 1; }
+            i = i + 1;
+        }
+        i = 0;
+        while i < 3 {
+            var j = 0;
+            while j < 3 {
+                var t = 0;
+                while t < 8 { am[t] = gm[i * 8 + t]; av[t] = gv[i * 8 + t]; bm[t] = pm[j * 8 + t]; bv[t] = pv[j * 8 + t]; t = t + 1; }
+                let d = adequacy.compare(am, av, bm, bv, 16, z);
+                if i == j { test.assert(d < 2.5); } else { test.assert(d > 3.0); }
+                j = j + 1;
+            }
+            i = i + 1;
+        }
+    }
+    return 0;
+}
+
+// the fingerprint says WHY: the edge-induced model differs from critical-density-only in the excess edge share (summary 1) by more than 3 standard errors, and the tip model differs from it in the first
+// event (summary 2) by more than 3, with the edge share within 3
+fn test_the_fingerprint_names_the_difference() -> [] int {
+    region r {
+        let am = alloc_slice[r](8, 0.0);
+        let av = alloc_slice[r](8, 0.0);
+        let bm = alloc_slice[r](8, 0.0);
+        let bv = alloc_slice[r](8, 0.0);
+        let cm = alloc_slice[r](8, 0.0);
+        let cv = alloc_slice[r](8, 0.0);
+        let z = alloc_slice[r](8, 0.0);
+        adequacy.ensemble(0, 16, 1, am, av);
+        adequacy.ensemble(1, 16, 1001, bm, bv);
+        adequacy.ensemble(2, 16, 1001, cm, cv);
+        adequacy.compare(am, av, bm, bv, 16, z);
+        test.assert(z[1] < 0.0 - 3.0);
+        adequacy.compare(am, av, cm, cv, 16, z);
+        test.assert(z[2] > 3.0);
+        test.assert(z[1] < 3.0);
+        test.assert(z[1] > 0.0 - 3.0);
+    }
+    return 0;
+}

@@ -1,0 +1,132 @@
+edition 7;
+
+import std.buffer;
+import std.math;
+import nucleation;
+import vesicles;
+import adequacy;
+
+// D7: does a model reproduce observed summary statistics? (docs/dynamics.md.) Given the seven summaries of an experiment (adequacy.cho: events read per movie, excess edge share, first event s, dome rate over the rate
+// put in, area ratio (needs the truth: enter anything, it is ignored on real data), cover at 15 s, cover at 30 s), as MEANS in thousandths over N movies, it prints the discrepancy against each model of the twin's library and the fingerprint of the best and the worst.
+//   cancho run host/d7_adequacy.cho sim/adequacy.cho sim/vesicles.cho sim/nucleation.cho --std -- N MEAN0 ... MEAN6      (thousandths, signed)
+//   with no arguments: a DEMONSTRATION on pseudo-observed data made under model 3 (seeds 5001 to 5024), which is twin data standing in for an experiment, NOT a measurement.
+// The spread of each summary is taken from the twin (its ensemble of 24 movies per model), not from the data, so with real data the observed spread is a thing to check separately.
+fn text[&h, &r](heap: &!h Heap, b: buffer.Buffer, s: &r [byte]) -> [heap] buffer.Buffer { return buffer.append(heap, b, s); }
+
+fn signed_of[&t](txt: &t [byte]) -> [] int {
+    var n = 0;
+    var i = 0;
+    var neg = 0;
+    if len(txt) > 0 && int_of(txt[0]) == 45 { neg = 1; i = 1; }
+    while i < len(txt) {
+        let c = int_of(txt[i]);
+        if c < 48 || c > 57 { return 0; }
+        n = n * 10 + (c - 48);
+        i = i + 1;
+    }
+    if neg == 1 { return 0 - n; }
+    return n;
+}
+
+fn dec[&h](heap: &!h Heap, o: buffer.Buffer, v: float, places: int) -> [heap] buffer.Buffer {
+    var b = o;
+    var x = v;
+    if x < 0.0 { b = text(heap, b, "-"); x = 0.0 - x; }
+    var scale = 1;
+    var p = 0;
+    while p < places { scale = scale * 10; p = p + 1; }
+    let c = truncate(x * float_of(scale) + 0.5);
+    b = buffer.push_nat(heap, b, c / scale);
+    if places > 0 {
+        b = text(heap, b, ".");
+        var rest = c % scale;
+        var div = scale / 10;
+        while div > 0 {
+            b = buffer.push_nat(heap, b, rest / div);
+            rest = rest % div;
+            div = div / 10;
+        }
+    }
+    return b;
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(net); release(clock); release(signals); release(exec);
+    var given = 0;
+    var n_obs = 24;
+    region r0 {
+    let obs = alloc_slice[r0](8, 0.0);
+    borrow args as &g in {
+        if arg_count(g) >= 9 {
+            given = 1;
+            n_obs = signed_of(arg(g, 1));
+            var t = 0;
+            while t < 7 { obs[t] = float_of(signed_of(arg(g, 2 + t))) / 1000.0; t = t + 1; }
+        }
+    }
+    release(args);
+    if n_obs < 2 { n_obs = 2; }
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 16384);
+        region r {
+            let nm = adequacy.n_models();
+            let om = alloc_slice[r](8, 0.0);
+            let ov = alloc_slice[r](8, 0.0);
+            let bm = alloc_slice[r](8, 0.0);
+            let bv = alloc_slice[r](8, 0.0);
+            let z = alloc_slice[r](8, 0.0);
+            let zs = alloc_slice[r](nm * 8, 0.0);
+            let d = alloc_slice[r](nm, 0.0);
+            var t = 0;
+            if given == 1 {
+                // the observed variance is taken from model 0's ensemble as a placeholder only to size the standard error; replaced below by each model's own
+                while t < 7 { om[t] = obs[t]; t = t + 1; }
+            } else {
+                adequacy.ensemble(3, 24, 5001, om, ov);
+                o = text(h, o, "DEMONSTRATION: pseudo-observed data made under model 3 (A + edge + tip), 24 movies, seeds 5001 to 5024. Twin data, not a measurement.\n");
+            }
+            var i = 0;
+            while i < nm {
+                adequacy.ensemble(i, 24, 1001, bm, bv);
+                if given == 1 {
+                    // observed variance unknown: use the model's own, so the discrepancy asks how far the observed means are from the model's in the model's own spread
+                    t = 0;
+                    while t < 7 { ov[t] = bv[t]; t = t + 1; }
+                    // summary 4 (patch area over the TRUE ruptures') needs the truth, which an experiment does not have: it is left out by setting it to the model's own value
+                    om[4] = bm[4];
+                }
+                d[i] = adequacy.compare(om, ov, bm, bv, 24, z);
+                t = 0;
+                while t < 8 { zs[i * 8 + t] = z[t]; t = t + 1; }
+                i = i + 1;
+            }
+            o = text(h, o, "model: discrepancy (about 1 = reproduces the observed summaries; above 3 = does not) and z of [events, edge share, first event, dome rate, area, cover 15 s, cover 30 s]\n");
+            var best = 0;
+            i = 0;
+            while i < nm {
+                o = text(h, o, "m");
+                o = buffer.push_nat(h, o, i);
+                o = text(h, o, ": ");
+                o = dec(h, o, d[i], 1);
+                o = text(h, o, "  |");
+                t = 0;
+                while t < 7 { o = text(h, o, " "); o = dec(h, o, zs[i * 8 + t], 1); t = t + 1; }
+                o = text(h, o, "\n");
+                if d[i] < d[best] { best = i; }
+                i = i + 1;
+            }
+            o = text(h, o, "closest: m");
+            o = buffer.push_nat(h, o, best);
+            if d[best] > 3.0 { o = text(h, o, " (but it does NOT reproduce the data: no model of the library does)"); } else { o = text(h, o, " (reproduces the summaries; this does not show it is right)"); }
+            o = text(h, o, "\n");
+        }
+        var code = 0;
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    }
+    release(heap);
+    release(io);
+    return 0;
+}
