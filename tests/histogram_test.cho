@@ -1,0 +1,39 @@
+import std.test;
+import histogram;
+
+// docs/dynamics.md, "Histograms": the counts add up, the edges go to the end bins, and the mode is where it should be.
+
+fn test_the_counts_add_up_and_the_edges_are_kept() -> [] int {
+    region r {
+        let c = alloc_slice[r](10, 0);
+        histogram.add(c, 0.0 - 5.0, 0.0, 10.0, 10);
+        histogram.add(c, 0.0, 0.0, 10.0, 10);
+        histogram.add(c, 3.2, 0.0, 10.0, 10);
+        histogram.add(c, 9.999, 0.0, 10.0, 10);
+        histogram.add(c, 10.0, 0.0, 10.0, 10);
+        histogram.add(c, 99.0, 0.0, 10.0, 10);
+        test.assert_eq(histogram.total(c, 10), 6);
+        test.assert_eq(c[0], 2);
+        test.assert_eq(c[3], 1);
+        test.assert_eq(c[9], 3);
+    }
+    return 0;
+}
+
+fn test_the_mode_is_in_the_right_half() -> [] int {
+    region r {
+        let c = alloc_slice[r](10, 0);
+        var i = 0;
+        while i < 7 { histogram.add(c, 2.5, 0.0, 10.0, 10); i = i + 1; }
+        i = 0;
+        while i < 5 { histogram.add(c, 7.5, 0.0, 10.0, 10); i = i + 1; }
+        test.assert_eq(histogram.mode_between(c, 0, 5), 2);
+        test.assert_eq(histogram.mode_between(c, 5, 10), 7);
+    }
+    return 0;
+}
+
+fn test_a_bad_bin_count_does_not_trap() -> [] int {
+    test.assert_eq(histogram.bin_of(1.0, 0.0, 10.0, 0), 0);
+    return 0;
+}

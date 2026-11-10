@@ -1,0 +1,40 @@
+edition 5;
+
+module histogram;
+
+// `histogram` -- fixed-width bins filled one value at a time, so a map or a movie never has to keep its values. docs/dynamics.md, "Histograms". A value below `lo` goes in the first bin and one at or above `hi`
+// in the last; nothing is dropped, so the counts always add up to the number of values added.
+
+pub fn bin_of(v: float, lo: float, hi: float, bins: int) -> [] int {
+    if bins < 1 { return 0; }
+    if v < lo { return 0; }
+    if v >= hi { return bins - 1; }
+    var b = truncate((v - lo) / (hi - lo) * float_of(bins));
+    if b > bins - 1 { b = bins - 1; }
+    if b < 0 { b = 0; }
+    return b;
+}
+
+pub fn add[&a](counts: &!a [int], v: float, lo: float, hi: float, bins: int) -> [] int {
+    let b = bin_of(v, lo, hi, bins);
+    counts[b] = counts[b] + 1;
+    return b;
+}
+
+pub fn total[&a](counts: &a [int], bins: int) -> [] int {
+    var s = 0;
+    var i = 0;
+    while i < bins { s = s + counts[i]; i = i + 1; }
+    return s;
+}
+
+// the fullest bin between `from` (included) and `to` (excluded); the first on a tie
+pub fn mode_between[&a](counts: &a [int], from: int, to: int) -> [] int {
+    var best = from;
+    var i = from;
+    while i < to {
+        if counts[i] > counts[best] { best = i; }
+        i = i + 1;
+    }
+    return best;
+}
