@@ -46,7 +46,7 @@ fn main(world: World) -> [] int {
             if cfg == 2 { lam = 0.006; }
             if cfg == 3 { gamma = 2; }
             if cfg == 4 { gamma = 1000; k_e = 0.5; }
-            let m = vesicles.Model { size: 40, r: 2.0, lam: lam, gamma: gamma, k_e: k_e, hp: 1.0, hv: 2.0, sigma: 0.1, tf: 0.5, frames: 120, dt: 0.25 };
+            let m = vesicles.Model { size: 40, r: 2.0, lam: lam, gamma: gamma, k_e: k_e, hp: 1.0, hv: 2.0, sigma: 0.1, tf: 0.5, frames: 120, dt: 0.25, filter: 0, p_touch: 0.0 };
             var events = 0;
             var near = 0;
             var chance = 0.0;

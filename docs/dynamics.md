@@ -353,6 +353,42 @@ Nine PDFs were read after the search-snippet and blocked-fetch rounds above. **N
 
 **Out of scope for slice 1:** vesicle fusion and budding, anything with a curvature energy, diffusion of the objects (D1 covers mobile particles), and any comparison with measured movies (none is available).
 
+## D7, slice 3: the scanning tip as a cause of rupture, and the noise filter (2026-11-10; predictions of this software, stand-in parameters)
+
+**Design note, written with the code because the model is one parameter:** the tip passes over every adsorbed vesicle once per frame and ruptures it with probability `p_touch` (mechanism C in `sim/vesicles.cho`). `p_touch` stands in for the tip's force, which is **not modelled**; no source on the force needed to flatten or burst an adsorbed vesicle has been read. The natural next step is a Bell-type dependence of the hazard on the force (as in `sim/dfs.cho`), with the vesicle's stiffness and rupture force from a source, and a tip that is a real force, not a probability; that needs the reading first. Acceptance: (1) the ruptures per touch equal `p_touch` within binomial error (the tip alone); (2) the edge-share statistic is measured with the tip on, so the contamination is a number.
+
+**Found** (`cancho run host/d7_tip.cho sim/vesicles.cho sim/nucleation.cho --std`, 10 s):
+
+* The tip alone: 0.020 ruptures per touch at p_touch = 0.02 (397 of 19,888; the test bounds it at three binomial errors). That is the code agreeing with its input.
+* **The total ruptures do not go as the imaging rate.** With frames every 0.5, 1 and 2 s the movies hold 49.6, 42.6 and 34.5 ruptures, not four times as many at the fastest rate. Probably the field fills with patches and arrivals are lost on them (saturation), so the dose dependence has to be read early in the movie; that was not measured, so this is a guess.
+* **The tip contaminates the edge-share statistic quickly.** Critical density plus edge-induced rupture (k_e 0.5), groups of 8 movies (about 75 events), 6 groups each:
+
+| p_touch per frame | share vs chance | mean z | called (z > 3) |
+|---|---|---|---|
+| 0 | 0.55 vs 0.22 | 6.9 | 6 of 6 |
+| 0.005 | 0.49 vs 0.22 | 5.5 | 6 of 6 |
+| 0.01 | 0.45 vs 0.23 | 4.7 | 6 of 6 |
+| 0.03 | 0.37 vs 0.24 | 2.6 | 2 of 6 |
+| 0.1 | 0.29 vs 0.25 | 0.9 | 1 of 6 |
+
+  Tip ruptures happen at random places and dilute the edge preference: at 3% per frame the mechanism is called in two groups of six, at 10% in one. The imaging dose has to be low enough that the tip's own ruptures are a small share of all, or the movies have to be taken at two imaging doses and compared (the tip's share changes with the dose, the intrinsic mechanisms' does not); the second was not built.
+
+**The median filter on the noise problem, measured** (`host/d7_degrade.cho`, same 48 movies per setting): a 3 by 3 median filter before the class test (`filter` 1 in `sim/vesicles.cho`) lowers the chance level that noise inflates (at sigma 0.3: 0.59 against 0.90) **but makes the statistic miscalibrated, not better**: the critical-density-only movies are then called edge-induced in 17% of groups at sigma 0.2, 67% at 0.3 and 83% at 0.4 (z > 3), where without the filter they were never called. The filter changes where events are found and how near-edge is judged (it rounds corners), so the analytic chance level no longer describes the null. Edge-induced rupture is still called 100% of the time at sigma 0.1 to 0.4 with the filter, but a method that also calls the other mechanism is not usable. **The unfiltered statistic is the better calibrated one up to sigma 0.2 (no false call, B called 100%) and fails above; a null made by shuffling the events over the bare area of the same frames, instead of the analytic chance level, is the fix this points to and was not built.** The noise bullet of slice 2 above that said a minimum patch size or a median filter would likely fix it is wrong about the filter and is corrected here.
+
+## Using the twin to design experiments
+
+The twin has answered design questions of three kinds so far; each is a number the twin computed, with the caveat that its parameters are stand-ins unless a paper supplies them:
+
+| question | what the twin says | where |
+|---|---|---|
+| how fast can I image, and over what height range, without the loop failing? | the frame-rate and Z-range rules (HS1, HS2), the gain rule, the Q-control limits | `docs/high-speed.md` |
+| can I follow particles that diffuse, at this frame rate? | no, unless D is low enough that a particle moves under about a pixel a frame; the rms step against D and the tracking criteria | D1, D5 |
+| how many force curves, at what speed, to separate two phases or fit a rupture rate? | the breakthrough force separates gel from fluid at no error over 1,024 curves; the speed sets the loading rate | D3, D6, force-volume map |
+| how many nucleation events do I need to see, and what biases the rate? | about 20 to call a mechanism three times in four, about 40 nine in ten; the detection lag, not the frame time, biases the rate | D7 slices 1 and 2 |
+| does imaging disturb what I measure? | in the twin, a tip that ruptures vesicles at 3% a frame erases the edge signal; the twin cannot yet say what force that is | D7 slice 3 |
+
+What the twin can **not** do for an experiment design: say whether the physics in its stand-ins is right. It can say what an analysis can and cannot recover if the physics is as assumed, which parameters the result is sensitive to (so which to measure first), and how many events or curves are needed. The procedure that follows from it: write the analysis, run it on twin movies with the unknown switched on and off, find the sample size and the imaging dose at which it calls them correctly, then do the real run at or above that, and **replace the twin's stand-in parameters with the first real measurements before trusting its next prediction**.
+
 ## What stays out of scope, and why
 
 * **Real molecular dynamics, hydrodynamic interactions between molecules, crowding, and anything that depends on a force field.** The twin's particles are shapes that move.

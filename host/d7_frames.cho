@@ -62,7 +62,7 @@ fn main(world: World) -> [] int {
         var o = buffer.empty(h, 65536);
         var code = 0;
         region r {
-            let m = vesicles.Model { size: 40, r: 2.0, lam: float_of(lam) / 1000.0, gamma: gamma, k_e: float_of(ke) / 10.0, hp: 1.0, hv: 2.0, sigma: 0.1, tf: 0.5, frames: 120, dt: 0.25 };
+            let m = vesicles.Model { size: 40, r: 2.0, lam: float_of(lam) / 1000.0, gamma: gamma, k_e: float_of(ke) / 10.0, hp: 1.0, hv: 2.0, sigma: 0.1, tf: 0.5, frames: 120, dt: 0.25, filter: 0, p_touch: 0.0 };
             let npx = 1600;
             let vx = alloc_slice[r](160, 0.0);
             let vy = alloc_slice[r](160, 0.0);
