@@ -113,3 +113,21 @@ pub fn compare2[&a, &b, &c, &d, &e](mi: &a [float], vi: &b [float], ki: int, mj:
     }
     return math.sqrt(acc / 7.0);
 }
+
+// compare with the variance of each difference of means given directly (`var_total`, 7 floats: the sum of the variances of the two means), for when the spread is measured (a bootstrap) and not estimated
+// from an ensemble. The same floor as compare, the same root mean square.
+pub fn compare_var[&a, &c, &d, &e](mi: &a [float], mj: &c [float], var_total: &d [float], z: &!e [float]) -> [] float {
+    var acc = 0.0;
+    var j = 0;
+    while j < 7 {
+        var se = math.sqrt(var_total[j]);
+        var big = math.fabs(mi[j]);
+        if math.fabs(mj[j]) > big { big = math.fabs(mj[j]); }
+        let floor = 0.000001 * big + 0.000000001;
+        if se < floor { se = floor; }
+        z[j] = (mi[j] - mj[j]) / se;
+        acc = acc + z[j] * z[j];
+        j = j + 1;
+    }
+    return math.sqrt(acc / 7.0);
+}
