@@ -11,11 +11,12 @@ import png;
 // instrument took them), the maps of what the curves say. NOT TESTED ON ANY REAL MAP. The position of a pixel is not read from the files: it is the line's place in the manifest, row by row from the first row,
 // left to right, or (SNAKE 1) left to right on even rows and right to left on odd ones, as scanners that do not retrace often do; give the wrong one and the map is scrambled, and nothing here can tell.
 //   cancho build host/fc_map.cho sim/fcload.cho sim/forcecurve.cho host/png.cho --std -o fc_map        (png needs std.crc: --std covers it)
-//   ./fc_map K R ZUNIT DUNIT NX NY SNAKE MODE MANIFEST
+//   ./fc_map K R ZUNIT DUNIT NX NY SNAKE MODE THIN MANIFEST
 //     K, R, ZUNIT, DUNIT   as host/fc_load.cho (thousandths of N/m, tenths of nm, 0 nm 1 m 2 um)
 //     NX, NY               the map's width and height in pixels, each at most 512 and at most 262,144 pixels in all (the maps live on the heap)
+//     THIN   keep every THIN-th row of each curve (0 or 1: every row, none thinned)
 //     MODE   0 a report; 1, 2, 3 the PNG of the breakthrough force, the Hertz modulus or the film height (to the output: redirect it); 4 one JSON line per pixel
-// A curve of more than 1,500 rows is thinned (every nth row kept). The PNG is scaled up by a whole number to about 512 pixels (png.indexed_big, any size); its colours run from the 2nd to the 98th percentile
+// A curve is read whole (THIN 1) unless you thin it. The PNG is scaled up by a whole number to about 512 pixels (png.indexed_big, any size); its colours run from the 2nd to the 98th percentile
 // of the pixels analysed (read from a 4,096-bin histogram, so to a 4,096th of the range, not by sorting); a pixel with no result is dark grey. The report gives
 // the counts, the refusals by tag, each quantity's range (medians and percentiles by the histogram), and a two-class split of the breakthrough force (Otsu's threshold on a 64-bin histogram): the force that best separates two populations, the share
 // of pixels above it and the mean of each side. Whether the two are two phases is not something a map can say.
@@ -174,7 +175,7 @@ fn report[&hp, &a, &b, &c, &d](heap: &!hp Heap, o_in: buffer.Buffer, nx: int, ny
     o = buffer.push_nat(heap, o, npx);
     o = text(heap, o, " pixels analysed\n");
     var tag = 1;
-    while tag <= 9 {
+    while tag <= 10 {
         var cnt = 0;
         p = 0;
         while p < npx { if why[p] == tag { cnt = cnt + 1; } p = p + 1; }
@@ -184,6 +185,7 @@ fn report[&hp, &a, &b, &c, &d](heap: &!hp Heap, o_in: buffer.Buffer, nx: int, ny
             if tag == 7 { o = text(heap, o, " (file cannot be read)"); }
             if tag == 8 { o = text(heap, o, " (no file listed)"); }
             if tag == 9 { o = text(heap, o, " (fewer than 80 approach rows)"); }
+            if tag == 10 { o = text(heap, o, " (more than 4,000,000 rows)"); }
             o = text(heap, o, ": ");
             o = buffer.push_nat(heap, o, cnt);
             o = text(heap, o, " pixels\n");
@@ -292,9 +294,10 @@ fn main(world: World) -> [] int {
     var ny = 0;
     var snake = 0;
     var mode = 0;
+    var thin = 1;
     var usage = 0;
     borrow args as &g in {
-        if arg_count(g) < 10 { usage = 1; } else {
+        if arg_count(g) < 11 { usage = 1; } else {
             k_milli = number_of(arg(g, 1));
             r_tenth = number_of(arg(g, 2));
             zu = number_of(arg(g, 3));
@@ -303,13 +306,14 @@ fn main(world: World) -> [] int {
             ny = number_of(arg(g, 6));
             snake = number_of(arg(g, 7));
             mode = number_of(arg(g, 8));
+            thin = number_of(arg(g, 9));
             if nx < 1 || nx > 512 || ny < 1 || ny > 512 || nx * ny > 262144 { usage = 1; }
         }
     }
     borrow mut heap as &!h in {
         var o = buffer.empty(h, 65536);
         if usage == 1 {
-            o = text(h, o, "usage: fc_map K R ZUNIT DUNIT NX NY SNAKE MODE MANIFEST   (NX, NY at most 512, at most 262,144 pixels; MODE 0 report, 1 2 3 PNG of breakthrough, modulus, height, 4 JSON lines)\n");
+            o = text(h, o, "usage: fc_map K R ZUNIT DUNIT NX NY SNAKE MODE THIN MANIFEST   (NX, NY at most 512, at most 262,144 pixels; MODE 0 report, 1 2 3 PNG of breakthrough, modulus, height, 4 JSON lines)\n");
         } else {
             let k = float_of(k_milli) / 1000.0;
             let rad = float_of(r_tenth) / 10.0;
@@ -318,7 +322,7 @@ fn main(world: World) -> [] int {
             var got_m = 0 - 1;
             borrow args as &g in {
                 borrow fs as &fsr in {
-                    let (grown, n) = read_file(h, fsr, arg(g, 9), manifest);
+                    let (grown, n) = read_file(h, fsr, arg(g, 10), manifest);
                     manifest = grown;
                     got_m = n;
                 }
@@ -339,8 +343,6 @@ fn main(world: World) -> [] int {
                     let ht = contents(hw);
                     let why = contents(yw);
                     region r {
-                        let z = alloc_slice[r](1500, 0.0);
-                        let d = alloc_slice[r](1500, 0.0);
                         borrow manifest as &mf in {
                             let all = buffer.bytes(mf);
                             // the manifest's lines in order, one cursor: file number f is the f-th line
@@ -364,12 +366,8 @@ fn main(world: World) -> [] int {
                                         scratch = grown;
                                         if n >= 0 {
                                             borrow scratch as &s in {
-                                                let rows = fcload.count_rows(buffer.bytes(s));
-                                                var stride = 1;
-                                                if rows > 1500 { stride = (rows + 1499) / 1500; }
-                                                let n_in = fcload.read_rows(buffer.bytes(s), stride, unit_scale(zu), unit_scale(du), z, d, 1500);
-                                                let na = fcload.approach(z, d, n_in);
-                                                let a = fcload.analyse(z, d, na, k, rad);
+                                                let ld = fcload.load_and_analyse(h, buffer.bytes(s), thin, unit_scale(zu), unit_scale(du), k, rad);
+                                                let a = ld.a;
                                                 why[p] = a.why;
                                                 if a.why == 0 {
                                                     bt[p] = a.breakthrough / 1000.0;
