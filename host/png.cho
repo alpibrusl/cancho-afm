@@ -89,3 +89,93 @@ pub fn indexed[&hp, &a, &p](heap: &!hp Heap, b: buffer.Buffer, w: int, h: int, p
     }
     return o;
 }
+
+// ---- images too big for one stored block ----
+// `indexed` builds the whole zlib stream in one region (64 KiB), which caps an image near 255 x 255. `indexed_big` writes the IDAT chunk a block at a time: the pixels of `pix` (w * h bytes, row-major, which the
+// caller keeps on the heap) go out in stored deflate blocks of at most 32,768 bytes, each built in a region of its own, with the Adler-32 and the chunk's CRC-32 carried along (std.crc.crc32_update), so
+// the image can be any size that `pix` can be. For an image of at most 32,768 bytes of rows (w * h + h) the output is byte for byte `indexed`'s (tests/png_test.cho checks that, and the larger ones were
+// decoded with zlib: see docs/dynamics.md, "a force-volume map from files").
+
+pub fn adler_update[&a](state: int, data: &a [byte], from: int) -> [] int {
+    var s1 = state % 65536;
+    var s2 = state / 65536;
+    var i = from;
+    while i < len(data) {
+        s1 = (s1 + int_of(data[i])) % 65521;
+        s2 = (s2 + s1) % 65521;
+        i = i + 1;
+    }
+    return s2 * 65536 + s1;
+}
+
+pub fn indexed_big[&hp, &a, &p](heap: &!hp Heap, b: buffer.Buffer, w: int, h: int, pix: &a [byte], pal: &p [byte]) -> [heap] buffer.Buffer {
+    var o = b;
+    o = buffer.push(heap, o, byte_of(137)); o = buffer.push(heap, o, byte_of(80)); o = buffer.push(heap, o, byte_of(78)); o = buffer.push(heap, o, byte_of(71));
+    o = buffer.push(heap, o, byte_of(13)); o = buffer.push(heap, o, byte_of(10)); o = buffer.push(heap, o, byte_of(26)); o = buffer.push(heap, o, byte_of(10));
+    region r {
+        let ih = alloc_slice[r](4 + 13, byte_of(0));
+        type_of(ih, 1229472850);
+        ih[4] = byte_of(w / 16777216 % 256); ih[5] = byte_of(w / 65536 % 256); ih[6] = byte_of(w / 256 % 256); ih[7] = byte_of(w % 256);
+        ih[8] = byte_of(h / 16777216 % 256); ih[9] = byte_of(h / 65536 % 256); ih[10] = byte_of(h / 256 % 256); ih[11] = byte_of(h % 256);
+        ih[12] = byte_of(8); ih[13] = byte_of(3);
+        o = chunk(heap, o, ih);
+        let pl = alloc_slice[r](4 + len(pal), byte_of(0));
+        type_of(pl, 1347179589);
+        var k = 0;
+        while k < len(pal) { pl[4 + k] = pal[k]; k = k + 1; }
+        o = chunk(heap, o, pl);
+    }
+    // IDAT: 2 (zlib header) + 5 per block + the rows (each led by a filter byte) + 4 (Adler-32)
+    let n_raw = h * (w + 1);
+    let block = 32768;
+    var blocks = (n_raw + block - 1) / block;
+    if blocks < 1 { blocks = 1; }
+    o = be32(heap, o, 2 + 5 * blocks + n_raw + 4);
+    var crc_state = crc.crc32_start();
+    var adler = 1;
+    region r2 {
+        let head = alloc_slice[r2](6, byte_of(0));
+        type_of(head, 1229209940);
+        head[4] = byte_of(120); head[5] = byte_of(1);
+        o = buffer.append(heap, o, head);
+        crc_state = crc.crc32_update(crc_state, head);
+    }
+    var done = 0;
+    var bi = 0;
+    while bi < blocks {
+        region r3 {
+            var len_here = n_raw - done;
+            if len_here > block { len_here = block; }
+            let blk = alloc_slice[r3](5 + len_here, byte_of(0));
+            var final = 0;
+            if bi == blocks - 1 { final = 1; }
+            blk[0] = byte_of(final);
+            blk[1] = byte_of(len_here % 256); blk[2] = byte_of(len_here / 256 % 256);
+            blk[3] = byte_of((65535 - len_here) % 256); blk[4] = byte_of((65535 - len_here) / 256 % 256);
+            var j = 0;
+            while j < len_here {
+                let at = done + j;
+                let col = at % (w + 1);
+                if col == 0 { blk[5 + j] = byte_of(0); } else { blk[5 + j] = pix[(at / (w + 1)) * w + col - 1]; }
+                j = j + 1;
+            }
+            o = buffer.append(heap, o, blk);
+            crc_state = crc.crc32_update(crc_state, blk);
+            // the Adler-32 covers the rows, not the 5 bytes of block header
+            adler = adler_update(adler, blk, 5);
+            done = done + len_here;
+        }
+        bi = bi + 1;
+    }
+    region r4 {
+        let tail = alloc_slice[r4](4, byte_of(0));
+        tail[0] = byte_of(adler / 16777216 % 256); tail[1] = byte_of(adler / 65536 % 256); tail[2] = byte_of(adler / 256 % 256); tail[3] = byte_of(adler % 256);
+        o = buffer.append(heap, o, tail);
+        crc_state = crc.crc32_update(crc_state, tail);
+        o = be32(heap, o, crc.crc32_finish(crc_state));
+        let en = alloc_slice[r4](4, byte_of(0));
+        type_of(en, 1229278788);
+        o = chunk(heap, o, en);
+    }
+    return o;
+}
