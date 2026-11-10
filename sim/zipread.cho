@@ -1,0 +1,116 @@
+edition 7;
+
+module zipread;
+
+// `zipread` -- a ZIP archive read from memory, the container of a JPK file (sim/jpk.cho, docs/dynamics.md). Stored (method 0) and DEFLATE (method 8, std.flate) entries, each checked against its CRC-32.
+// Not read: ZIP64, encrypted entries, other methods, split archives -- each is refused with a tag, none traps. NOT TESTED ON ANY ARCHIVE BUT THE ONES THIS REPOSITORY WROTE (and Python's zipfile read them).
+//
+// Tags (the JPK reader's, docs/dynamics.md): 11 not a ZIP, 12 a ZIP feature not supported (ZIP64, encryption, split), 13 the entry is not in the archive, 14 an entry that cannot be read (offsets or sizes
+// outside the file, a method not supported), 15 the CRC-32 or the DEFLATE stream is wrong.
+
+import std.buffer;
+import std.bytes;
+import std.crc;
+import std.flate;
+
+pub struct Zdir { why: int, count: int, cd_off: int, cd_size: int }
+pub struct Entry { why: int, method: int, crc: int, csize: int, usize: int, lofs: int }
+pub struct Cur { ok: int, pos: int, next: int, name_at: int, name_len: int }
+
+fn u16[&a](z: &a [byte], i: int) -> [] int { return int_of(z[i]) | int_of(z[i + 1]) << 8; }
+fn u32[&a](z: &a [byte], i: int) -> [] int { return u16(z, i) | u16(z, i + 2) << 16; }
+
+fn sig[&a](z: &a [byte], i: int, c: int, d: int) -> [] bool {
+    return int_of(z[i]) == 80 && int_of(z[i + 1]) == 75 && int_of(z[i + 2]) == c && int_of(z[i + 3]) == d;
+}
+
+// The directory of the archive: found from the end-of-central-directory record, which is the last thing in the file (a comment of up to 65,535 bytes may follow it).
+pub fn open[&a](z: &a [byte]) -> [] Zdir {
+    let n = len(z);
+    if n < 22 { return Zdir { why: 11, count: 0, cd_off: 0, cd_size: 0 }; }
+    var i = n - 22;
+    var lowest = n - 22 - 65535;
+    if lowest < 0 { lowest = 0; }
+    var found = -1;
+    while i >= lowest && found < 0 {
+        if sig(z, i, 5, 6) { found = i; }
+        i = i - 1;
+    }
+    if found < 0 { return Zdir { why: 11, count: 0, cd_off: 0, cd_size: 0 }; }
+    let disk = u16(z, found + 4);
+    let disk_cd = u16(z, found + 6);
+    let count = u16(z, found + 10);
+    let cd_size = u32(z, found + 12);
+    let cd_off = u32(z, found + 16);
+    if disk != 0 || disk_cd != 0 || count == 65535 || cd_size == 4294967295 || cd_off == 4294967295 {
+        return Zdir { why: 12, count: 0, cd_off: 0, cd_size: 0 };
+    }
+    if cd_off + cd_size > n { return Zdir { why: 14, count: 0, cd_off: 0, cd_size: 0 }; }
+    return Zdir { why: 0, count: count, cd_off: cd_off, cd_size: cd_size };
+}
+
+// The central-directory entry at `pos` (start with dir.cd_off): its name's place and where the next one starts; ok 0 at the end of the directory or at a record that is not one.
+pub fn step[&a](z: &a [byte], d: Zdir, pos: int) -> [] Cur {
+    let end = d.cd_off + d.cd_size;
+    if pos + 46 > end || !sig(z, pos, 1, 2) { return Cur { ok: 0, pos: pos, next: pos, name_at: 0, name_len: 0 }; }
+    let nl = u16(z, pos + 28);
+    let el = u16(z, pos + 30);
+    let cl = u16(z, pos + 32);
+    let next = pos + 46 + nl + el + cl;
+    if next > end { return Cur { ok: 0, pos: pos, next: pos, name_at: 0, name_len: 0 }; }
+    return Cur { ok: 1, pos: pos, next: next, name_at: pos + 46, name_len: nl };
+}
+
+// The entry named `name` (why 13 when there is none, 12 when it is encrypted, 14 when its record is malformed).
+pub fn find[&a, &n](z: &a [byte], d: Zdir, name: &n [byte]) -> [] Entry {
+    var pos = d.cd_off;
+    var seen = 0;
+    while seen < d.count {
+        let c = step(z, d, pos);
+        if c.ok == 0 { return Entry { why: 14, method: 0, crc: 0, csize: 0, usize: 0, lofs: 0 }; }
+        if c.name_len == len(name) && bytes.equal(z[c.name_at..c.name_at + c.name_len], name) {
+            let flags = u16(z, pos + 8);
+            if flags % 2 == 1 { return Entry { why: 12, method: 0, crc: 0, csize: 0, usize: 0, lofs: 0 }; }
+            return Entry { why: 0, method: u16(z, pos + 10), crc: u32(z, pos + 16), csize: u32(z, pos + 20), usize: u32(z, pos + 24), lofs: u32(z, pos + 42) };
+        }
+        pos = c.next;
+        seen = seen + 1;
+    }
+    return Entry { why: 13, method: 0, crc: 0, csize: 0, usize: 0, lofs: 0 };
+}
+
+// The entry's bytes, checked: (the bytes, 0) or (an empty buffer, the tag). `limit` is the most it may expand to (a bound the caller chooses; the size the archive declares must not pass it).
+pub fn extract[&h, &a](heap: &!h Heap, z: &a [byte], e: Entry, limit: int) -> [heap] (buffer.Buffer, int) {
+    let n = len(z);
+    if e.why != 0 { return (buffer.empty(heap, 1), e.why); }
+    if e.usize > limit { return (buffer.empty(heap, 1), 14); }
+    if e.lofs + 30 > n || !sig(z, e.lofs, 3, 4) { return (buffer.empty(heap, 1), 14); }
+    let start = e.lofs + 30 + u16(z, e.lofs + 26) + u16(z, e.lofs + 28);
+    if start + e.csize > n { return (buffer.empty(heap, 1), 14); }
+    var out = buffer.empty(heap, 1);
+    if e.method == 0 {
+        if e.csize != e.usize { return (out, 14); }
+        buffer.drop(heap, out);
+        out = buffer.append(heap, buffer.empty(heap, e.usize + 1), z[start..start + e.csize]);
+    } else if e.method == 8 {
+        buffer.drop(heap, out);
+        let (got, status, after) = flate.inflate(heap, z, start, start + e.csize, e.usize);
+        if status != 0 {
+            buffer.drop(heap, got);
+            return (buffer.empty(heap, 1), 15);
+        }
+        out = got;
+    } else {
+        return (out, 14);
+    }
+    var ok = 0;
+    borrow out as &o in {
+        let b = buffer.bytes(o);
+        if len(b) == e.usize && crc.crc32_of(b) == e.crc { ok = 1; }
+    }
+    if ok == 0 {
+        buffer.drop(heap, out);
+        return (buffer.empty(heap, 1), 15);
+    }
+    return (out, 0);
+}

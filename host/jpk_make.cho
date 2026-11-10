@@ -1,0 +1,94 @@
+edition 7;
+
+import std.buffer;
+import std.math;
+import forcecurve;
+import dfs;
+import bilayer;
+import jpkmake;
+
+// A SYNTHETIC JPK archive on standard output, for trying host/jpk_load.cho and the reader (docs/dynamics.md, "A JPK reader"): twin curves (fluid, gel, melted in turn, seeds 11, 12, ...), written by
+// sim/jpkmake.cho. It is NOT a file from an instrument.
+//   cancho build host/jpk_make.cho sim/jpkmake.cho sim/bilayer.cho sim/forcecurve.cho sim/dfs.cho --std -o jpk_make
+//   ./jpk_make NCURVES COMPRESS MEASURED > file.jpk-force      NCURVES 0: one curve (a .jpk-force), n: a map of n curves numbered 0, 2, 4, ...
+//     COMPRESS 1 DEFLATEs every entry, 0 stores them;  MEASURED 1 writes a measured height channel (strainGaugeHeight), 0 the piezo's (height)
+fn number_of[&t](txt: &t [byte]) -> [] int {
+    var n = 0;
+    var i = 0;
+    while i < len(txt) {
+        let c = int_of(txt[i]);
+        if c < 48 || c > 57 { return 0; }
+        n = n * 10 + (c - 48);
+        i = i + 1;
+    }
+    return n;
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(net); release(clock); release(signals); release(exec);
+    var ncurves = 0;
+    var compress = 0;
+    var measured = 1;
+    borrow args as &g in {
+        if arg_count(g) > 1 { ncurves = number_of(arg(g, 1)); }
+        if arg_count(g) > 2 { compress = number_of(arg(g, 2)); }
+        if arg_count(g) > 3 { measured = number_of(arg(g, 3)); }
+    }
+    release(args);
+    if ncurves > 40 { ncurves = 40; }
+    var code = 0;
+    borrow mut heap as &!h in {
+        var blob = buffer.empty(h, 1);
+        let total = 720 * (ncurves + 1);
+        let zb = box_slice(h, total, 0.0);
+        let db = box_slice(h, total, 0.0);
+        let tz = box_slice(h, 720, 0.0);
+        let td = box_slice(h, 720, 0.0);
+        let gb = box_slice(h, 8, 0.0);
+        borrow mut zb as &!zw in {
+            borrow mut db as &!dw in {
+                borrow mut tz as &!tzw in {
+                    borrow mut td as &!tdw in {
+                        borrow mut gb as &!gw in {
+                            let zs = contents(zw);
+                            let ds = contents(dw);
+                            let zt = contents(tzw);
+                            let dt = contents(tdw);
+                            let gs = contents(gw);
+                            var nc = ncurves;
+                            if nc == 0 { nc = 1; }
+                            var c = 0;
+                            while c < nc {
+                                let s = bilayer.sample_of(c % 3, 0);
+                                let l = bilayer.lever_khadka();
+                                let n = bilayer.generate(s, l, 11 + c, zt, dt, gs, 720);
+                                var i = 0;
+                                while i < 720 {
+                                    var src = i;
+                                    if src >= n { src = n - 1; }
+                                    zs[c * 720 + i] = zt[src] * 0.000000001;
+                                    ds[c * 720 + i] = dt[src] * 0.000000001;
+                                    i = i + 1;
+                                }
+                                c = c + 1;
+                            }
+                            buffer.drop(h, blob);
+                            blob = jpkmake.archive(h, zs, ds, 720, ncurves, 0.35, 0.00000005, compress, measured);
+                        }
+                    }
+                }
+            }
+        }
+        unbox_slice(h, gb);
+        unbox_slice(h, td);
+        unbox_slice(h, tz);
+        unbox_slice(h, db);
+        unbox_slice(h, zb);
+        borrow mut io as &!w in { borrow blob as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, blob);
+    }
+    release(heap);
+    release(io);
+    return 0;
+}

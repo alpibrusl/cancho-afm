@@ -1,0 +1,303 @@
+import std.test;
+import std.buffer;
+import std.math;
+import forcecurve;
+import dfs;
+import bilayer;
+import fcload;
+import zipread;
+import jpk;
+import jpkmake;
+
+// docs/dynamics.md, "A JPK reader". NOT a test on any real JPK file: the archives are written by sim/jpkmake.cho from the same reading of the format, so these tests show the reader and the writer agree, no more.
+// Each curve is a twin curve (bilayer.generate), padded to 720 rows by repeating the last one, in metres (z falling toward the sample as a JPK height does).
+
+fn near(got: float, want: float, tol: float) -> [] int {
+    var d = got - want;
+    if d < 0.0 { d = 0.0 - d; }
+    if d <= tol { return 1; }
+    return 0;
+}
+
+// curve `seed` of phase `phase` into zm, dm (metres) at row `at`, 720 rows; zn, dn (nm) keep the curve as made, for the reference analysis. Returns the number of real rows.
+fn fill_curve[&a, &b, &c, &d](zm: &!a [float], dm: &!b [float], zn: &!c [float], dn: &!d [float], at: int, seed: int, phase: int) -> [] int {
+    var n = 0;
+    region r {
+        let gs = alloc_slice[r](8, 0.0);
+        let s = bilayer.sample_of(phase, 0);
+        let l = bilayer.lever_khadka();
+        n = bilayer.generate(s, l, seed, zn, dn, gs, 720);
+        var i = n;
+        while i < 720 { zn[i] = zn[n - 1]; dn[i] = dn[n - 1]; i = i + 1; }
+        i = 0;
+        while i < 720 {
+            zm[at + i] = zn[i] * 0.000000001;
+            dm[at + i] = dn[i] * 0.000000001;
+            i = i + 1;
+        }
+    }
+    return n;
+}
+
+// the analysis of the same curve straight from the arrays in nm, as the text loader does it
+fn reference[&a, &b](zn: &!a [float], dn: &!b [float], n: int) -> [] forcecurve.Slb {
+    let bl = bilayer.lever_khadka();
+    let na = fcload.approach(zn, dn, n);
+    var out = fcload.analyse(zn, dn, na, bl.k, bl.r);
+    return out;
+}
+
+fn agree(a: forcecurve.Slb, b: forcecurve.Slb) -> [] int {
+    if a.why != b.why { return 0; }
+    if a.why != 0 { return 1; }
+    if near(a.breakthrough, b.breakthrough, 0.01 * b.breakthrough) == 0 { return 0; }
+    if near(a.e0, b.e0, 0.02 * b.e0) == 0 { return 0; }
+    if near(a.height, b.height, 0.05) == 0 { return 0; }
+    return 1;
+}
+
+// ---- properties ----
+
+fn test_a_later_key_wins_and_comments_are_skipped() -> [] int {
+    let t = "# a comment\na.b = 1\nc.d=2\r\na.b=3\n! another\n";
+    let v = jpk.get(t, "a.b");
+    test.assert(v.from >= 0);
+    test.assert_eq(int_of(t[v.from]), 51);
+    test.assert_eq(v.to - v.from, 1);
+    test.assert(jpk.get(t, "a.bb").from < 0);
+    let w = jpk.get(t, "c.d");
+    test.assert_eq(w.to - w.from, 1);
+    return 0;
+}
+
+fn test_a_reference_into_the_shared_data_is_resolved[&h](heap: &!h Heap) -> [heap] int {
+    // HEAD.MED.* = n: the shared keys MED.n.REST count as HEAD.REST; a longer index (30) must not match n (3)
+    let m = jpk.merge(heap, "", "", "channel.vDeflection.lcd-info.*=3\nfoo.*=1\n", "lcd-info.3.x.y=5\nlcd-info.30.x.y=6\nfoo.1.bar=7\n");
+    borrow m as &mr in {
+        let p = buffer.bytes(mr);
+        let a = jpk.get(p, "channel.vDeflection.x.y");
+        test.assert(a.from >= 0);
+        test.assert_eq(int_of(p[a.from]), 53);
+        test.assert_eq(a.to - a.from, 1);
+        let b = jpk.get(p, "foo.bar");
+        test.assert(b.from >= 0);
+        test.assert_eq(int_of(p[b.from]), 55);
+    }
+    buffer.drop(heap, m);
+    return 0;
+}
+
+fn test_the_top_header_overrides_the_segment_header[&h](heap: &!h Heap) -> [heap] int {
+    let m = jpk.merge(heap, "k=top\n", "k=curve\n", "k=seg\n", "");
+    borrow m as &mr in {
+        let p = buffer.bytes(mr);
+        let a = jpk.get(p, "k");
+        test.assert_eq(a.to - a.from, 3);
+        test.assert_eq(int_of(p[a.from]), 116);
+    }
+    buffer.drop(heap, m);
+    return 0;
+}
+
+// ---- the zip ----
+
+fn test_entries_are_read_stored_and_deflated_and_checked[&h](heap: &!h Heap) -> [heap] int {
+    var method = 0;
+    while method < 9 {
+        var zip = jpkmake.zip_new(heap);
+        zip = jpkmake.add(heap, zip, "a.txt", "hello hello hello hello hello", method);
+        zip = jpkmake.add(heap, zip, "dir/b.txt", "second entry", method);
+        let blob = jpkmake.zip_finish(heap, zip);
+        borrow blob as &br in {
+            let z = buffer.bytes(br);
+            let d = zipread.open(z);
+            test.assert_eq(d.why, 0);
+            test.assert_eq(d.count, 2);
+            let e = zipread.find(z, d, "dir/b.txt");
+            test.assert_eq(e.why, 0);
+            let (got, why) = zipread.extract(heap, z, e, 1000);
+            test.assert_eq(why, 0);
+            borrow got as &gr in { test.assert_eq(len(buffer.bytes(gr)), 12); }
+            buffer.drop(heap, got);
+            // an entry that is not there
+            test.assert_eq(zipread.find(z, d, "nope").why, 13);
+            // a limit below the declared size
+            let (small, why2) = zipread.extract(heap, z, e, 5);
+            test.assert_eq(why2, 14);
+            buffer.drop(heap, small);
+        }
+        buffer.drop(heap, blob);
+        method = method + 8;
+    }
+    return 0;
+}
+
+fn test_a_flipped_byte_and_a_cut_archive_are_refused[&h](heap: &!h Heap) -> [heap] int {
+    region r {
+        var zip = jpkmake.zip_new(heap);
+        zip = jpkmake.add(heap, zip, "a.txt", "hello hello hello hello hello", 0);
+        let blob = jpkmake.zip_finish(heap, zip);
+        var size = 0;
+        borrow blob as &br in { size = len(buffer.bytes(br)); }
+        let copy = alloc_slice[r](size, byte_of(0));
+        borrow blob as &br in {
+            let z = buffer.bytes(br);
+            var i = 0;
+            while i < size { copy[i] = z[i]; i = i + 1; }
+        }
+        buffer.drop(heap, blob);
+        // the data starts after the 30-byte local header and the 5-byte name: flip one of them
+        copy[40] = byte_of(int_of(copy[40]) ^ 1);
+        let d = zipread.open(copy);
+        test.assert_eq(d.why, 0);
+        let e = zipread.find(copy, d, "a.txt");
+        let (got, why) = zipread.extract(heap, copy, e, 1000);
+        test.assert_eq(why, 15);
+        buffer.drop(heap, got);
+        // the end record cut off: not a zip
+        test.assert_eq(zipread.open(copy[0..size - 10]).why, 11);
+        test.assert_eq(zipread.open(copy[0..10]).why, 11);
+    }
+    return 0;
+}
+
+// ---- one curve ----
+
+fn test_a_single_curve_is_read_and_analysed_as_the_text_loader_would[&h](heap: &!h Heap) -> [heap] int {
+    region r {
+        let zm = alloc_slice[r](720, 0.0);
+        let dm = alloc_slice[r](720, 0.0);
+        let zn = alloc_slice[r](720, 0.0);
+        let dn = alloc_slice[r](720, 0.0);
+        let n = fill_curve(zm, dm, zn, dn, 0, 3, 0);
+        test.assert(n > 100);
+        let blob = jpkmake.archive(heap, zm, dm, 720, 0, 0.35, 0.00000005, 0, 1);
+        let want = reference(zn, dn, 720);
+        test.assert_eq(want.why, 0);
+        borrow blob as &br in {
+            let z = buffer.bytes(br);
+            let nums = alloc_slice[r](4, 0);
+            test.assert_eq(jpk.curve_numbers(z, nums, 4), 1);
+            test.assert_eq(nums[0], 0 - 1);
+            let got = jpk.analyse_curve(heap, z, 0 - 1, 32.0, 0.0);
+            test.assert_eq(got.why, 0);
+            test.assert_eq(got.zsrc, 0);
+            test.assert_eq(got.points, 720);
+            test.assert(near(got.k, 0.35, 0.0000001) == 1);
+            test.assert(agree(got.a, want) == 1);
+            // the breakthrough is the fluid bilayer's: about 5 nN
+            test.assert(got.a.breakthrough > 3000.0 && got.a.breakthrough < 8000.0);
+        }
+        buffer.drop(heap, blob);
+    }
+    return 0;
+}
+
+fn test_deflated_entries_and_the_piezo_height_give_the_same_curve[&h](heap: &!h Heap) -> [heap] int {
+    region r {
+        let zm = alloc_slice[r](720, 0.0);
+        let dm = alloc_slice[r](720, 0.0);
+        let zn = alloc_slice[r](720, 0.0);
+        let dn = alloc_slice[r](720, 0.0);
+        fill_curve(zm, dm, zn, dn, 0, 5, 1);
+        let want = reference(zn, dn, 720);
+        // piezo height ("height", slot calibrated), every entry DEFLATEd
+        let blob = jpkmake.archive(heap, zm, dm, 720, 0, 0.35, 0.00000005, 1, 0);
+        borrow blob as &br in {
+            let got = jpk.analyse_curve(heap, buffer.bytes(br), 0 - 1, 32.0, 0.0);
+            test.assert_eq(got.why, 0);
+            test.assert_eq(got.zsrc, 1);
+            test.assert(agree(got.a, want) == 1);
+            // the gel's breakthrough is higher than the fluid's
+            test.assert(got.a.breakthrough > 8000.0);
+        }
+        buffer.drop(heap, blob);
+    }
+    return 0;
+}
+
+fn test_the_windowed_rule_is_available_on_a_jpk_curve[&h](heap: &!h Heap) -> [heap] int {
+    region r {
+        let zm = alloc_slice[r](720, 0.0);
+        let dm = alloc_slice[r](720, 0.0);
+        let zn = alloc_slice[r](720, 0.0);
+        let dn = alloc_slice[r](720, 0.0);
+        fill_curve(zm, dm, zn, dn, 0, 3, 0);
+        let blob = jpkmake.archive(heap, zm, dm, 720, 0, 0.35, 0.00000005, 0, 1);
+        borrow blob as &br in {
+            let a = jpk.analyse_curve(heap, buffer.bytes(br), 0 - 1, 32.0, 0.0);
+            let b = jpk.analyse_curve(heap, buffer.bytes(br), 0 - 1, 32.0, 1.0);
+            test.assert_eq(a.why, 0);
+            test.assert_eq(b.why, 0);
+            // at 0.2 nm a row a 1 nm window spans five rows; it finds the same event
+            test.assert(near(a.a.breakthrough, b.a.breakthrough, 0.1 * a.a.breakthrough) == 1);
+        }
+        buffer.drop(heap, blob);
+    }
+    return 0;
+}
+
+// ---- a map ----
+
+fn test_a_map_is_enumerated_and_each_curve_read[&h](heap: &!h Heap) -> [heap] int {
+    region r {
+        let zm = alloc_slice[r](2160, 0.0);
+        let dm = alloc_slice[r](2160, 0.0);
+        let zn = alloc_slice[r](720, 0.0);
+        let dn = alloc_slice[r](720, 0.0);
+        // curve 0: fluid, 1: gel, 2: melted
+        fill_curve(zm, dm, zn, dn, 0, 11, 0);
+        fill_curve(zm, dm, zn, dn, 720, 12, 1);
+        fill_curve(zm, dm, zn, dn, 1440, 13, 2);
+        let blob = jpkmake.archive(heap, zm, dm, 720, 3, 0.35, 0.00000005, 1, 1);
+        borrow blob as &br in {
+            let z = buffer.bytes(br);
+            let nums = alloc_slice[r](8, 0);
+            // the curve numbers skip every other number, as a map with missing curves does
+            test.assert_eq(jpk.curve_numbers(z, nums, 8), 3);
+            test.assert_eq(nums[0], 0);
+            test.assert_eq(nums[1], 2);
+            test.assert_eq(nums[2], 4);
+            var c = 0;
+            while c < 3 {
+                fill_curve(zm, dm, zn, dn, c * 720, 11 + c, c);
+                let want = reference(zn, dn, 720);
+                let got = jpk.analyse_curve(heap, z, nums[c], 32.0, 0.0);
+                test.assert_eq(got.why, 0);
+                test.assert(agree(got.a, want) == 1);
+                c = c + 1;
+            }
+            // a curve that is not in the map
+            test.assert_eq(jpk.analyse_curve(heap, z, 3, 32.0, 0.0).why, 19);
+        }
+        buffer.drop(heap, blob);
+    }
+    return 0;
+}
+
+// ---- refusals ----
+
+fn test_an_archive_without_the_needed_keys_is_refused_with_a_tag[&h](heap: &!h Heap) -> [heap] int {
+    // an extend segment with no channel properties: tag 16
+    var zip = jpkmake.zip_new(heap);
+    zip = jpkmake.add(heap, zip, "header.properties", "x=1\n", 0);
+    zip = jpkmake.add(heap, zip, "segments/0/segment-header.properties", "force-segment-header.settings.style=extend\n", 0);
+    let blob = jpkmake.zip_finish(heap, zip);
+    borrow blob as &br in { test.assert_eq(jpk.analyse_curve(heap, buffer.bytes(br), 0 - 1, 32.0, 0.0).why, 16); }
+    buffer.drop(heap, blob);
+    // only a retract segment: tag 17
+    var zip2 = jpkmake.zip_new(heap);
+    zip2 = jpkmake.add(heap, zip2, "header.properties", "x=1\n", 0);
+    zip2 = jpkmake.add(heap, zip2, "segments/0/segment-header.properties", "force-segment-header.settings.style=retract\n", 0);
+    let blob2 = jpkmake.zip_finish(heap, zip2);
+    borrow blob2 as &br in { test.assert_eq(jpk.analyse_curve(heap, buffer.bytes(br), 0 - 1, 32.0, 0.0).why, 17); }
+    buffer.drop(heap, blob2);
+    // no header.properties at all: tag 13; not a zip: tag 11
+    var zip3 = jpkmake.zip_new(heap);
+    zip3 = jpkmake.add(heap, zip3, "other.txt", "x", 0);
+    let blob3 = jpkmake.zip_finish(heap, zip3);
+    borrow blob3 as &br in { test.assert_eq(jpk.analyse_curve(heap, buffer.bytes(br), 0 - 1, 32.0, 0.0).why, 13); }
+    buffer.drop(heap, blob3);
+    test.assert_eq(jpk.analyse_curve(heap, "this is not a zip archive at all", 0 - 1, 32.0, 0.0).why, 11);
+    return 0;
+}
