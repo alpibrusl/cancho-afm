@@ -6,7 +6,7 @@ import vesicles;
 // from an experiment.
 
 fn model(gamma: int, k_e: float, lam: float) -> [] vesicles.Model {
-    return vesicles.Model { size: 40, r: 2.0, lam: lam, gamma: gamma, k_e: k_e, hp: 1.0, hv: 2.0, sigma: 0.1, tf: 0.5, frames: 120, dt: 0.25 };
+    return vesicles.Model { size: 40, r: 2.0, lam: lam, gamma: gamma, k_e: k_e, hp: 1.0, hv: 2.0, sigma: 0.1, tf: 0.5, frames: 120, dt: 0.25, filter: 0, p_touch: 0.0 };
 }
 
 // pooled over 8 movies: events, those with a patch within 4 px, the chance level summed
@@ -120,5 +120,25 @@ fn test_a_movie_is_reproducible() -> [] int {
     test.assert_eq(a.events, b.events);
     test.assert_eq(a.ra, b.ra);
     test.assert_eq(a.rb, b.rb);
+    return 0;
+}
+
+// slice 3: the tip's ruptures per touch are the p_touch put in, within three binomial errors (the tip alone, no other mechanism)
+fn test_the_tip_ruptures_at_p_touch_per_touch() -> [] int {
+    var rc = 0;
+    var touches = 0;
+    var seed = 1;
+    while seed <= 4 {
+        let m = vesicles.Model { size: 40, r: 2.0, lam: 0.003, gamma: 1000, k_e: 0.0, hp: 1.0, hv: 2.0, sigma: 0.1, tf: 0.5, frames: 120, dt: 0.25, filter: 0, p_touch: 0.02 };
+        let s = vesicles.study(m, seed, 20, 4.0, 0.25);
+        rc = rc + s.rc;
+        touches = touches + s.touches;
+        seed = seed + 1;
+    }
+    test.assert(touches > 5000);
+    let p = float_of(rc) / float_of(touches);
+    var d = p - 0.02;
+    if d < 0.0 { d = 0.0 - d; }
+    test.assert(d <= 3.0 * math.sqrt(0.02 * 0.98 / float_of(touches)));
     return 0;
 }

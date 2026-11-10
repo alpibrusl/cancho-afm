@@ -13,7 +13,7 @@ module vesicles;
 import std.math;
 import nucleation;
 
-pub struct Model { size: int, r: float, lam: float, gamma: int, k_e: float, hp: float, hv: float, sigma: float, tf: float, frames: int, dt: float }
+pub struct Model { size: int, r: float, lam: float, gamma: int, k_e: float, hp: float, hv: float, sigma: float, tf: float, frames: int, dt: float, filter: int, p_touch: float }
 
 pub fn cap_v() -> [] int { return 160; }
 pub fn cap_p() -> [] int { return 64; }
@@ -24,8 +24,11 @@ fn dist(ax: float, ay: float, bx: float, by: float) -> [] float {
     return math.sqrt(dx * dx + dy * dy);
 }
 
+// `filter` 1: a 3 by 3 median filter on each frame before the analysis reads it (it removes isolated pixels that noise pushed across a level; it also rounds the corners of the domes and patches).
+// `p_touch`: the chance that the scanning tip ruptures an adsorbed vesicle when it passes over it, once per frame (mechanism C, 0 = the tip does no harm); a stand-in for the tip's force, which is not
+// modelled: the Bell-type dependence on the force is in the design (docs/dynamics.md), not here.
 // The history up to t_end. Vesicle k: place (vx, vy), adsorbed at va[k], gone (ruptured or desorbed) at vg[k] (1e9 while there). Patch k: place (px, py), born at pb[k]. Returns the vesicle count in
-// st[0] and the patch count in st[1]; st[2] counts ruptures by (A), st[3] by (B); st[4] the arrivals lost on patches. All the slices are the caller's.
+// st[0] and the patch count in st[1]; st[2] counts ruptures by (A), st[3] by (B); st[4] the arrivals lost on patches, st[5] ruptures by the tip (C), st[6] vesicle-touches by the tip (the sum over frames of the adsorbed vesicles). All the slices are the caller's.
 pub fn history[&a, &b, &c, &d, &e, &f, &g, &h](m: Model, seed: int, t_end: float, vx: &!a [float], vy: &!b [float], va: &!c [float], vg: &!d [float],
                                               px: &!e [float], py: &!f [float], pb: &!g [float], st: &!h [int]) -> [] int {
     let rr = 2.0 * m.r;
@@ -34,6 +37,8 @@ pub fn history[&a, &b, &c, &d, &e, &f, &g, &h](m: Model, seed: int, t_end: float
     var np = 0;
     var ra = 0;
     var rb = 0;
+    var rc = 0;
+    var touches = 0;
     var lost = 0;
     var t = 0.0;        // the time of the last arrival
     var te = 0.0;       // the time the edge process has been advanced to
@@ -45,10 +50,31 @@ pub fn history[&a, &b, &c, &d, &e, &f, &g, &h](m: Model, seed: int, t_end: float
         // advance the edge process to min(t, t_end)
         var stop = t;
         if go == 0 { stop = t_end; }
-        while m.k_e > 0.0 && te + m.dt <= stop {
+        while (m.k_e > 0.0 || m.p_touch > 0.0) && te + m.dt <= stop {
             te = te + m.dt;
+            // the tip passes over every adsorbed vesicle once per frame: at each frame boundary a vesicle ruptures with probability p_touch
+            let fb = te / m.tf;
+            let dfb = fb - math.round(fb);
+            if m.p_touch > 0.0 && dfb < 0.001 && dfb > 0.0 - 0.001 {
+                var kk = 0;
+                while kk < nv {
+                    if vg[kk] > 100000000.0 { touches = touches + 1; }
+                    if vg[kk] > 100000000.0 && np < cap_p() && nucleation.hash01(kk * 1000 + truncate(te / m.dt) + 77, seed * 5 + 4) < m.p_touch {
+                        px[np] = vx[kk]; py[np] = vy[kk]; pb[np] = te; np = np + 1;
+                        vg[kk] = te;
+                        rc = rc + 1;
+                        var jj = 0;
+                        while jj < nv {
+                            if vg[jj] > 100000000.0 && dist(vx[jj], vy[jj], vx[kk], vy[kk]) < rr { vg[jj] = te; }
+                            jj = jj + 1;
+                        }
+                    }
+                    kk = kk + 1;
+                }
+            }
             let p_rupt = 1.0 - math.exp(0.0 - m.k_e * m.dt);
             var k = 0;
+            if m.k_e <= 0.0 { k = nv; }
             while k < nv {
                 if vg[k] > 100000000.0 && np < cap_p() {
                     // distance to the nearest patch centre: within (2r, 3r] is "within r of its edge"
@@ -104,7 +130,7 @@ pub fn history[&a, &b, &c, &d, &e, &f, &g, &h](m: Model, seed: int, t_end: float
             n = n + 1;
         }
     }
-    st[0] = nv; st[1] = np; st[2] = ra; st[3] = rb; st[4] = lost;
+    st[0] = nv; st[1] = np; st[2] = ra; st[3] = rb; st[4] = lost; st[5] = rc; st[6] = touches;
     return 0;
 }
 
@@ -137,6 +163,44 @@ pub fn render[&a, &b, &c, &d, &e, &f, &g, &h](m: Model, t: float, nv: int, vx: &
     return 0;
 }
 
+// 3 by 3 median of `frame` (size by size) written back into it, through `tmp` (the border keeps the pixels it has)
+fn median3[&a, &b](frame: &!a [float], tmp: &!b [float], size: int) -> [] int {
+    var y = 0;
+    while y < size {
+        var x = 0;
+        while x < size {
+            if y == 0 || x == 0 || y == size - 1 || x == size - 1 {
+                tmp[y * size + x] = frame[y * size + x];
+            } else {
+                // the median of nine: the fifth smallest, by counting how many are not larger
+                var best = 0.0;
+                var found = 0;
+                var c = 0;
+                while c < 9 && found == 0 {
+                    let v = frame[(y + c / 3 - 1) * size + (x + c % 3 - 1)];
+                    var less = 0;
+                    var leq = 0;
+                    var d = 0;
+                    while d < 9 {
+                        let w = frame[(y + d / 3 - 1) * size + (x + d % 3 - 1)];
+                        if w < v { less = less + 1; }
+                        if w <= v { leq = leq + 1; }
+                        d = d + 1;
+                    }
+                    if less <= 4 && leq >= 5 { best = v; found = 1; }
+                    c = c + 1;
+                }
+                tmp[y * size + x] = best;
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    var i = 0;
+    while i < size * size { frame[i] = tmp[i]; i = i + 1; }
+    return 0;
+}
+
 // What the analysis reads from the images: per frame the number of domes (components above the mid level of dome and patch) and the patch area (pixels between bare and dome level); and the rupture
 // events: components of NEWLY-patch pixels (patch now, not patch in the previous frame) of at least `min_area` pixels, with the time, and whether a patch pixel of the previous frame lies within `near`
 // pixels of the event's centroid, and the chance level of that: the share of the previous frame's bare area within `near` pixels of a patch pixel.
@@ -157,6 +221,7 @@ pub fn analyse[&a, &b, &c, &d, &e, &f, &g, &h, &i2, &j2, &k2, &l2](m: Model, nv:
         while fno <= m.frames {
             let t = float_of(fno) * m.tf;
             render(m, t, nv, vx, vy, va, vg, np, px, py, pb, seed, fno, frame);
+            if m.filter == 1 { median3(frame, nm, m.size); }
             let mid = 0.5 * (m.hp + m.hv);
             let low = 0.5 * m.hp;
             // domes
@@ -253,7 +318,7 @@ pub fn analyse[&a, &b, &c, &d, &e, &f, &g, &h, &i2, &j2, &k2, &l2](m: Model, nv:
 // events: rupture events the analysis found; near: how many had a patch within `near` px; chance_sum: the sum of the chance levels over the events (so near / events is compared with chance_sum / events);
 // first_t: the time of the first event (-1 none); ra, rb: the true ruptures by (A) and (B); dome_rate: domes per pixel^2 per s over the frames before the first event (or the first 10 s), a read of `lam`;
 // area_ratio: the patch area at the last frame over the number of true ruptures times 4 pi r^2 (1 when none overlap).
-pub struct Study { events: int, near: int, chance_sum: float, first_t: float, ra: int, rb: int, dome_rate: float, area_ratio: float }
+pub struct Study { events: int, near: int, chance_sum: float, first_t: float, ra: int, rb: int, dome_rate: float, area_ratio: float, rc: int, touches: int }
 
 pub fn study(m: Model, seed: int, min_area: int, near: float, max_cov: float) -> [] Study {
     var o_events = 0;
@@ -262,6 +327,8 @@ pub fn study(m: Model, seed: int, min_area: int, near: float, max_cov: float) ->
     var o_first = 0.0 - 1.0;
     var o_ra = 0;
     var o_rb = 0;
+    var o_rc = 0;
+    var o_touch = 0;
     var o_rate = 0.0;
     var o_area = 0.0;
     region r {
@@ -284,6 +351,8 @@ pub fn study(m: Model, seed: int, min_area: int, near: float, max_cov: float) ->
         o_events = ne;
         o_ra = st[2];
         o_rb = st[3];
+        o_rc = st[5];
+        o_touch = st[6];
         var k = 0;
         while k < ne {
             if ev[100 + k] > 0.5 { o_near = o_near + 1; }
@@ -317,5 +386,5 @@ pub fn study(m: Model, seed: int, min_area: int, near: float, max_cov: float) ->
         while qq < st[1] { if pb[qq] <= float_of(fl) * m.tf { born = born + 1; } qq = qq + 1; }
         if born > 0 { o_area = dome[m.frames + 1 + fl] / (float_of(born) * 4.0 * 3.14159265358979 * m.r * m.r); }
     }
-    return Study { events: o_events, near: o_near, chance_sum: o_chance, first_t: o_first, ra: o_ra, rb: o_rb, dome_rate: o_rate, area_ratio: o_area };
+    return Study { events: o_events, near: o_near, chance_sum: o_chance, first_t: o_first, ra: o_ra, rb: o_rb, dome_rate: o_rate, area_ratio: o_area, rc: o_rc, touches: o_touch };
 }

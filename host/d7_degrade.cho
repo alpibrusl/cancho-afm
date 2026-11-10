@@ -93,8 +93,8 @@ fn line[&h](heap: &!h Heap, o: buffer.Buffer, r: Row) -> [heap] buffer.Buffer {
     return text(heap, b, "%\n");
 }
 
-fn mk(gamma: int, k_e: float, sigma: float) -> [] vesicles.Model {
-    return vesicles.Model { size: 40, r: 2.0, lam: 0.003, gamma: gamma, k_e: k_e, hp: 1.0, hv: 2.0, sigma: sigma, tf: 0.5, frames: 120, dt: 0.25 };
+fn mk(gamma: int, k_e: float, sigma: float, filter: int) -> [] vesicles.Model {
+    return vesicles.Model { size: 40, r: 2.0, lam: 0.003, gamma: gamma, k_e: k_e, hp: 1.0, hv: 2.0, sigma: sigma, tf: 0.5, frames: 120, dt: 0.25, filter: filter, p_touch: 0.0 };
 }
 
 fn main(world: World) -> [] int {
@@ -108,26 +108,34 @@ fn main(world: World) -> [] int {
             o = text(h, o, "g=");
             o = dec(h, o, float_of(g), 0);
             o = text(h, o, " A");
-            o = line(h, o, run(mk(3, 0.0, 0.1), g));
+            o = line(h, o, run(mk(3, 0.0, 0.1, 0), g));
             o = text(h, o, "g=");
             o = dec(h, o, float_of(g), 0);
             o = text(h, o, " B");
-            o = line(h, o, run(mk(3, 0.5, 0.1), g));
+            o = line(h, o, run(mk(3, 0.5, 0.1, 0), g));
             g = g * 2;
         }
-        o = text(h, o, "-- image noise (8 movies a group, k_e 0.5)\n");
-        var sg = 1;
-        while sg <= 4 {
-            let sigma = 0.1 * float_of(sg);
-            o = text(h, o, "sigma ");
-            o = dec(h, o, sigma, 1);
-            o = text(h, o, " A");
-            o = line(h, o, run(mk(3, 0.0, sigma), 8));
-            o = text(h, o, "sigma ");
-            o = dec(h, o, sigma, 1);
-            o = text(h, o, " B");
-            o = line(h, o, run(mk(3, 0.5, sigma), 8));
-            sg = sg + 1;
+        o = text(h, o, "-- image noise (8 movies a group, k_e 0.5), without and with the 3 x 3 median filter\n");
+        var fl = 0;
+        while fl < 2 {
+            var sg = 1;
+            while sg <= 5 {
+                let sigma = 0.1 * float_of(sg);
+                o = text(h, o, "filter ");
+                o = dec(h, o, float_of(fl), 0);
+                o = text(h, o, " sigma ");
+                o = dec(h, o, sigma, 1);
+                o = text(h, o, " A");
+                o = line(h, o, run(mk(3, 0.0, sigma, fl), 8));
+                o = text(h, o, "filter ");
+                o = dec(h, o, float_of(fl), 0);
+                o = text(h, o, " sigma ");
+                o = dec(h, o, sigma, 1);
+                o = text(h, o, " B");
+                o = line(h, o, run(mk(3, 0.5, sigma, fl), 8));
+                sg = sg + 1;
+            }
+            fl = fl + 1;
         }
         o = text(h, o, "-- edge rate k_e (8 movies a group, sigma 0.1)\n");
         var ks = 0;
@@ -139,7 +147,7 @@ fn main(world: World) -> [] int {
             o = text(h, o, "k_e ");
             o = dec(h, o, ke, 2);
             o = text(h, o, " B");
-            o = line(h, o, run(mk(3, ke, 0.1), 8));
+            o = line(h, o, run(mk(3, ke, 0.1, 0), 8));
             ks = ks + 1;
         }
         var code = 0;
