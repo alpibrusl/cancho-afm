@@ -25,7 +25,7 @@ fn frac(x: float) -> [] float {
 }
 
 // a uniform in (0, 1) from an index and a salt
-fn hash01(i: int, salt: int) -> [] float {
+pub fn hash01(i: int, salt: int) -> [] float {
     var u = frac(math.sin(12.9898 * float_of(i) + 78.233 * float_of(salt) + 4.1414) * 43758.5453);
     if u < 0.000000001 { u = 0.000000001; }
     if u > 0.999999999 { u = 0.999999999; }

@@ -1,0 +1,316 @@
+edition 5;
+
+module vesicles;
+
+// `vesicles` -- D7, slice 2 (docs/dynamics.md): bilayer formation from vesicles, imaged frame by frame, and the analysis that tells how the bilayer nucleates. A PREDICTION OF THIS SOFTWARE: no parameter is
+// from an experiment; units are pixels and seconds. The model is the one the design wrote down from Plunkett et al. (Soft Matter 2013), reduced:
+//   * vesicles arrive as a Poisson process (rate `lam` per pixel^2 per s), each at a uniform place;
+//   * an arrival on a patch is lost; otherwise, mechanism (A) critical density: if at least `gamma` adsorbed vesicles are within 3 r of it, it ruptures at once, else it adsorbs as a dome of radius r;
+//   * mechanism (B) edge-induced: an adsorbed vesicle within r of a patch's edge ruptures at rate `k_e` (0 = off);
+//   * a ruptured vesicle becomes a disc of radius 2 r (its whole area spread out: the paper's rule, area conserved), and an adsorbed vesicle whose centre falls under a patch desorbs.
+// The history is made first (the truth), then imaged: a patch reads `hp`, a dome `hv`, bare 0, plus noise; the analysis sees only the images.
+
+import std.math;
+import nucleation;
+
+pub struct Model { size: int, r: float, lam: float, gamma: int, k_e: float, hp: float, hv: float, sigma: float, tf: float, frames: int, dt: float }
+
+pub fn cap_v() -> [] int { return 160; }
+pub fn cap_p() -> [] int { return 64; }
+
+fn dist(ax: float, ay: float, bx: float, by: float) -> [] float {
+    let dx = ax - bx;
+    let dy = ay - by;
+    return math.sqrt(dx * dx + dy * dy);
+}
+
+// The history up to t_end. Vesicle k: place (vx, vy), adsorbed at va[k], gone (ruptured or desorbed) at vg[k] (1e9 while there). Patch k: place (px, py), born at pb[k]. Returns the vesicle count in
+// st[0] and the patch count in st[1]; st[2] counts ruptures by (A), st[3] by (B); st[4] the arrivals lost on patches. All the slices are the caller's.
+pub fn history[&a, &b, &c, &d, &e, &f, &g, &h](m: Model, seed: int, t_end: float, vx: &!a [float], vy: &!b [float], va: &!c [float], vg: &!d [float],
+                                              px: &!e [float], py: &!f [float], pb: &!g [float], st: &!h [int]) -> [] int {
+    let rr = 2.0 * m.r;
+    let area = float_of(m.size * m.size);
+    var nv = 0;
+    var np = 0;
+    var ra = 0;
+    var rb = 0;
+    var lost = 0;
+    var t = 0.0;        // the time of the last arrival
+    var te = 0.0;       // the time the edge process has been advanced to
+    var n = 0;
+    var go = 1;
+    while go == 1 {
+        t = t - math.log(nucleation.hash01(n, seed * 5)) / (m.lam * area);
+        if t > t_end { go = 0; }
+        // advance the edge process to min(t, t_end)
+        var stop = t;
+        if go == 0 { stop = t_end; }
+        while m.k_e > 0.0 && te + m.dt <= stop {
+            te = te + m.dt;
+            let p_rupt = 1.0 - math.exp(0.0 - m.k_e * m.dt);
+            var k = 0;
+            while k < nv {
+                if vg[k] > 100000000.0 && np < cap_p() {
+                    // distance to the nearest patch centre: within (2r, 3r] is "within r of its edge"
+                    var near = 0;
+                    var q = 0;
+                    while q < np {
+                        let d = dist(vx[k], vy[k], px[q], py[q]);
+                        if d > rr && d <= rr + m.r { near = 1; }
+                        q = q + 1;
+                    }
+                    if near == 1 && nucleation.hash01(k * 1000 + truncate(te / m.dt), seed * 5 + 1) < p_rupt {
+                        px[np] = vx[k]; py[np] = vy[k]; pb[np] = te; np = np + 1;
+                        vg[k] = te;
+                        rb = rb + 1;
+                        // vesicles whose centre is under the new patch desorb
+                        var j = 0;
+                        while j < nv {
+                            if vg[j] > 100000000.0 && dist(vx[j], vy[j], vx[k], vy[k]) < rr { vg[j] = te; }
+                            j = j + 1;
+                        }
+                    }
+                }
+                k = k + 1;
+            }
+        }
+        if go == 1 {
+            let x = nucleation.hash01(n, seed * 5 + 2) * float_of(m.size);
+            let y = nucleation.hash01(n, seed * 5 + 3) * float_of(m.size);
+            var on = 0;
+            var q = 0;
+            while q < np { if dist(x, y, px[q], py[q]) < rr { on = 1; } q = q + 1; }
+            if on == 1 {
+                lost = lost + 1;
+            } else {
+                var crowd = 0;
+                var k = 0;
+                while k < nv {
+                    if vg[k] > 100000000.0 && dist(x, y, vx[k], vy[k]) <= 3.0 * m.r { crowd = crowd + 1; }
+                    k = k + 1;
+                }
+                if crowd >= m.gamma && np < cap_p() {
+                    px[np] = x; py[np] = y; pb[np] = t; np = np + 1;
+                    ra = ra + 1;
+                    var j = 0;
+                    while j < nv {
+                        if vg[j] > 100000000.0 && dist(vx[j], vy[j], x, y) < rr { vg[j] = t; }
+                        j = j + 1;
+                    }
+                } else if nv < cap_v() {
+                    vx[nv] = x; vy[nv] = y; va[nv] = t; vg[nv] = 1000000000.0; nv = nv + 1;
+                }
+            }
+            n = n + 1;
+        }
+    }
+    st[0] = nv; st[1] = np; st[2] = ra; st[3] = rb; st[4] = lost;
+    return 0;
+}
+
+// Frame at time t.
+pub fn render[&a, &b, &c, &d, &e, &f, &g, &h](m: Model, t: float, nv: int, vx: &a [float], vy: &b [float], va: &c [float], vg: &d [float],
+                                              np: int, px: &e [float], py: &f [float], pb: &g [float], seed: int, fno: int, frame: &!h [float]) -> [] int {
+    let npx = m.size * m.size;
+    let rr = 2.0 * m.r;
+    var i = 0;
+    while i < npx {
+        let y = float_of(i / m.size) + 0.5;
+        let x = float_of(i % m.size) + 0.5;
+        var v = 0.0;
+        var q = 0;
+        while q < np {
+            if pb[q] <= t && dist(x, y, px[q], py[q]) <= rr { v = m.hp; }
+            q = q + 1;
+        }
+        var k = 0;
+        while k < nv {
+            if va[k] <= t && t < vg[k] && dist(x, y, vx[k], vy[k]) <= m.r { v = m.hv; }
+            k = k + 1;
+        }
+        frame[i] = v + m.sigma * 1.7320508 * (2.0 * nucleation.hash01(i + 100000 * fno, seed * 7 + 11) - 1.0);
+        i = i + 1;
+    }
+    return 0;
+}
+
+// What the analysis reads from the images: per frame the number of domes (components above the mid level of dome and patch) and the patch area (pixels between bare and dome level); and the rupture
+// events: components of NEWLY-patch pixels (patch now, not patch in the previous frame) of at least `min_area` pixels, with the time, and whether a patch pixel of the previous frame lies within `near`
+// pixels of the event's centroid, and the chance level of that: the share of the previous frame's bare area within `near` pixels of a patch pixel.
+// Outputs: dome[f], area[f] per frame (frames + 1 entries); ev_t, ev_near (1 or 0), ev_chance (floats), cap `cap_ev`. Returns the number of events.
+pub fn analyse[&a, &b, &c, &d, &e, &f, &g, &h, &i2, &j2, &k2, &l2](m: Model, nv: int, vx: &a [float], vy: &b [float], va: &c [float], vg: &d [float],
+                                                                 np: int, px: &e [float], py: &f [float], pb: &g [float], seed: int,
+                                                                 frame: &!h [float], prev: &!i2 [float], nm: &!j2 [float],
+                                                                 dome: &!k2 [float], ev: &!l2 [float], min_area: int, near: float, cap_ev: int, max_cov: float) -> [] int {
+    // ev: 3 * cap_ev floats: time, near, chance of each event; dome: 2 * (frames + 1): the dome count then the patch area of each frame
+    let npx = m.size * m.size;
+    var nev = 0;
+    var fno = 0;
+    var i = 0;
+    while i < npx { prev[i] = 0.0; i = i + 1; }
+    region r {
+        let cy = alloc_slice[r](160, 0.0);
+        let cx = alloc_slice[r](160, 0.0);
+        while fno <= m.frames {
+            let t = float_of(fno) * m.tf;
+            render(m, t, nv, vx, vy, va, vg, np, px, py, pb, seed, fno, frame);
+            let mid = 0.5 * (m.hp + m.hv);
+            let low = 0.5 * m.hp;
+            // domes
+            let nd = nucleation.components(frame, m.size, mid, 4, cy, cx, 160);
+            dome[fno] = float_of(nd);
+            var pa = 0;
+            i = 0;
+            while i < npx { if frame[i] > low && frame[i] <= mid { pa = pa + 1; } i = i + 1; }
+            dome[m.frames + 1 + fno] = float_of(pa);
+            // newly patch
+            i = 0;
+            while i < npx {
+                var was = 0;
+                if prev[i] > low && prev[i] <= mid { was = 1; }
+                var is = 0;
+                if frame[i] > low && frame[i] <= mid { is = 1; }
+                // a pixel that is now a dome was a dome or bare before: not a patch event
+                if was == 0 && is == 1 { nm[i] = 1.0; } else { nm[i] = 0.0; }
+                i = i + 1;
+            }
+            var ne = nucleation.components(nm, m.size, 0.5, min_area, cy, cx, 160);
+            // the events of a crowded field are not read: once the previous frame's patches cover more than max_cov of it, a new patch is mostly an overlap
+            var pprev = 0;
+            i = 0;
+            while i < npx { if prev[i] > low && prev[i] <= mid { pprev = pprev + 1; } i = i + 1; }
+            if float_of(pprev) > max_cov * float_of(npx) { ne = 0; }
+            if ne > 0 {
+                // the chance level of this frame: bare area (previous frame) within `near` of a patch pixel
+                var bare = 0;
+                var bare_near = 0;
+                i = 0;
+                while i < npx {
+                    if prev[i] <= low {
+                        bare = bare + 1;
+                        let y0 = i / m.size;
+                        let x0 = i % m.size;
+                        var hit = 0;
+                        var dy = 0 - 4;
+                        while dy <= 4 && hit == 0 {
+                            var dx = 0 - 4;
+                            while dx <= 4 && hit == 0 {
+                                let yy = y0 + dy;
+                                let xx = x0 + dx;
+                                if yy >= 0 && yy < m.size && xx >= 0 && xx < m.size && float_of(dy * dy + dx * dx) <= near * near {
+                                    let pv = prev[yy * m.size + xx];
+                                    if pv > low && pv <= mid { hit = 1; }
+                                }
+                                dx = dx + 1;
+                            }
+                            dy = dy + 1;
+                        }
+                        bare_near = bare_near + hit;
+                    }
+                    i = i + 1;
+                }
+                var chance = 0.0;
+                if bare > 0 { chance = float_of(bare_near) / float_of(bare); }
+                var k = 0;
+                while k < ne && nev < cap_ev {
+                    // is a patch pixel of the previous frame within `near` of the event's centroid
+                    var hit = 0;
+                    var dy = 0 - 4;
+                    while dy <= 4 {
+                        var dx = 0 - 4;
+                        while dx <= 4 {
+                            let yy = truncate(cy[k]) + dy;
+                            let xx = truncate(cx[k]) + dx;
+                            if yy >= 0 && yy < m.size && xx >= 0 && xx < m.size && float_of(dy * dy + dx * dx) <= near * near {
+                                let pv = prev[yy * m.size + xx];
+                                if pv > low && pv <= mid { hit = 1; }
+                            }
+                            dx = dx + 1;
+                        }
+                        dy = dy + 1;
+                    }
+                    ev[nev] = t;
+                    ev[cap_ev + nev] = float_of(hit);
+                    ev[2 * cap_ev + nev] = chance;
+                    nev = nev + 1;
+                    k = k + 1;
+                }
+            }
+            i = 0;
+            while i < npx { prev[i] = frame[i]; i = i + 1; }
+            fno = fno + 1;
+        }
+    }
+    return nev;
+}
+
+// ---- a whole movie, made and analysed: what the tests and the report use ----
+// events: rupture events the analysis found; near: how many had a patch within `near` px; chance_sum: the sum of the chance levels over the events (so near / events is compared with chance_sum / events);
+// first_t: the time of the first event (-1 none); ra, rb: the true ruptures by (A) and (B); dome_rate: domes per pixel^2 per s over the frames before the first event (or the first 10 s), a read of `lam`;
+// area_ratio: the patch area at the last frame over the number of true ruptures times 4 pi r^2 (1 when none overlap).
+pub struct Study { events: int, near: int, chance_sum: float, first_t: float, ra: int, rb: int, dome_rate: float, area_ratio: float }
+
+pub fn study(m: Model, seed: int, min_area: int, near: float, max_cov: float) -> [] Study {
+    var o_events = 0;
+    var o_near = 0;
+    var o_chance = 0.0;
+    var o_first = 0.0 - 1.0;
+    var o_ra = 0;
+    var o_rb = 0;
+    var o_rate = 0.0;
+    var o_area = 0.0;
+    region r {
+        let npx = m.size * m.size;
+        let vx = alloc_slice[r](160, 0.0);
+        let vy = alloc_slice[r](160, 0.0);
+        let va = alloc_slice[r](160, 0.0);
+        let vg = alloc_slice[r](160, 0.0);
+        let px = alloc_slice[r](64, 0.0);
+        let py = alloc_slice[r](64, 0.0);
+        let pb = alloc_slice[r](64, 0.0);
+        let st = alloc_slice[r](8, 0);
+        let frame = alloc_slice[r](npx, 0.0);
+        let prev = alloc_slice[r](npx, 0.0);
+        let nm = alloc_slice[r](npx, 0.0);
+        let dome = alloc_slice[r](2 * (m.frames + 1), 0.0);
+        let ev = alloc_slice[r](3 * 100, 0.0);
+        history(m, seed, float_of(m.frames) * m.tf, vx, vy, va, vg, px, py, pb, st);
+        let ne = analyse(m, st[0], vx, vy, va, vg, st[1], px, py, pb, seed, frame, prev, nm, dome, ev, min_area, near, 100, max_cov);
+        o_events = ne;
+        o_ra = st[2];
+        o_rb = st[3];
+        var k = 0;
+        while k < ne {
+            if ev[100 + k] > 0.5 { o_near = o_near + 1; }
+            o_chance = o_chance + ev[200 + k];
+            k = k + 1;
+        }
+        if ne > 0 { o_first = ev[0]; }
+        // domes per area per time over the early frames: up to the first event, or 10 s
+        var tmax = 10.0;
+        if ne > 0 && ev[0] < tmax { tmax = ev[0] - m.tf; }
+        var f = truncate(tmax / m.tf);
+        if f >= 2 {
+            // fit through the origin: slope = sum(t * n) / sum(t * t)
+            var num = 0.0;
+            var den = 0.0;
+            var j = 1;
+            while j <= f {
+                let t = float_of(j) * m.tf;
+                num = num + t * dome[j];
+                den = den + t * t;
+                j = j + 1;
+            }
+            o_rate = num / den / float_of(npx);
+        }
+        // the patch area against the true ruptures, at the last frame whose patch area is under the cap
+        var fl = 0;
+        var jf = 0;
+        while jf <= m.frames { if dome[m.frames + 1 + jf] <= max_cov * float_of(npx) { fl = jf; } jf = jf + 1; }
+        var born = 0;
+        var qq = 0;
+        while qq < st[1] { if pb[qq] <= float_of(fl) * m.tf { born = born + 1; } qq = qq + 1; }
+        if born > 0 { o_area = dome[m.frames + 1 + fl] / (float_of(born) * 4.0 * 3.14159265358979 * m.r * m.r); }
+    }
+    return Study { events: o_events, near: o_near, chance_sum: o_chance, first_t: o_first, ra: o_ra, rb: o_rb, dome_rate: o_rate, area_ratio: o_area };
+}
