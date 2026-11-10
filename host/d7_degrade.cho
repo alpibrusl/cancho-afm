@@ -1,0 +1,152 @@
+edition 7;
+
+import std.buffer;
+import std.math;
+import nucleation;
+import vesicles;
+
+// D7 slice 2: how the edge-share statistic degrades (docs/dynamics.md). For each setting, 48 movies (seeds 1 to 48) are made and analysed, and grouped `g` at a time; each group is a pooled experiment of g
+// movies, and its z is (the near-edge share - the chance level) / sqrt(chance (1 - chance) / events). A mechanism is "called" when z > 3; for the critical-density-only movies the same z > 3 is a FALSE alarm,
+// and |z| > 3 either way is counted too. A prediction of this software; every parameter is a stand-in.
+//   cancho run host/d7_degrade.cho sim/vesicles.cho sim/nucleation.cho --std
+fn text[&h, &r](heap: &!h Heap, b: buffer.Buffer, s: &r [byte]) -> [heap] buffer.Buffer { return buffer.append(heap, b, s); }
+
+fn dec[&h](heap: &!h Heap, o: buffer.Buffer, v: float, places: int) -> [heap] buffer.Buffer {
+    var b = o;
+    var x = v;
+    if x < 0.0 { b = text(heap, b, "-"); x = 0.0 - x; }
+    var scale = 1;
+    var p = 0;
+    while p < places { scale = scale * 10; p = p + 1; }
+    let c = truncate(x * float_of(scale) + 0.5);
+    b = buffer.push_nat(heap, b, c / scale);
+    if places > 0 {
+        b = text(heap, b, ".");
+        var rest = c % scale;
+        var div = scale / 10;
+        while div > 0 {
+            b = buffer.push_nat(heap, b, rest / div);
+            rest = rest % div;
+            div = div / 10;
+        }
+    }
+    return b;
+}
+
+struct Row { events: float, z_mean: float, called: float, called_either: float, share: float, chance: float }
+
+// 48 movies of the model, grouped g at a time
+fn run(m: vesicles.Model, g: int) -> [] Row {
+    var ev_tot = 0.0;
+    var z_sum = 0.0;
+    var called = 0;
+    var either = 0;
+    var share_sum = 0.0;
+    var chance_sum = 0.0;
+    var groups = 0;
+    var j = 0;
+    while j + g <= 48 {
+        var ev = 0;
+        var nr = 0;
+        var ch = 0.0;
+        var k = 0;
+        while k < g {
+            let s = vesicles.study(m, 1 + j + k, 20, 4.0, 0.25);
+            ev = ev + s.events;
+            nr = nr + s.near;
+            ch = ch + s.chance_sum;
+            k = k + 1;
+        }
+        if ev > 0 {
+            let share = float_of(nr) / float_of(ev);
+            let chance = ch / float_of(ev);
+            let se = math.sqrt(chance * (1.0 - chance) / float_of(ev));
+            var z = 0.0;
+            if se > 0.0 { z = (share - chance) / se; }
+            z_sum = z_sum + z;
+            if z > 3.0 { called = called + 1; }
+            if z > 3.0 || z < 0.0 - 3.0 { either = either + 1; }
+            share_sum = share_sum + share;
+            chance_sum = chance_sum + chance;
+        }
+        ev_tot = ev_tot + float_of(ev);
+        groups = groups + 1;
+        j = j + g;
+    }
+    let gf = float_of(groups);
+    return Row { events: ev_tot / gf, z_mean: z_sum / gf, called: float_of(called) / gf, called_either: float_of(either) / gf, share: share_sum / gf, chance: chance_sum / gf };
+}
+
+fn line[&h](heap: &!h Heap, o: buffer.Buffer, r: Row) -> [heap] buffer.Buffer {
+    var b = text(heap, o, " | events/group ");
+    b = dec(heap, b, r.events, 0);
+    b = text(heap, b, " | share ");
+    b = dec(heap, b, r.share, 2);
+    b = text(heap, b, " vs chance ");
+    b = dec(heap, b, r.chance, 2);
+    b = text(heap, b, " | mean z ");
+    b = dec(heap, b, r.z_mean, 1);
+    b = text(heap, b, " | z>3 in ");
+    b = dec(heap, b, r.called * 100.0, 0);
+    b = text(heap, b, "% | |z|>3 in ");
+    b = dec(heap, b, r.called_either * 100.0, 0);
+    return text(heap, b, "%\n");
+}
+
+fn mk(gamma: int, k_e: float, sigma: float) -> [] vesicles.Model {
+    return vesicles.Model { size: 40, r: 2.0, lam: 0.003, gamma: gamma, k_e: k_e, hp: 1.0, hv: 2.0, sigma: sigma, tf: 0.5, frames: 120, dt: 0.25 };
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(net); release(clock); release(signals); release(exec); release(args);
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 16384);
+        o = text(h, o, "-- events: movies pooled per group (sigma 0.1)\n");
+        var g = 1;
+        while g <= 8 {
+            o = text(h, o, "g=");
+            o = dec(h, o, float_of(g), 0);
+            o = text(h, o, " A");
+            o = line(h, o, run(mk(3, 0.0, 0.1), g));
+            o = text(h, o, "g=");
+            o = dec(h, o, float_of(g), 0);
+            o = text(h, o, " B");
+            o = line(h, o, run(mk(3, 0.5, 0.1), g));
+            g = g * 2;
+        }
+        o = text(h, o, "-- image noise (8 movies a group, k_e 0.5)\n");
+        var sg = 1;
+        while sg <= 4 {
+            let sigma = 0.1 * float_of(sg);
+            o = text(h, o, "sigma ");
+            o = dec(h, o, sigma, 1);
+            o = text(h, o, " A");
+            o = line(h, o, run(mk(3, 0.0, sigma), 8));
+            o = text(h, o, "sigma ");
+            o = dec(h, o, sigma, 1);
+            o = text(h, o, " B");
+            o = line(h, o, run(mk(3, 0.5, sigma), 8));
+            sg = sg + 1;
+        }
+        o = text(h, o, "-- edge rate k_e (8 movies a group, sigma 0.1)\n");
+        var ks = 0;
+        while ks < 4 {
+            var ke = 0.5;
+            if ks == 1 { ke = 0.2; }
+            if ks == 2 { ke = 0.1; }
+            if ks == 3 { ke = 0.05; }
+            o = text(h, o, "k_e ");
+            o = dec(h, o, ke, 2);
+            o = text(h, o, " B");
+            o = line(h, o, run(mk(3, ke, 0.1), 8));
+            ks = ks + 1;
+        }
+        var code = 0;
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(heap);
+    release(io);
+    return 0;
+}
