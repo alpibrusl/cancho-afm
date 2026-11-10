@@ -65,6 +65,6 @@ echo "$big" | grep -q "above it 8192 pixels (50.0%)" || { echo "FAILED: the chec
 "$W/map" 350 320 0 0 128 128 0 1 "$W/big.txt" > "$W/big.png"
 head -c 4 "$W/big.png" | tail -c 3 | grep -q PNG || { echo "FAILED: the big map is not a PNG"; exit 1; }
 # the PNG is 512 x 512: the width and height are bytes 16 to 23 of the file
-dims=$(od -An -tu1 -j16 -N8 "$W/big.png" | tr -s ' ')
-[ "$dims" = " 0 0 2 0 0 0 2 0" ] || { echo "FAILED: the big map PNG is not 512 x 512 ($dims)"; exit 1; }
+dims=$(od -An -tu1 -j16 -N8 "$W/big.png" | tr -s ' ' | sed 's/^ //; s/ $//')
+[ "$dims" = "0 0 2 0 0 0 2 0" ] || { echo "FAILED: the big map PNG is not 512 x 512 ($dims)"; exit 1; }
 echo ok
