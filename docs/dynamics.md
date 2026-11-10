@@ -377,6 +377,40 @@ Nine PDFs were read after the search-snippet and blocked-fetch rounds above. **N
 
 **The shuffled (implant) null, built and measured (2026-11-10): it did not fix the miscalibration, and what it rules out is the useful part.** `implant_chance` in `sim/vesicles.cho` places a synthetic rupture (a disc of radius 2 r) at a random bare place of the previous frame, finds its newly-patch pixels the way the analysis does, takes their centroid and tests it for a patch within the near distance; it keeps what the analytic chance level leaves out (an overlapping rupture shows only its crescent, whose centroid is not the disc's centre). `host/d7_degrade.cho` now prints z against both nulls. Result: **the two nulls agree to within about 0.02 everywhere** (0.27 against 0.26 at sigma 0.1; 0.59 against 0.59 for the filtered images at sigma 0.3), so the critical-density-only movies are still called edge-induced in 67% of groups at sigma 0.3 with the filter on (z 3.3), exactly as before. The hypothesis "the analytic chance level is wrong because crescent centroids are biased" is therefore **rejected**; the false calls come from the data: something near existing patches produces more events than the null predicts once the images are filtered and noisy. **The cause was not found.** Candidates, none tested: boundary pixels of patches flickering across the class threshold from frame to frame and forming small new components next to a patch; the filter shifting the class of dome pixels beside patches. A direct test is to match each event at sigma 0.3 against the true ruptures and look at the ones that match none, which was not done. The statistic stays usable only unfiltered and up to sigma 0.2. (`tests/vesicles_test.cho` keeps one check: the implant null agrees with the analytic level on clean images.)
 
+## Model adequacy, and the discrepancy matrix (2026-11-10; predictions of this software, stand-in models)
+
+**Idea (the user's):** make data in the twin under one model, analyse or compare it under another, and record the discrepancy; the pattern of which summaries disagree is a **fingerprint** of how the two models differ. It is a known idea (a confusion matrix over models; posterior predictive checks; simulation-based model comparison), done here with the twin's own analysis, so it checks what the analysis can see, not what is true.
+
+**Built:** `sim/adequacy.cho` (a library of six models, seven summaries of a movie read from its images, ensembles over k movies, the discrepancy and the fingerprint), `host/d7_matrix.cho` (the matrix), `host/d7_adequacy.cho` (observed summaries in, a verdict per model out), `tests/adequacy_test.cho`. The summaries: events read, the excess edge share (share minus the null), the first event's time, the dome count's read of the arrival rate, the patch area over the true ruptures' (**uses the truth, so it is ignored on real data**), the covered fraction at 15 s and at 30 s. The discrepancy is the root mean square of the seven differences of means in standard errors; two ensembles of the same model give about 1.
+
+**Found** (`cancho run host/d7_matrix.cho sim/adequacy.cho sim/vesicles.cho sim/nucleation.cho --std`, 12 s; 24 movies per ensemble, data from seeds 1 to 24, predictions from seeds 1001 to 1024). Models: 0 critical density (gamma 3) only; 1 plus edge-induced rupture (k_e 0.5); 2 plus a tip rupturing 3% of vesicles a frame; 3 edge and tip; 4 a weak edge process (0.1); 5 critical density with gamma 2.
+
+| data made under \ predicted by | m0 | m1 | m2 | m3 | m4 | m5 | best |
+|---|---|---|---|---|---|---|---|
+| m0 | **1.0** | 8.6 | 6.7 | 11.2 | 5.6 | 3.1 | m0 |
+| m1 | 10.0 | **0.7** | 6.1 | 4.0 | 4.0 | 6.4 | m1 |
+| m2 | 8.1 | 5.0 | **1.2** | 5.3 | 4.3 | 3.9 | m2 |
+| m3 | 11.4 | 3.7 | 5.2 | **0.9** | 6.4 | 7.3 | m3 |
+| m4 | 5.8 | 3.7 | 4.1 | 6.3 | **0.6** | 3.2 | m4 |
+| m5 | 4.7 | 6.4 | 3.1 | 8.2 | 4.0 | **0.9** | m5 |
+
+* **All six are identified:** the diagonal (a model against its own other seeds) is 0.6 to 1.2, as it should be, and every off-diagonal is at least 3.1. The closest pair is m0 and m5 (the same mechanism, a different critical count; 3.1 and 4.7), then m1 and m3 (edge with and without the tip; 3.7 and 4.0).
+* **The fingerprints say why, and they differ by kind of change** (z in standard errors, order: events, edge share, first event, dome rate, area, cover 15 s, cover 30 s):
+  * *an edge process* (m0 against m1): edge share -6.9, cover 15 s -10.5, cover 30 s -18.3; the first event is unchanged (-0.6), because no edge rupture can happen before a first patch exists;
+  * *a tip* (m0 against m2): first event 6.4, cover 15 s -9.6, cover 30 s -13.2, edge share only 1.6: the tip ruptures early and everywhere;
+  * *a different critical count* (m0 against m5): edge share 0.0, first event 3.0, covers -5.3 and -5.2: no edge signature at all;
+  * *a weaker edge process* (m0 against m4): the same signs as m1 but about half the size.
+  So the edge share separates edge-induced rupture from the rest, the first-event time separates the tip, and neither moves when only the critical count changes: a three-way separation the single edge-share statistic of slice 2 could not give.
+* **The covered fraction at 15 s and 30 s carries most of the discrimination (z up to 24)**: every mechanism that adds ruptures speeds the coverage. That is also a warning: if the real coverage curve is affected by anything the models omit (adsorption rate, drift, a different vesicle size), every comparison will be dominated by it.
+
+**The adequacy check on pseudo-observed data** (`host/d7_adequacy.cho` with no arguments: 24 movies made under m3, seeds 5001 to 5024, compared with each model's ensemble from seeds 1001 to 1024): m3 reproduces it (discrepancy 0.6, every summary within 1.0 standard error), the closest wrong model m1 is at 3.3, the rest at 5.8 to 11.7. A set of made-up means entered on the command line (`-- 24 9000 -50 4000 900 800 100 400`, in thousandths) gets "no model of the library reproduces the data", the right answer for numbers nobody generated.
+
+**What this does and does not show:**
+* It shows that, **within this family of models and with these summaries**, an experiment of 24 movies could tell the six apart, and which summaries to look at. It does not show that real vesicles follow any of them.
+* **The models are all one family**: the same arrival process, the same disc rule, the same analysis. Differences outside the family (a different adsorption rate, vesicle size, spatial drift, an imaging artefact) are not in the library, so a real experiment could match none of the six for a reason the matrix cannot name. A model that reproduces the summaries is **not shown to be right**: another could too (m1 and m3 are only 3.7 apart).
+* The spread of each summary comes from the twin's 24 movies, not from the data; with real data the observed spread is to be checked separately. Seven summaries chosen by me; a different set gives a different matrix. Twenty-four movies is what the twin could afford (12 s); how the matrix sharpens or blurs with fewer movies was not measured.
+* The first use on real data is still to come: nothing real has been through it.
+
 ## Using the twin to design experiments
 
 The twin has answered design questions of three kinds so far; each is a number the twin computed, with the caveat that its parameters are stand-ins unless a paper supplies them:

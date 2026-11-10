@@ -1,0 +1,94 @@
+edition 5;
+
+module adequacy;
+
+// `adequacy` -- D7 (docs/dynamics.md): does a model reproduce a set of observed summary statistics, and which models can the statistics tell apart. A PREDICTION OF THIS SOFTWARE; the models are the twin's
+// stand-ins (sim/vesicles.cho) and no real movie has been through this.
+//
+// A MODEL is one setting of the vesicle twin. A SUMMARY of a movie is seven numbers the analysis reads from its images alone (never the truth): 0 the rupture events read, 1 the share of them next to a
+// patch minus the chance level for the same events, 2 the time of the first (60 when none), 3 the dome count's read of the arrival rate over the rate put in, 4 the patch area over the true ruptures'
+// (only meaningful between models: the truth is in it), 5 and 6 the covered fraction of the field at 15 s and at 30 s. An ENSEMBLE is the mean and the sample variance of each summary over k movies.
+// The DISCREPANCY of two ensembles is the root mean square, over the seven summaries, of the difference of means in standard errors; two ensembles of the same model give about 1, and a value well above 1
+// says the models differ. The seven z values of a pair are its FINGERPRINT: which summaries tell the two models apart.
+
+import std.math;
+import vesicles;
+
+pub fn n_stats() -> [] int { return 7; }
+pub fn n_models() -> [] int { return 6; }
+
+// the models: 0 critical density only (gamma 3); 1 plus edge-induced rupture k_e 0.5; 2 plus a tip that ruptures 3% of vesicles a frame; 3 both; 4 a weak edge process k_e 0.1; 5 critical density only
+// but gamma 2 (the same mechanism, another critical count)
+pub fn model_of(id: int) -> [] vesicles.Model {
+    var gamma = 3;
+    var k_e = 0.0;
+    var p = 0.0;
+    if id == 1 { k_e = 0.5; }
+    if id == 2 { p = 0.03; }
+    if id == 3 { k_e = 0.5; p = 0.03; }
+    if id == 4 { k_e = 0.1; }
+    if id == 5 { gamma = 2; }
+    return vesicles.Model { size: 40, r: 2.0, lam: 0.003, gamma: gamma, k_e: k_e, hp: 1.0, hv: 2.0, sigma: 0.1, tf: 0.5, frames: 120, dt: 0.25, filter: 0, p_touch: p };
+}
+
+// the summary of one movie into out (7 floats)
+pub fn summary[&a](m: vesicles.Model, seed: int, out: &!a [float]) -> [] int {
+    let s = vesicles.study(m, seed, 20, 4.0, 0.25);
+    out[0] = float_of(s.events);
+    var excess = 0.0;
+    if s.events > 0 { excess = (float_of(s.near) - s.chance_sum) / float_of(s.events); }
+    out[1] = excess;
+    var ft = 60.0;
+    if s.first_t > 0.0 { ft = s.first_t; }
+    out[2] = ft;
+    out[3] = s.dome_rate / m.lam;
+    out[4] = s.area_ratio;
+    out[5] = s.cov15;
+    out[6] = s.cov30;
+    return 0;
+}
+
+// the ensemble of model `id` over k movies from seed0: mean and variance of each summary (7 floats each)
+pub fn ensemble[&a, &b](id: int, k: int, seed0: int, mean: &!a [float], var_: &!b [float]) -> [] int {
+    region r {
+        let one = alloc_slice[r](8, 0.0);
+        let m = model_of(id);
+        var j = 0;
+        while j < 7 { mean[j] = 0.0; var_[j] = 0.0; j = j + 1; }
+        var i = 0;
+        while i < k {
+            summary(m, seed0 + i, one);
+            j = 0;
+            while j < 7 { mean[j] = mean[j] + one[j]; var_[j] = var_[j] + one[j] * one[j]; j = j + 1; }
+            i = i + 1;
+        }
+        j = 0;
+        while j < 7 {
+            let mu = mean[j] / float_of(k);
+            var v = (var_[j] - float_of(k) * mu * mu) / float_of(k - 1);
+            if v < 0.0 { v = 0.0; }
+            mean[j] = mu;
+            var_[j] = v;
+            j = j + 1;
+        }
+    }
+    return 0;
+}
+
+// the fingerprint of two ensembles (each of k movies) into z (7 floats), and the discrepancy returned. A floor on the standard error keeps a summary that does not vary (every first event at 60 s) from
+// dividing by zero: 1e-6 of the larger mean, or 1e-9.
+pub fn compare[&a, &b, &c, &d, &e](mi: &a [float], vi: &b [float], mj: &c [float], vj: &d [float], k: int, z: &!e [float]) -> [] float {
+    var acc = 0.0;
+    var j = 0;
+    while j < 7 {
+        var se = math.sqrt((vi[j] + vj[j]) / float_of(k));
+        var big = math.fabs(mi[j]);
+        if math.fabs(mj[j]) > big { big = math.fabs(mj[j]); }
+        let floor = 0.000001 * big + 0.000000001;
+        if se < floor { se = floor; }
+        z[j] = (mi[j] - mj[j]) / se;
+        acc = acc + z[j] * z[j];
+        j = j + 1;
+    }
+    return math.sqrt(acc / 7.0);
+}

@@ -385,7 +385,7 @@ pub fn analyse[&a, &b, &c, &d, &e, &f, &g, &h, &i2, &j2, &k2, &l2](m: Model, nv:
 // events: rupture events the analysis found; near: how many had a patch within `near` px; chance_sum: the sum of the chance levels over the events (so near / events is compared with chance_sum / events);
 // first_t: the time of the first event (-1 none); ra, rb: the true ruptures by (A) and (B); dome_rate: domes per pixel^2 per s over the frames before the first event (or the first 10 s), a read of `lam`;
 // area_ratio: the patch area at the last frame over the number of true ruptures times 4 pi r^2 (1 when none overlap).
-pub struct Study { events: int, near: int, chance_sum: float, first_t: float, ra: int, rb: int, dome_rate: float, area_ratio: float, rc: int, touches: int, null_sum: float, null_n: int }
+pub struct Study { events: int, near: int, chance_sum: float, first_t: float, ra: int, rb: int, dome_rate: float, area_ratio: float, rc: int, touches: int, null_sum: float, null_n: int, cov15: float, cov30: float }
 
 pub fn study(m: Model, seed: int, min_area: int, near: float, max_cov: float) -> [] Study {
     var o_events = 0;
@@ -397,6 +397,8 @@ pub fn study(m: Model, seed: int, min_area: int, near: float, max_cov: float) ->
     var o_rc = 0;
     var o_null = 0.0;
     var o_null_n = 0;
+    var o_c15 = 0.0;
+    var o_c30 = 0.0;
     var o_touch = 0;
     var o_rate = 0.0;
     var o_area = 0.0;
@@ -447,6 +449,9 @@ pub fn study(m: Model, seed: int, min_area: int, near: float, max_cov: float) ->
             }
             o_rate = num / den / float_of(npx);
         }
+        // the covered fraction of the field (patch pixels, as the analysis counts them) at 15 s and at 30 s
+        o_c15 = dome[m.frames + 1 + truncate(15.0 / m.tf)] / float_of(npx);
+        o_c30 = dome[m.frames + 1 + truncate(30.0 / m.tf)] / float_of(npx);
         // the patch area against the true ruptures, at the last frame whose patch area is under the cap
         var fl = 0;
         var jf = 0;
@@ -456,5 +461,5 @@ pub fn study(m: Model, seed: int, min_area: int, near: float, max_cov: float) ->
         while qq < st[1] { if pb[qq] <= float_of(fl) * m.tf { born = born + 1; } qq = qq + 1; }
         if born > 0 { o_area = dome[m.frames + 1 + fl] / (float_of(born) * 4.0 * 3.14159265358979 * m.r * m.r); }
     }
-    return Study { events: o_events, near: o_near, chance_sum: o_chance, first_t: o_first, ra: o_ra, rb: o_rb, dome_rate: o_rate, area_ratio: o_area, rc: o_rc, touches: o_touch, null_sum: o_null, null_n: o_null_n };
+    return Study { events: o_events, near: o_near, chance_sum: o_chance, first_t: o_first, ra: o_ra, rb: o_rb, dome_rate: o_rate, area_ratio: o_area, rc: o_rc, touches: o_touch, null_sum: o_null, null_n: o_null_n, cov15: o_c15, cov30: o_c30 };
 }
