@@ -142,3 +142,26 @@ fn test_the_tip_ruptures_at_p_touch_per_touch() -> [] int {
     test.assert(d <= 3.0 * math.sqrt(0.02 * 0.98 / float_of(touches)));
     return 0;
 }
+
+// the implant null (what the analysis would find if rupture ignored edges, found the way it finds events) agrees with the analytic chance level where the images are clean: within 0.06 at sigma 0.1
+fn test_the_implant_null_agrees_with_the_analytic_chance_when_clean() -> [] int {
+    var ns = 0.0;
+    var nn = 0;
+    var cs = 0.0;
+    var ce = 0;
+    var seed = 1;
+    while seed <= 8 {
+        let m = vesicles.Model { size: 40, r: 2.0, lam: 0.003, gamma: 3, k_e: 0.0, hp: 1.0, hv: 2.0, sigma: 0.1, tf: 0.5, frames: 120, dt: 0.25, filter: 0, p_touch: 0.0 };
+        let s = vesicles.study(m, seed, 20, 4.0, 0.25);
+        ns = ns + s.null_sum;
+        nn = nn + s.null_n;
+        cs = cs + s.chance_sum;
+        ce = ce + s.events;
+        seed = seed + 1;
+    }
+    test.assert(nn > 40);
+    var d = ns / float_of(nn) - cs / float_of(ce);
+    if d < 0.0 { d = 0.0 - d; }
+    test.assert(d <= 0.06);
+    return 0;
+}
