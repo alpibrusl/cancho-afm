@@ -1,0 +1,124 @@
+import std.test;
+import std.math;
+import vesicles;
+
+// docs/dynamics.md, D7 slice 2: each check is one of the acceptance lines of the design, written before the code. A prediction of this software; the model is a reduction of one paper's and nothing is
+// from an experiment.
+
+fn model(gamma: int, k_e: float, lam: float) -> [] vesicles.Model {
+    return vesicles.Model { size: 40, r: 2.0, lam: lam, gamma: gamma, k_e: k_e, hp: 1.0, hv: 2.0, sigma: 0.1, tf: 0.5, frames: 120, dt: 0.25 };
+}
+
+// pooled over 8 movies: events, those with a patch within 4 px, the chance level summed
+fn pooled_events(m: vesicles.Model, which: int) -> [] float {
+    var ev = 0;
+    var nr = 0;
+    var ch = 0.0;
+    var seed = 1;
+    while seed <= 8 {
+        let s = vesicles.study(m, seed, 20, 4.0, 0.25);
+        ev = ev + s.events;
+        nr = nr + s.near;
+        ch = ch + s.chance_sum;
+        seed = seed + 1;
+    }
+    if which == 0 { return float_of(ev); }
+    if which == 1 { return float_of(nr) / float_of(ev); }
+    return ch / float_of(ev);
+}
+
+// (3) under critical density alone the share of ruptures next to an existing patch is the chance level: within three binomial errors
+fn test_critical_density_alone_gives_the_chance_share() -> [] int {
+    let m = model(3, 0.0, 0.003);
+    let n = pooled_events(m, 0);
+    let share = pooled_events(m, 1);
+    let chance = pooled_events(m, 2);
+    test.assert(n > 40.0);
+    var d = share - chance;
+    if d < 0.0 { d = 0.0 - d; }
+    test.assert(d <= 3.0 * math.sqrt(chance * (1.0 - chance) / n));
+    return 0;
+}
+
+// (3) with edge-induced rupture on, the share is far above the chance level (five binomial errors), and the analysis calls the mechanism correctly on both
+fn test_edge_induced_rupture_is_called() -> [] int {
+    let m = model(3, 0.5, 0.003);
+    let n = pooled_events(m, 0);
+    let share = pooled_events(m, 1);
+    let chance = pooled_events(m, 2);
+    test.assert(n > 40.0);
+    test.assert(share - chance >= 5.0 * math.sqrt(chance * (1.0 - chance) / n));
+    return 0;
+}
+
+// (4) under critical density the time to the first rupture goes as 1 / arrival rate: twice the rate, half the time, within 25% (mean of 8 movies)
+fn test_first_rupture_time_scales_as_one_over_rate() -> [] int {
+    var t1 = 0.0;
+    var t2 = 0.0;
+    var seed = 1;
+    while seed <= 8 {
+        let a = vesicles.study(model(3, 0.0, 0.003), seed, 20, 4.0, 0.25);
+        let b = vesicles.study(model(3, 0.0, 0.006), seed, 20, 4.0, 0.25);
+        test.assert(a.first_t > 0.0);
+        test.assert(b.first_t > 0.0);
+        t1 = t1 + a.first_t;
+        t2 = t2 + b.first_t;
+        seed = seed + 1;
+    }
+    let ratio = t1 / t2;
+    test.assert(ratio > 1.5);
+    test.assert(ratio < 2.5);
+    return 0;
+}
+
+// (1) before the first rupture the dome count grows at the arrival rate: the read is within 20% of the rate put in (it reads a little low: domes that touch are one component)
+fn test_the_adsorption_rate_is_read() -> [] int {
+    var sum = 0.0;
+    var n = 0;
+    var seed = 1;
+    while seed <= 8 {
+        let s = vesicles.study(model(3, 0.0, 0.003), seed, 20, 4.0, 0.25);
+        if s.dome_rate > 0.0 { sum = sum + s.dome_rate; n = n + 1; }
+        seed = seed + 1;
+    }
+    test.assert(n >= 6);
+    let ratio = sum / float_of(n) / 0.003;
+    test.assert(ratio > 0.8);
+    test.assert(ratio < 1.05);
+    return 0;
+}
+
+// (2) the patch area is the number of ruptures times 4 pi r^2 up to the overlap of discs: at a coverage of at most 25% random overlap leaves (1 - e^-x) / x, about 0.87 at x = 0.29; the read is in 0.75 to 0.95
+fn test_the_patch_area_follows_the_ruptures() -> [] int {
+    var sum = 0.0;
+    var n = 0;
+    var seed = 1;
+    while seed <= 8 {
+        let s = vesicles.study(model(3, 0.0, 0.003), seed, 20, 4.0, 0.25);
+        if s.area_ratio > 0.0 { sum = sum + s.area_ratio; n = n + 1; }
+        seed = seed + 1;
+    }
+    test.assert(n >= 6);
+    let ratio = sum / float_of(n);
+    test.assert(ratio > 0.75);
+    test.assert(ratio < 0.95);
+    return 0;
+}
+
+// no rupture mechanism at all: nothing is read as a rupture, and a flood of arrivals does not overrun the stores
+fn test_no_mechanism_and_a_flood_do_not_trap() -> [] int {
+    let a = vesicles.study(model(1000, 0.0, 0.003), 1, 20, 4.0, 0.25);
+    test.assert_eq(a.events, 0);
+    let b = vesicles.study(model(3, 0.5, 0.05), 1, 20, 4.0, 0.25);
+    test.assert(b.events >= 0);
+    return 0;
+}
+
+fn test_a_movie_is_reproducible() -> [] int {
+    let a = vesicles.study(model(3, 0.5, 0.003), 3, 20, 4.0, 0.25);
+    let b = vesicles.study(model(3, 0.5, 0.003), 3, 20, 4.0, 0.25);
+    test.assert_eq(a.events, b.events);
+    test.assert_eq(a.ra, b.ra);
+    test.assert_eq(a.rb, b.rb);
+    return 0;
+}

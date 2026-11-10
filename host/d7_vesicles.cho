@@ -1,0 +1,104 @@
+edition 7;
+
+import std.buffer;
+import std.math;
+import nucleation;
+import vesicles;
+
+// D7 slice 2 report (docs/dynamics.md): bilayer formation from vesicles, made and analysed. A prediction of this software.
+//   cancho run host/d7_vesicles.cho sim/vesicles.cho sim/nucleation.cho --std
+fn text[&h, &r](heap: &!h Heap, b: buffer.Buffer, s: &r [byte]) -> [heap] buffer.Buffer { return buffer.append(heap, b, s); }
+
+fn dec[&h](heap: &!h Heap, o: buffer.Buffer, v: float, places: int) -> [heap] buffer.Buffer {
+    var b = o;
+    var x = v;
+    if x < 0.0 { b = text(heap, b, "-"); x = 0.0 - x; }
+    var scale = 1;
+    var p = 0;
+    while p < places { scale = scale * 10; p = p + 1; }
+    let c = truncate(x * float_of(scale) + 0.5);
+    b = buffer.push_nat(heap, b, c / scale);
+    if places > 0 {
+        b = text(heap, b, ".");
+        var rest = c % scale;
+        var div = scale / 10;
+        while div > 0 {
+            b = buffer.push_nat(heap, b, rest / div);
+            rest = rest % div;
+            div = div / 10;
+        }
+    }
+    return b;
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(net); release(clock); release(signals); release(exec); release(args);
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 16384);
+        o = text(h, o, "config | movies | events (true ruptures A+B) | near-edge share vs chance | first event s | dome rate / put in | patch area / expected\n");
+        var cfg = 0;
+        while cfg < 5 {
+            var gamma = 3;
+            var k_e = 0.0;
+            var lam = 0.003;
+            if cfg == 1 { k_e = 0.5; }
+            if cfg == 2 { lam = 0.006; }
+            if cfg == 3 { gamma = 2; }
+            if cfg == 4 { gamma = 1000; k_e = 0.5; }
+            let m = vesicles.Model { size: 40, r: 2.0, lam: lam, gamma: gamma, k_e: k_e, hp: 1.0, hv: 2.0, sigma: 0.1, tf: 0.5, frames: 120, dt: 0.25 };
+            var events = 0;
+            var near = 0;
+            var chance = 0.0;
+            var ra = 0;
+            var rb = 0;
+            var first = 0.0;
+            var nfirst = 0;
+            var rate = 0.0;
+            var nrate = 0;
+            var ar = 0.0;
+            var nar = 0;
+            var seed = 1;
+            while seed <= 8 {
+                let s = vesicles.study(m, seed, 20, 4.0, 0.25);
+                events = events + s.events;
+                near = near + s.near;
+                chance = chance + s.chance_sum;
+                ra = ra + s.ra;
+                rb = rb + s.rb;
+                if s.first_t > 0.0 { first = first + s.first_t; nfirst = nfirst + 1; }
+                if s.dome_rate > 0.0 { rate = rate + s.dome_rate; nrate = nrate + 1; }
+                if s.ra + s.rb > 0 { ar = ar + s.area_ratio; nar = nar + 1; }
+                seed = seed + 1;
+            }
+            o = text(h, o, "gamma ");
+            if gamma > 100 { o = text(h, o, "off"); } else { o = buffer.push_nat(h, o, gamma); }
+            o = text(h, o, " k_e ");
+            o = dec(h, o, k_e, 1);
+            o = text(h, o, " lam ");
+            o = dec(h, o, lam, 3);
+            o = text(h, o, " | 8 | ");
+            o = buffer.push_nat(h, o, events);
+            o = text(h, o, " (");
+            o = buffer.push_nat(h, o, ra);
+            o = text(h, o, "+");
+            o = buffer.push_nat(h, o, rb);
+            o = text(h, o, ") | ");
+            if events > 0 { o = dec(h, o, float_of(near) / float_of(events), 2); o = text(h, o, " vs "); o = dec(h, o, chance / float_of(events), 2); } else { o = text(h, o, "-"); }
+            o = text(h, o, " | ");
+            if nfirst > 0 { o = dec(h, o, first / float_of(nfirst), 1); } else { o = text(h, o, "-"); }
+            o = text(h, o, " | ");
+            if nrate > 0 { o = dec(h, o, rate / float_of(nrate) / lam, 2); } else { o = text(h, o, "-"); }
+            o = text(h, o, " | ");
+            if nar > 0 { o = dec(h, o, ar / float_of(nar), 2); } else { o = text(h, o, "-"); }
+            o = text(h, o, "\n");
+            cfg = cfg + 1;
+        }
+        var code = 0;
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(heap);
+    release(io);
+    return 0;
+}

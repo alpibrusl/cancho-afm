@@ -307,6 +307,25 @@ Nine PDFs were read after the search-snippet and blocked-fetch rounds above. **N
 
 *What the analysis recovers, with the closed forms to be checked first:* (1) before the first rupture the number of adsorbed vesicles grows at the arrival rate (a Poisson count, relative error 1/sqrt(N)); (2) the patch area is the number of ruptures times 4 pi r^2, to the pixel grid, until discs overlap; (3) the **fraction of rupture events that occur within one vesicle diameter of an existing patch edge** is the statistic that separates the two mechanisms: under (A) alone it should match the fraction of the free area that lies within that distance of an edge (a number the analysis can compute), under (B) it should be well above it; the acceptance is that the analysis calls the mechanism correctly on movies with each switch on and the other off, at the counts a real movie could give; (4) under (A) the time to the first rupture scales as 1/arrival rate (the master-curve scaling), checked at two arrival rates.
 
+**Built (slice 2, 2026-11-10):** `sim/vesicles.cho` (the history, the frame, the analysis, `study`), `tests/vesicles_test.cho` (the acceptance lines below), `host/d7_vesicles.cho` (the table). Field 40 by 40 pixels (a cancho region is 64 KiB; it is small), vesicle radius 2 px, patch radius 4 px, 0.5 s frames, 60 s, 8 movies a row; the analysis reads rupture events only while the patches cover at most 25% of the field (my choice: beyond it a new patch is mostly overlap). Units are pixels and seconds; every parameter is a stand-in; the edge rate k_e = 0.5 per s and gamma = 3 are mine, not Plunkett et al.'s.
+
+**Found** (`cancho run host/d7_vesicles.cho sim/vesicles.cho sim/nucleation.cho --std`; predictions of this software):
+
+| mechanism | events read | near-edge share | chance level | first event | dome rate / put in |
+|---|---|---|---|---|---|
+| critical density only (gamma 3), lam 0.003 | 79 | 0.22 | 0.24 | 4.3 s | 0.88 |
+| critical density + edge-induced (k_e 0.5) | 72 | 0.57 | 0.20 | 4.3 s | 0.88 |
+| critical density only, lam 0.006 | 80 | 0.23 | 0.24 | 2.3 s | 0.90 |
+| critical density only, gamma 2 | 74 | 0.23 | 0.24 | 2.8 s | 0.92 |
+
+* **The discriminating statistic works in the twin.** With critical density alone, the share of ruptures next to an existing patch is the chance level (0.22 against 0.24, within three binomial errors); with edge-induced rupture on it is 0.57 against 0.20, more than five binomial errors above it (about 70 events in 8 movies). The analysis therefore names the mechanism correctly on both. It was tested at one k_e and one gamma; how it degrades with fewer events, a smaller k_e or noisier images was not measured.
+* The time to the first rupture goes as 1 / arrival rate under critical density: 4.3 s at lam 0.003 and 2.3 s at 0.006 (ratio 1.87; the test bound is 1.5 to 2.5), the master-curve scaling of the paper reproduced by a model built on its assumption (which does not test the paper).
+* The dome count reads the arrival rate to 0.88 to 0.92 of the rate put in (touching domes are one component).
+* The patch area reads 0.76 to 0.86 of ruptures times 4 pi r^2. Random overlap of discs at the 25% cap predicts (1 - e^-x) / x = 0.87 for x = 0.29; the A-only value fits, the A + B value is lower (edge-induced discs overlap their parent by construction). **That formula was checked after the numbers were seen, and the test band 0.75 to 0.95 was set with it, so this line is a consistency check, not a prediction.**
+* With the critical density off and only the edge process, no patch ever forms (0 events): edge-induced rupture needs a first patch from somewhere, so in this model it cannot be the only mechanism.
+* The events read (about 75 of 8 movies) are far fewer than the true ruptures (298 to 434): the rest happened after the cap. The two are not a like-for-like count and the table does not compare them.
+* Not found, and not claimed: which of the two mechanisms real vesicles follow. The twin shows what the analysis can distinguish if either is true.
+
 *Not in slice 2, stated:* the tip's force on adsorbed vesicles (it can flatten them and may trigger rupture, which would make the imaging itself a cause; this is the largest confound for real HS-AFM and needs its own slice); vesicle-substrate adhesion energies; ionic conditions and calcium (the snippets say they change the behaviour); diffusion of adsorbed vesicles (the paper moves them with the edge); and any comparison with a measured movie.
 
 **Out of scope for slice 1:** vesicle fusion and budding, anything with a curvature energy, diffusion of the objects (D1 covers mobile particles), and any comparison with measured movies (none is available).
