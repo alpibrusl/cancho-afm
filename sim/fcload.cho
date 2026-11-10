@@ -186,6 +186,14 @@ pub fn analyse[&a, &b](z: &a [float], d: &b [float], n: int, k: float, r: float)
 
 // analyse with the breakthrough rule chosen: window_nm 0 is nanoindent's single-step drop between consecutive rows; window_nm > 0 the largest drop within that much piezo travel (forcecurve.slb_curve_win),
 // which does not depend on the row spacing (`dq`: n ints of scratch for the linear search; a shorter slice makes it the quadratic one)
+// the same with the smallest force drop that counts as a breakthrough chosen (pN; 400 in analyse_w): a soft lever shows a bilayer step as a smaller drop (k times the step), so 400 pN can refuse every curve of a 0.065 N/m lever
+pub fn analyse_wd[&a, &b, &c](z: &a [float], d: &b [float], n: int, k: float, r: float, window_nm: float, dq: &!c [int], min_drop: float) -> [] forcecurve.Slb {
+    if n < min_points() {
+        return forcecurve.Slb { why: 9, breakthrough: 0.0, height: 0.0, height_a: 0.0, contact_z: 0.0, e0: 0.0, e1: 0.0, e2: 0.0, e3: 0.0, kappa_a: 0.0, n_elastic: 0 };
+    }
+    return forcecurve.slb_curve_win(z, d, n, 40, k, r, 0.5, 8.0, min_drop, 4.5, 0.0, window_nm, dq);
+}
+
 pub fn analyse_w[&a, &b, &c](z: &a [float], d: &b [float], n: int, k: float, r: float, window_nm: float, dq: &!c [int]) -> [] forcecurve.Slb {
     if n < min_points() {
         return forcecurve.Slb { why: 9, breakthrough: 0.0, height: 0.0, height_a: 0.0, contact_z: 0.0, e0: 0.0, e1: 0.0, e2: 0.0, e3: 0.0, kappa_a: 0.0, n_elastic: 0 };

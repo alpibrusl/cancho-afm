@@ -1,0 +1,565 @@
+edition 7;
+
+module jpk;
+
+// `jpk` -- a force curve from a JPK archive (`.jpk-force`, `.jpk-force-map`), into the analysis of sim/forcecurve.cho. docs/dynamics.md, "A JPK reader". Read real files of one instrument only (docs/dynamics.md, "First real files"): the format is what the
+// open-source reader of the AFM-analysis project (`afmformats`) does, read as source, and the tests use files this repository wrote (sim/jpkmake.cho).
+//
+// What it does, for one curve: opens the ZIP (sim/zipread.cho); reads `header.properties`, `shared-data/header.properties`, the curve's header (in a map, `index/N/header.properties`) and the first EXTEND segment's
+// `segment-header.properties`; resolves the `KEY.*=n` references into the shared data; decodes `vDeflection` in its `distance` slot (metres) and the height channel (the measured height when the file has
+// it, else the piezo's `height`) in metres; reads the spring constant from the `force` slot's multiplier; puts both channels in nanometres and hands them to fcload.approach / fcload.analyse_w, so a JPK
+// curve is read by the same code as a text curve.
+//
+// Tags (docs/dynamics.md): 11 not a ZIP, 12 not supported (ZIP64, encryption), 13 a needed entry is missing, 14 an entry that cannot be read, 15 CRC-32 or DEFLATE wrong, 16 a property missing or a unit or
+// encoder not supported, 17 no extend segment, 18 channel length wrong, 19 no such curve; the loader's 9 (too few points) and 10 (too many) and forcecurve's 1-6 pass through.
+
+import std.buffer;
+import std.bytes;
+import std.math;
+import zipread;
+import fcload;
+import forcecurve;
+
+pub struct Span { from: int, to: int }
+pub struct Jpk { why: int, k: float, zsrc: int, points: int, approach: int, a: forcecurve.Slb }
+
+fn none_slb(why: int) -> [] forcecurve.Slb {
+    return forcecurve.Slb { why: why, breakthrough: 0.0, height: 0.0, height_a: 0.0, contact_z: 0.0, e0: 0.0, e1: 0.0, e2: 0.0, e3: 0.0, kappa_a: 0.0, n_elastic: 0 };
+}
+
+fn fail(why: int) -> [] Jpk {
+    return Jpk { why: why, k: 0.0, zsrc: 0, points: 0, approach: 0, a: none_slb(why) };
+}
+
+// ---- Java properties: `key=value` lines; a later line of the same key wins ----
+
+fn line_end[&t](text: &t [byte], i: int) -> [] int {
+    var e = i;
+    while e < len(text) && int_of(text[e]) != 10 { e = e + 1; }
+    return e;
+}
+
+fn is_blank(c: int) -> [] bool { return c == 32 || c == 9 || c == 13; }
+
+// the value of `key` in `text`, the last one if repeated: from -1 when there is none
+pub fn get[&t, &k](text: &t [byte], key: &k [byte]) -> [] Span {
+    var found = Span { from: -1, to: -1 };
+    var s = 0;
+    while s < len(text) {
+        let e = line_end(text, s);
+        var eq = s;
+        while eq < e && int_of(text[eq]) != 61 { eq = eq + 1; }
+        if eq < e && int_of(text[s]) != 35 && int_of(text[s]) != 33 {
+            var ke = eq;
+            while ke > s && is_blank(int_of(text[ke - 1])) { ke = ke - 1; }
+            if ke - s == len(key) && bytes.equal(text[s..ke], key) {
+                var vs = eq + 1;
+                while vs < e && is_blank(int_of(text[vs])) { vs = vs + 1; }
+                var ve = e;
+                while ve > vs && is_blank(int_of(text[ve - 1])) { ve = ve - 1; }
+                found = Span { from: vs, to: ve };
+            }
+        }
+        s = e + 1;
+    }
+    return found;
+}
+
+// a key made of up to five pieces, on the heap
+fn cat[&h, &a, &b, &c, &d, &e](heap: &!h Heap, p1: &a [byte], p2: &b [byte], p3: &c [byte], p4: &d [byte], p5: &e [byte]) -> [heap] buffer.Buffer {
+    var o = buffer.empty(heap, 96);
+    o = buffer.append(heap, o, p1);
+    o = buffer.append(heap, o, p2);
+    o = buffer.append(heap, o, p3);
+    o = buffer.append(heap, o, p4);
+    o = buffer.append(heap, o, p5);
+    return o;
+}
+
+fn get5[&h, &t, &a, &b, &c, &d, &e](heap: &!h Heap, text: &t [byte], p1: &a [byte], p2: &b [byte], p3: &c [byte], p4: &d [byte], p5: &e [byte]) -> [heap] Span {
+    let kb = cat(heap, p1, p2, p3, p4, p5);
+    var sp = Span { from: -1, to: -1 };
+    borrow kb as &kr in { sp = get(text, buffer.bytes(kr)); }
+    buffer.drop(heap, kb);
+    return sp;
+}
+
+// The properties of one segment, as `afmformats` resolves them: the curve's header, the segment's, then the shared keys that the `.*` keys of those two point to, then the archive's top header (the later wins).
+// A key `HEAD.MED.*=n` makes the shared keys `MED.n.REST` count as `HEAD.REST`; a key `MED.*=n` makes them `MED.REST`.
+pub fn merge[&h, &a, &b, &c, &d](heap: &!h Heap, top: &a [byte], curve: &b [byte], seg: &c [byte], shared: &d [byte]) -> [heap] buffer.Buffer {
+    var o = buffer.empty(heap, 4096);
+    o = buffer.append(heap, o, curve);
+    o = buffer.push(heap, o, byte_of(10));
+    o = buffer.append(heap, o, seg);
+    o = buffer.push(heap, o, byte_of(10));
+    o = substitute(heap, o, curve, shared);
+    o = substitute(heap, o, seg, shared);
+    o = buffer.append(heap, o, top);
+    o = buffer.push(heap, o, byte_of(10));
+    return o;
+}
+
+// the shared keys that the `.*` keys of `src` point to, appended to `o` as the keys they stand for
+fn substitute[&h, &s, &t](heap: &!h Heap, o0: buffer.Buffer, src: &s [byte], shared: &t [byte]) -> [heap] buffer.Buffer {
+    var o = o0;
+        var s = 0;
+        while s < len(src) {
+            let e = line_end(src, s);
+            var eq = s;
+            while eq < e && int_of(src[eq]) != 61 { eq = eq + 1; }
+            if eq < e && eq - s >= 3 && int_of(src[eq - 1]) == 42 && int_of(src[eq - 2]) == 46 {
+                // key = src[s..eq-2] followed by ".*"; its last token is the mediator
+                let stem_end = eq - 2;
+                var dot = stem_end;
+                while dot > s && int_of(src[dot - 1]) != 46 { dot = dot - 1; }
+                // the mediator is src[dot..stem_end]; the head is src[s..dot-1], or the mediator itself when there is no earlier token
+                var head_end = dot - 1;
+                if dot == s { head_end = stem_end; }
+                var vs = eq + 1;
+                while vs < e && is_blank(int_of(src[vs])) { vs = vs + 1; }
+                var ve = e;
+                while ve > vs && is_blank(int_of(src[ve - 1])) { ve = ve - 1; }
+                // the shared keys that start with MED "." n "."
+                var pre = buffer.append(heap, buffer.empty(heap, 64), src[dot..stem_end]);
+                pre = buffer.push(heap, pre, byte_of(46));
+                pre = buffer.append(heap, pre, src[vs..ve]);
+                pre = buffer.push(heap, pre, byte_of(46));
+                var t = 0;
+                while t < len(shared) {
+                    let te = line_end(shared, t);
+                    var teq = t;
+                    while teq < te && int_of(shared[teq]) != 61 { teq = teq + 1; }
+                    var hit = false;
+                    borrow pre as &pr in {
+                        if teq < te && bytes.starts_with(shared[t..teq], buffer.bytes(pr)) { hit = true; }
+                    }
+                    if hit {
+                        var plen = 0;
+                        borrow pre as &pr in { plen = len(buffer.bytes(pr)); }
+                        o = buffer.append(heap, o, src[s..head_end]);
+                        o = buffer.push(heap, o, byte_of(46));
+                        o = buffer.append(heap, o, shared[t + plen..te]);
+                        o = buffer.push(heap, o, byte_of(10));
+                    }
+                    t = te + 1;
+                }
+                buffer.drop(heap, pre);
+            }
+            s = e + 1;
+        }
+    return o;
+}
+
+// ---- the curves of an archive ----
+
+// The numbers of the curves in a `.jpk-force-map` (`index/N/header.properties`), ascending, into `out` (capacity `cap`); returns how many. A single-curve archive (`segments/0/...`) has one, number -1.
+pub fn curve_numbers[&a, &o](z: &a [byte], out: &!o [int], cap: int) -> [] int {
+    let d = zipread.open(z);
+    if d.why != 0 { return 0; }
+    var n = 0;
+    var pos = d.cd_off;
+    var seen = 0;
+    var single = 0;
+    while seen < d.count {
+        let c = zipread.step(z, d, pos);
+        if c.ok == 0 { seen = d.count; } else {
+            let name = z[c.name_at..c.name_at + c.name_len];
+            if bytes.equal(name, "segments/0/segment-header.properties") { single = 1; }
+            if bytes.starts_with(name, "index/") && bytes.ends_with(name, "/header.properties") {
+                // index/N/header.properties : digits between the two slashes
+                var v = 0;
+                var i = 6;
+                var digits = 0;
+                while i < len(name) && int_of(name[i]) >= 48 && int_of(name[i]) <= 57 && digits < 9 {
+                    v = v * 10 + (int_of(name[i]) - 48);
+                    digits = digits + 1;
+                    i = i + 1;
+                }
+                if digits > 0 && i == len(name) - 18 && int_of(name[i]) == 47 && n < cap {
+                    // insertion into the ascending list
+                    var j = n;
+                    while j > 0 && out[j - 1] > v { out[j] = out[j - 1]; j = j - 1; }
+                    out[j] = v;
+                    n = n + 1;
+                }
+            }
+            pos = c.next;
+            seen = seen + 1;
+        }
+    }
+    if n == 0 && single == 1 && cap > 0 {
+        out[0] = 0 - 1;
+        return 1;
+    }
+    return n;
+}
+
+// the text of one entry (empty and its tag when absent or bad)
+fn entry_text[&h, &a, &n](heap: &!h Heap, z: &a [byte], dir: zipread.Zdir, name: &n [byte], limit: int) -> [heap] (buffer.Buffer, int) {
+    let e = zipread.find(z, dir, name);
+    return zipread.extract(heap, z, e, limit);
+}
+
+fn digits_of[&h](heap: &!h Heap, b: buffer.Buffer, v: int) -> [heap] buffer.Buffer {
+    return buffer.push_nat(heap, b, v);
+}
+
+// the path prefix of a curve: "" for a single-curve archive, "index/N/" for curve N of a map
+fn curve_prefix[&h](heap: &!h Heap, number: int) -> [heap] buffer.Buffer {
+    var o = buffer.empty(heap, 32);
+    if number >= 0 {
+        o = buffer.append(heap, o, "index/");
+        o = digits_of(heap, o, number);
+        o = buffer.append(heap, o, "/");
+    }
+    return o;
+}
+
+// ---- one channel ----
+
+pub struct Chan { why: int, a: float, b: float }
+
+// an encoder key of channel `name`: `channel.NAME.data.encoder.TAIL`, or, as the files of a real instrument have it once the shared data is resolved, `channel.NAME.encoder.TAIL`
+fn enc_key[&h, &t, &n, &a](heap: &!h Heap, props: &t [byte], name: &n [byte], tail: &a [byte]) -> [heap] Span {
+    var s = get5(heap, props, "channel.", name, ".data.encoder.", tail, "");
+    if s.from < 0 { s = get5(heap, props, "channel.", name, ".encoder.", tail, ""); }
+    return s;
+}
+
+// one step back from the slot `cur` toward the base: its multiplier and offset into mult[depth], offs[depth]; the slot it is based on in `next`. Answers 0 to go on, 1 when `cur` is the base, 2 when a key is missing
+fn back_step[&h, &t, &n, &c, &m, &o](heap: &!h Heap, props: &t [byte], name: &n [byte], cur: &c [byte], base: Span, mult: &!m [float], offs: &!o [float], depth: int) -> [heap] (int, Span) {
+    if bytes.equal(cur, props[base.from..base.to]) { return (1, Span { from: -1, to: -1 }); }
+    let m1 = get5(heap, props, "channel.", name, ".conversion-set.conversion.", cur, ".scaling.multiplier");
+    let o1 = get5(heap, props, "channel.", name, ".conversion-set.conversion.", cur, ".scaling.offset");
+    let nx = get5(heap, props, "channel.", name, ".conversion-set.conversion.", cur, ".base-calibration-slot");
+    if m1.from < 0 || o1.from < 0 || nx.from < 0 { return (2, nx); }
+    let pm = fcload.parse_number(props, m1.from, m1.to);
+    let po = fcload.parse_number(props, o1.from, o1.to);
+    if pm.ok == 0 || po.ok == 0 { return (2, nx); }
+    mult[depth] = pm.v;
+    offs[depth] = po.v;
+    return (0, nx);
+}
+
+// the affine map from the raw integers to the slot `slot` of channel `name`: value = a raw + b, walking the conversions from the slot back to the base (at most six steps)
+fn chain[&h, &t, &n, &s](heap: &!h Heap, props: &t [byte], name: &n [byte], slot: &s [byte]) -> [heap] Chan {
+    // raw -> volts (the encoder's scaling)
+    let m0 = enc_key(heap, props, name, "scaling.multiplier");
+    let o0 = enc_key(heap, props, name, "scaling.offset");
+    if m0.from < 0 || o0.from < 0 { return Chan { why: 16, a: 0.0, b: 0.0 }; }
+    let tm = fcload.parse_number(props, m0.from, m0.to);
+    let to = fcload.parse_number(props, o0.from, o0.to);
+    if tm.ok == 0 || to.ok == 0 { return Chan { why: 16, a: 0.0, b: 0.0 }; }
+    let base = get5(heap, props, "channel.", name, ".conversion-set.conversions.base", "", "");
+    if base.from < 0 { return Chan { why: 16, a: 0.0, b: 0.0 }; }
+    var chain_a = tm.v;
+    var chain_b = to.v;
+    var good = true;
+    region r {
+        let mult = alloc_slice[r](8, 0.0);
+        let offs = alloc_slice[r](8, 0.0);
+        let (st0, nx0) = back_step(heap, props, name, slot, base, mult, offs, 0);
+        var depth = 0;
+        var status = st0;
+        var cur = nx0;
+        if status == 0 { depth = 1; }
+        while status == 0 && depth < 6 {
+            let (st, nx) = back_step(heap, props, name, props[cur.from..cur.to], base, mult, offs, depth);
+            status = st;
+            cur = nx;
+            if status == 0 { depth = depth + 1; }
+        }
+        if status != 1 { good = false; } else {
+            // raw -> volts, then the conversions from the one next to the base outward
+            var j = depth - 1;
+            while j >= 0 {
+                chain_b = mult[j] * chain_b + offs[j];
+                chain_a = mult[j] * chain_a;
+                j = j - 1;
+            }
+        }
+    }
+    if !good { return Chan { why: 16, a: 0.0, b: 0.0 }; }
+    return Chan { why: 0, a: chain_a, b: chain_b };
+}
+
+// the unit written for slot `slot` of channel `name` is metres?
+fn unit_is_metre[&h, &t, &s](heap: &!h Heap, props: &t [byte], name: &s [byte], slot: &s [byte]) -> [heap] bool {
+    let base = get5(heap, props, "channel.", name, ".conversion-set.conversions.base", "", "");
+    if base.from < 0 { return false; }
+    var u = Span { from: -1, to: -1 };
+    if bytes.equal(slot, props[base.from..base.to]) {
+        u = enc_key(heap, props, name, "scaling.unit.unit");
+    } else {
+        u = get5(heap, props, "channel.", name, ".conversion-set.conversion.", slot, ".scaling.unit.unit");
+        if u.from < 0 { u = get5(heap, props, "channel.", name, ".conversion-set.conversion.", slot, ".scaling.unit"); }
+    }
+    if u.from < 0 { return false; }
+    return bytes.equal(props[u.from..u.to], "m");
+}
+
+// the width of the encoder in bytes and whether it is signed: width 0 when not supported
+fn encoder[&h, &t, &s](heap: &!h Heap, props: &t [byte], name: &s [byte]) -> [heap] (int, bool) {
+    let e = enc_key(heap, props, name, "type");
+    if e.from < 0 { return (0, false); }
+    let v = props[e.from..e.to];
+    if bytes.equal(v, "signedshort") { return (2, true); }
+    if bytes.equal(v, "unsignedshort") { return (2, false); }
+    if bytes.equal(v, "signedinteger") { return (4, true); }
+    if bytes.equal(v, "unsignedinteger") { return (4, false); }
+    if bytes.equal(v, "signedlong") { return (8, true); }
+    return (0, false);
+}
+
+// the big-endian integer at `at`, `width` bytes
+fn raw_at[&d](data: &d [byte], at: int, width: int, signed: bool) -> [] int {
+    var v = 0;
+    var i = 0;
+    while i < width { v = v << 8 | int_of(data[at + i]); i = i + 1; }
+    if signed && width < 8 {
+        let top = 1 << (width * 8 - 1);
+        if v >= top { v = v - (top << 1); }
+    }
+    return v;
+}
+
+// Decode `n` samples into `out` as scale * (a raw + b)
+fn decode[&d, &o](data: &d [byte], width: int, signed: bool, a: float, b: float, scale: float, out: &!o [float], n: int) -> [] int {
+    var i = 0;
+    while i < n {
+        out[i] = scale * (a * float_of(raw_at(data, i * width, width, signed)) + b);
+        i = i + 1;
+    }
+    return n;
+}
+
+// the first of the names whose .dat is in the archive: the name's index in `names` joined by newlines, or -1
+fn first_present[&h, &a, &p](heap: &!h Heap, z: &a [byte], dir: zipread.Zdir, prefix: &p [byte], first: &p [byte], second: &p [byte], third: &p [byte]) -> [heap] int {
+    var which = 0;
+    var found = -1;
+    while which < 3 && found < 0 {
+        var nm = first;
+        if which == 1 { nm = second; }
+        if which == 2 { nm = third; }
+        if len(nm) > 0 {
+            var path = buffer.append(heap, buffer.empty(heap, 96), prefix);
+            path = buffer.append(heap, path, "channels/");
+            path = buffer.append(heap, path, nm);
+            path = buffer.append(heap, path, ".dat");
+            var e = zipread.Entry { why: 13, method: 0, crc: 0, csize: 0, usize: 0, lofs: 0 };
+            borrow path as &pr in { e = zipread.find(z, dir, buffer.bytes(pr)); }
+            buffer.drop(heap, path);
+            if e.why == 0 { found = which; }
+        }
+        which = which + 1;
+    }
+    return found;
+}
+
+// ---- one curve, analysed ----
+
+// Read curve `number` (-1 for a single-curve archive) from the archive bytes `z` and analyse its extend segment: `r` the tip radius in nm, `window_nm` the breakthrough rule as in fcload.analyse_w.
+// The spring constant comes from the file.
+pub fn analyse_curve[&h, &a](heap: &!h Heap, z: &a [byte], number: int, r: float, window_nm: float, min_drop: float) -> [heap] Jpk {
+    let dir = zipread.open(z);
+    if dir.why != 0 { return fail(dir.why); }
+    let limit_text = 8000000;
+    let (top, w1) = entry_text(heap, z, dir, "header.properties", limit_text);
+    let (shared, w2) = entry_text(heap, z, dir, "shared-data/header.properties", limit_text);
+    if w1 != 0 { buffer.drop(heap, top); buffer.drop(heap, shared); return fail(w1); }
+    // a missing shared-data is allowed (the file then has no `.*` references); a bad one is not
+    if w2 != 0 && w2 != 13 { buffer.drop(heap, top); buffer.drop(heap, shared); return fail(w2); }
+    let prefix = curve_prefix(heap, number);
+    var curve = buffer.empty(heap, 1);
+    var cw = 0;
+    if number >= 0 {
+        var cpath = buffer.append(heap, buffer.empty(heap, 64), "");
+        borrow prefix as &pr in { cpath = buffer.append(heap, cpath, buffer.bytes(pr)); }
+        cpath = buffer.append(heap, cpath, "header.properties");
+        buffer.drop(heap, curve);
+        borrow cpath as &cp in {
+            let (cb, cs) = entry_text(heap, z, dir, buffer.bytes(cp), limit_text);
+            curve = cb;
+            cw = cs;
+        }
+        buffer.drop(heap, cpath);
+        if cw == 13 { cw = 19; }
+    }
+    var out = fail(0);
+    if cw != 0 { out = fail(cw); } else {
+        borrow prefix as &pr in {
+            borrow top as &tr in {
+                borrow curve as &cr in {
+                    borrow shared as &hr in {
+                        out = analyse_segments(heap, z, dir, buffer.bytes(pr), buffer.bytes(tr), buffer.bytes(cr), buffer.bytes(hr), r, window_nm, min_drop);
+                    }
+                }
+            }
+        }
+    }
+    buffer.drop(heap, top);
+    buffer.drop(heap, shared);
+    buffer.drop(heap, curve);
+    buffer.drop(heap, prefix);
+    return out;
+}
+
+// the first extend segment of the curve, found and analysed
+fn analyse_segments[&h, &a, &p, &t, &c, &d](heap: &!h Heap, z: &a [byte], dir: zipread.Zdir, prefix: &p [byte], top: &t [byte], curve: &c [byte], shared: &d [byte], r: float, window_nm: float, min_drop: float) -> [heap] Jpk {
+    var out = fail(17);
+    var m = 0;
+    var going = true;
+    while going && m < 8 {
+        var spath = buffer.append(heap, buffer.empty(heap, 96), prefix);
+        spath = buffer.append(heap, spath, "segments/");
+        spath = buffer.push_nat(heap, spath, m);
+        spath = buffer.append(heap, spath, "/");
+        var hpath = buffer.empty(heap, 96);
+        borrow spath as &sp in { hpath = buffer.append(heap, hpath, buffer.bytes(sp)); }
+        hpath = buffer.append(heap, hpath, "segment-header.properties");
+        var seg_hdr = buffer.empty(heap, 1);
+        var sw = 0;
+        borrow hpath as &hp in {
+            let (sb, ss) = entry_text(heap, z, dir, buffer.bytes(hp), 8000000);
+            buffer.drop(heap, seg_hdr);
+            seg_hdr = sb;
+            sw = ss;
+        }
+        buffer.drop(heap, hpath);
+        if sw != 0 {
+            // the segments end at the first missing header (a bad one stops the search with its tag)
+            going = false;
+            if sw != 13 { out = fail(sw); }
+        } else {
+            var merged = buffer.empty(heap, 1);
+            borrow seg_hdr as &sr in {
+                buffer.drop(heap, merged);
+                merged = merge(heap, top, curve, buffer.bytes(sr), shared);
+            }
+            var is_extend = false;
+            borrow merged as &mr in {
+                let props = buffer.bytes(mr);
+                let st = get(props, "force-segment-header.settings.style");
+                if st.from >= 0 && bytes.equal(props[st.from..st.to], "extend") { is_extend = true; }
+            }
+            if is_extend {
+                going = false;
+                borrow merged as &mr in {
+                    borrow spath as &sp in {
+                        out = analyse_extend(heap, z, dir, buffer.bytes(sp), buffer.bytes(mr), r, window_nm, min_drop);
+                    }
+                }
+            }
+            buffer.drop(heap, merged);
+        }
+        buffer.drop(heap, seg_hdr);
+        buffer.drop(heap, spath);
+        m = m + 1;
+    }
+    return out;
+}
+
+// the two channels of the extend segment whose directory is `seg` (with a trailing slash), analysed
+fn analyse_extend[&h, &a, &s, &p](heap: &!h Heap, z: &a [byte], dir: zipread.Zdir, seg: &s [byte], props: &p [byte], r: float, window_nm: float, min_drop: float) -> [heap] Jpk {
+    // the spring constant: the multiplier of the `force` slot
+    let kp = get5(heap, props, "channel.vDeflection.conversion-set.conversion.force.scaling.multiplier", "", "", "", "");
+    if kp.from < 0 { return fail(16); }
+    let kt = fcload.parse_number(props, kp.from, kp.to);
+    if kt.ok == 0 || kt.v <= 0.0 { return fail(16); }
+    let k = kt.v;
+    // the height channel: the measured height when the file has one, else the piezo's
+    var zname = "";
+    var zslot = "nominal";
+    var zsrc = 0;
+    let which = first_present(heap, z, dir, seg, "strainGaugeHeight", "capacitiveSensorHeight", "measuredHeight");
+    if which == 0 { zname = "strainGaugeHeight"; }
+    if which == 1 { zname = "capacitiveSensorHeight"; }
+    if which == 2 { zname = "measuredHeight"; }
+    if which < 0 {
+        zsrc = 1;
+        zslot = "calibrated";
+        let w2 = first_present(heap, z, dir, seg, "height", "head-height", "");
+        if w2 == 0 { zname = "height"; }
+        if w2 == 1 { zname = "head-height"; }
+        if w2 < 0 { return fail(13); }
+    }
+    let dc = chain(heap, props, "vDeflection", "distance");
+    let zc = chain(heap, props, zname, zslot);
+    if dc.why != 0 || zc.why != 0 { return fail(16); }
+    if !unit_is_metre(heap, props, "vDeflection", "distance") || !unit_is_metre(heap, props, zname, zslot) { return fail(16); }
+    let (dw, dsigned) = encoder(heap, props, "vDeflection");
+    let (zw, zsigned) = encoder(heap, props, zname);
+    if dw == 0 || zw == 0 { return fail(16); }
+    // the two .dat entries
+    let limit = fcload.max_rows() * 8;
+    var dpath = buffer.append(heap, buffer.empty(heap, 96), seg);
+    dpath = buffer.append(heap, dpath, "channels/vDeflection.dat");
+    var zpath = buffer.append(heap, buffer.empty(heap, 96), seg);
+    zpath = buffer.append(heap, zpath, "channels/");
+    zpath = buffer.append(heap, zpath, zname);
+    zpath = buffer.append(heap, zpath, ".dat");
+    var dbuf = buffer.empty(heap, 1);
+    var zbuf = buffer.empty(heap, 1);
+    var dwhy = 0;
+    var zwhy = 0;
+    borrow dpath as &q in {
+        let (b, st) = entry_text(heap, z, dir, buffer.bytes(q), limit);
+        buffer.drop(heap, dbuf);
+        dbuf = b;
+        dwhy = st;
+    }
+    borrow zpath as &q in {
+        let (b, st) = entry_text(heap, z, dir, buffer.bytes(q), limit);
+        buffer.drop(heap, zbuf);
+        zbuf = b;
+        zwhy = st;
+    }
+    buffer.drop(heap, dpath);
+    buffer.drop(heap, zpath);
+    var out = fail(dwhy);
+    if dwhy == 0 && zwhy != 0 { out = fail(zwhy); }
+    if dwhy == 0 && zwhy == 0 {
+        var nd = 0;
+        var nz = 0;
+        borrow dbuf as &q in { nd = len(buffer.bytes(q)); }
+        borrow zbuf as &q in { nz = len(buffer.bytes(q)); }
+        var np = -1;
+        let pc = get5(heap, props, "force-segment-header.num-points", "", "", "", "");
+        if pc.from >= 0 {
+            let t = fcload.parse_number(props, pc.from, pc.to);
+            if t.ok == 1 { np = truncate(t.v); }
+        }
+        if nd % dw != 0 || nz % zw != 0 || nd / dw != nz / zw || (np >= 0 && np != nd / dw) {
+            out = fail(18);
+        } else {
+            let n = nd / dw;
+            if n > fcload.max_rows() { out = fail(10); } else {
+                let zb = box_slice(heap, n + 1, 0.0);
+                let db = box_slice(heap, n + 1, 0.0);
+                var dq_n = 1;
+                if window_nm > 0.0 { dq_n = n + 1; }
+                let qb = box_slice(heap, dq_n, 0);
+                borrow mut zb as &!zw2 in {
+                    borrow mut db as &!dw2 in {
+                        borrow mut qb as &!qw in {
+                            let zs = contents(zw2);
+                            let ds = contents(dw2);
+                            let dq = contents(qw);
+                            borrow zbuf as &q in { decode(buffer.bytes(q), zw, zsigned, zc.a, zc.b, 1000000000.0, zs, n); }
+                            borrow dbuf as &q in { decode(buffer.bytes(q), dw, dsigned, dc.a, dc.b, 1000000000.0, ds, n); }
+                            let na = fcload.approach(zs, ds, n);
+                            let res_a = fcload.analyse_wd(zs, ds, na, k, r, window_nm, dq, min_drop);
+                            out = Jpk { why: res_a.why, k: k, zsrc: zsrc, points: n, approach: na, a: res_a };
+                        }
+                    }
+                }
+                unbox_slice(heap, qb);
+                unbox_slice(heap, db);
+                unbox_slice(heap, zb);
+            }
+        }
+    }
+    buffer.drop(heap, dbuf);
+    buffer.drop(heap, zbuf);
+    return out;
+}

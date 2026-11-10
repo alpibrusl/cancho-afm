@@ -1,0 +1,304 @@
+edition 7;
+
+module jpkmake;
+
+// `jpkmake` -- a SYNTHETIC JPK archive, written from the same reading of the format that sim/jpk.cho reads (docs/dynamics.md, "A JPK reader"). It exists so that the reader has something to read and a
+// round trip to be checked against; it is NOT a JPK file from an instrument, and a reader that agrees with it has shown only that it agrees with this writer (Python's zipfile and `afmformats` are the
+// independent readers it is also checked against, outside the repository).
+//
+// What the archive holds: `header.properties`, `shared-data/header.properties` (the vDeflection channel's encoder and conversions as `lcd-info.0.*`, referenced from each segment header by
+// `channel.vDeflection.lcd-info.*=0`, so the reader's resolution of shared data is exercised), and per curve an EXTEND segment then a RETRACT segment (the retract holds the same rows reversed, so a reader that
+// took the wrong segment would be seen). `ncurves` 0 writes a single-curve archive (`segments/...`), n > 0 a map (`index/2c/...`: the curve numbers skip every other number). The deflection is stored as 16-bit
+// big-endian integers in volts (multiplier chosen from the data), `distance` = volts * sensitivity (m), `force` = distance * k (N); the height as 32-bit integers, either the measured height (`strainGaugeHeight`, slot
+// `nominal`) or the piezo's (`height`, slot `calibrated`). `compress` 1 stores the .dat and .properties entries DEFLATEd, 0 stored.
+
+import std.buffer;
+import std.crc;
+import std.flate;
+import std.fmt;
+import std.math;
+
+pub struct Zip { out: buffer.Buffer, cd: buffer.Buffer, count: int, out_len: int, cd_len: int }
+
+fn le16[&h](heap: &!h Heap, b: buffer.Buffer, v: int) -> [heap] buffer.Buffer {
+    var o = buffer.push(heap, b, byte_of(v % 256));
+    o = buffer.push(heap, o, byte_of(v / 256 % 256));
+    return o;
+}
+
+fn le32[&h](heap: &!h Heap, b: buffer.Buffer, v: int) -> [heap] buffer.Buffer {
+    var o = le16(heap, b, v % 65536);
+    o = le16(heap, o, v / 65536 % 65536);
+    return o;
+}
+
+pub fn zip_new[&h](heap: &!h Heap) -> [heap] Zip {
+    return Zip { out: buffer.empty(heap, 4096), cd: buffer.empty(heap, 1024), count: 0, out_len: 0, cd_len: 0 };
+}
+
+// add an entry: `method` 0 stored, 8 DEFLATE
+pub fn add[&h, &n, &d](heap: &!h Heap, zip: Zip, name: &n [byte], data: &d [byte], method: int) -> [heap] Zip {
+    let Zip { out, cd, count, out_len, cd_len } = zip;
+    let offset = out_len;
+    let crc_v = crc.crc32_of(data);
+    var packed = buffer.empty(heap, 1);
+    var csize = len(data);
+    var m = 0;
+    if method == 8 {
+        buffer.drop(heap, packed);
+        packed = flate.deflate(heap, data);
+        borrow packed as &pb in { csize = len(buffer.bytes(pb)); }
+        m = 8;
+    }
+    var o = out;
+    o = le32(heap, o, 67324752);        // PK 3 4
+    o = le16(heap, o, 20);
+    o = le16(heap, o, 0);
+    o = le16(heap, o, m);
+    o = le16(heap, o, 0);
+    o = le16(heap, o, 33);
+    o = le32(heap, o, crc_v);
+    o = le32(heap, o, csize);
+    o = le32(heap, o, len(data));
+    o = le16(heap, o, len(name));
+    o = le16(heap, o, 0);
+    o = buffer.append(heap, o, name);
+    if method == 8 {
+        borrow packed as &pb in { o = buffer.append(heap, o, buffer.bytes(pb)); }
+    } else {
+        o = buffer.append(heap, o, data);
+    }
+    buffer.drop(heap, packed);
+    var c = cd;
+    c = le32(heap, c, 33639248);        // PK 1 2
+    c = le16(heap, c, 20);
+    c = le16(heap, c, 20);
+    c = le16(heap, c, 0);
+    c = le16(heap, c, m);
+    c = le16(heap, c, 0);
+    c = le16(heap, c, 33);
+    c = le32(heap, c, crc_v);
+    c = le32(heap, c, csize);
+    c = le32(heap, c, len(data));
+    c = le16(heap, c, len(name));
+    c = le16(heap, c, 0);
+    c = le16(heap, c, 0);
+    c = le16(heap, c, 0);
+    c = le16(heap, c, 0);
+    c = le32(heap, c, 0);
+    c = le32(heap, c, offset);
+    c = buffer.append(heap, c, name);
+    return Zip { out: o, cd: c, count: count + 1, out_len: offset + 30 + len(name) + csize, cd_len: cd_len + 46 + len(name) };
+}
+
+pub fn zip_finish[&h](heap: &!h Heap, zip: Zip) -> [heap] buffer.Buffer {
+    let Zip { out, cd, count, out_len, cd_len } = zip;
+    let cd_off = out_len;
+    let cd_size = cd_len;
+    var o = out;
+    let zcd = cd;
+    borrow zcd as &cb in { o = buffer.append(heap, o, buffer.bytes(cb)); }
+    buffer.drop(heap, zcd);
+    o = le32(heap, o, 101010256);       // PK 5 6
+    o = le16(heap, o, 0);
+    o = le16(heap, o, 0);
+    o = le16(heap, o, count);
+    o = le16(heap, o, count);
+    o = le32(heap, o, cd_size);
+    o = le32(heap, o, cd_off);
+    o = le16(heap, o, 0);
+    return o;
+}
+
+// ---- properties ----
+
+fn kv[&h, &k, &v](heap: &!h Heap, b: buffer.Buffer, key: &k [byte], value: &v [byte]) -> [heap] buffer.Buffer {
+    var o = buffer.append(heap, b, key);
+    o = buffer.append(heap, o, "=");
+    o = buffer.append(heap, o, value);
+    return buffer.push(heap, o, byte_of(10));
+}
+
+fn kf[&h, &k](heap: &!h Heap, b: buffer.Buffer, key: &k [byte], x: float) -> [heap] buffer.Buffer {
+    var o = buffer.append(heap, b, key);
+    o = buffer.append(heap, o, "=");
+    region r {
+        let tmp = alloc_slice[r](32, byte_of(0));
+        let n = fmt.float_into(tmp, x);
+        if n > 0 { o = buffer.append(heap, o, tmp[0..n]); }
+    }
+    return buffer.push(heap, o, byte_of(10));
+}
+
+// `pre` + `tail` as a key
+fn key[&h, &p, &t](heap: &!h Heap, pre: &p [byte], tail: &t [byte]) -> [heap] buffer.Buffer {
+    return buffer.append(heap, buffer.append(heap, buffer.empty(heap, 96), pre), tail);
+}
+
+fn kvp[&h, &p, &t, &v](heap: &!h Heap, b: buffer.Buffer, pre: &p [byte], tail: &t [byte], value: &v [byte]) -> [heap] buffer.Buffer {
+    let kb = key(heap, pre, tail);
+    var o = b;
+    borrow kb as &kr in { o = kv(heap, o, buffer.bytes(kr), value); }
+    buffer.drop(heap, kb);
+    return o;
+}
+
+fn kfp[&h, &p, &t](heap: &!h Heap, b: buffer.Buffer, pre: &p [byte], tail: &t [byte], x: float) -> [heap] buffer.Buffer {
+    let kb = key(heap, pre, tail);
+    var o = b;
+    borrow kb as &kr in { o = kf(heap, o, buffer.bytes(kr), x); }
+    buffer.drop(heap, kb);
+    return o;
+}
+
+// one channel's encoder and conversions under the key prefix `pre` ("channel.NAME." or "lcd-info.0."); `slot` names the metre slot: "distance" (then also a force slot, `k` > 0) or "nominal"/"calibrated"
+fn channel_block[&h, &p, &q](heap: &!h Heap, b: buffer.Buffer, pre: &p [byte], enc: int, mult: float, slot: &q [byte], slot_mult: float, k: float) -> [heap] buffer.Buffer {
+    var o = b;
+    if enc == 2 { o = kvp(heap, o, pre, "data.encoder.type", "signedshort"); } else { o = kvp(heap, o, pre, "data.encoder.type", "signedinteger"); }
+    o = kfp(heap, o, pre, "data.encoder.scaling.multiplier", mult);
+    o = kfp(heap, o, pre, "data.encoder.scaling.offset", 0.0);
+    o = kvp(heap, o, pre, "data.encoder.scaling.unit.unit", "V");
+    o = kvp(heap, o, pre, "conversion-set.conversions.base", "volts");
+    let sk = key(heap, "conversion-set.conversion.", slot);
+    borrow sk as &sr in {
+        let s = buffer.bytes(sr);
+        let sp = key(heap, pre, s);
+        borrow sp as &spr in {
+            let q = buffer.bytes(spr);
+            o = kvp(heap, o, q, ".base-calibration-slot", "volts");
+            o = kfp(heap, o, q, ".scaling.multiplier", slot_mult);
+            o = kfp(heap, o, q, ".scaling.offset", 0.0);
+            o = kvp(heap, o, q, ".scaling.unit.unit", "m");
+        }
+        buffer.drop(heap, sp);
+    }
+    buffer.drop(heap, sk);
+    if k > 0.0 {
+        o = kvp(heap, o, pre, "conversion-set.conversion.force.base-calibration-slot", "distance");
+        o = kfp(heap, o, pre, "conversion-set.conversion.force.scaling.multiplier", k);
+        o = kfp(heap, o, pre, "conversion-set.conversion.force.scaling.offset", 0.0);
+        o = kvp(heap, o, pre, "conversion-set.conversion.force.scaling.unit.unit", "N");
+    }
+    return o;
+}
+
+fn rounded(x: float) -> [] int {
+    if x < 0.0 { return 0 - truncate(0.0 - x + 0.5); }
+    return truncate(x + 0.5);
+}
+
+fn push_be[&h](heap: &!h Heap, b: buffer.Buffer, v: int, width: int) -> [heap] buffer.Buffer {
+    var o = b;
+    var i = width - 1;
+    while i >= 0 {
+        o = buffer.push(heap, o, byte_of((v >> (8 * i)) & 255));
+        i = i - 1;
+    }
+    return o;
+}
+
+// the segment header: style, points, the reference into the shared data and (here, not shared) the height channel
+fn segment_header[&h, &s, &a, &b](heap: &!h Heap, style: &s [byte], n: int, hname: &a [byte], hslot: &b [byte]) -> [heap] buffer.Buffer {
+    var o = kv(heap, buffer.empty(heap, 1024), "force-segment-header.settings.style", style);
+    o = buffer.append(heap, o, "force-segment-header.num-points=");
+    o = buffer.push_nat(heap, o, n);
+    o = buffer.push(heap, o, byte_of(10));
+    o = kv(heap, o, "channel.vDeflection.lcd-info.*", "0");
+    let pre = buffer.append(heap, buffer.append(heap, buffer.empty(heap, 48), "channel."), hname);
+    borrow pre as &pr in {
+        let p1 = buffer.append(heap, buffer.append(heap, buffer.empty(heap, 48), buffer.bytes(pr)), ".");
+        borrow p1 as &p1r in { o = channel_block(heap, o, buffer.bytes(p1r), 4, 0.000001, hslot, 0.000001, 0.0); }
+        buffer.drop(heap, p1);
+    }
+    buffer.drop(heap, pre);
+    return o;
+}
+
+// One curve's two segments into the archive. `base` is "" or "index/N/".
+fn curve_entries[&h, &b, &z, &d](heap: &!h Heap, zip: Zip, base: &b [byte], zs: &z [float], ds: &d [float], at: int, n: int, dmult: float, sens: float, measured: int, method: int) -> [heap] Zip {
+    var hname = "height";
+    var hslot = "calibrated";
+    if measured == 1 { hname = "strainGaugeHeight"; hslot = "nominal"; }
+    var zp = zip;
+    var seg = 0;
+    while seg < 2 {
+        var style = "extend";
+        if seg == 1 { style = "retract"; }
+        let sh = segment_header(heap, style, n, hname, hslot);
+        var dir = buffer.append(heap, buffer.empty(heap, 64), base);
+        dir = buffer.append(heap, dir, "segments/");
+        dir = buffer.push_nat(heap, dir, seg);
+        dir = buffer.append(heap, dir, "/");
+        var dat = buffer.empty(heap, n * 2 + 1);
+        var zat = buffer.empty(heap, n * 4 + 1);
+        var i = 0;
+        while i < n {
+            var src = at + i;
+            if seg == 1 { src = at + n - 1 - i; }
+            dat = push_be(heap, dat, rounded(ds[src] / sens / dmult), 2);
+            zat = push_be(heap, zat, rounded(zs[src] / 0.000000000001), 4);
+            i = i + 1;
+        }
+        borrow dir as &dr in {
+            let dpath = buffer.append(heap, buffer.append(heap, buffer.empty(heap, 96), buffer.bytes(dr)), "segment-header.properties");
+            borrow dpath as &q in { borrow sh as &sr in { zp = add(heap, zp, buffer.bytes(q), buffer.bytes(sr), method); } }
+            buffer.drop(heap, dpath);
+            let ddat = buffer.append(heap, buffer.append(heap, buffer.empty(heap, 96), buffer.bytes(dr)), "channels/vDeflection.dat");
+            borrow ddat as &q in { borrow dat as &sr in { zp = add(heap, zp, buffer.bytes(q), buffer.bytes(sr), method); } }
+            buffer.drop(heap, ddat);
+            var zpath = buffer.append(heap, buffer.append(heap, buffer.empty(heap, 96), buffer.bytes(dr)), "channels/");
+            zpath = buffer.append(heap, zpath, hname);
+            zpath = buffer.append(heap, zpath, ".dat");
+            borrow zpath as &q in { borrow zat as &sr in { zp = add(heap, zp, buffer.bytes(q), buffer.bytes(sr), method); } }
+            buffer.drop(heap, zpath);
+        }
+        buffer.drop(heap, dir);
+        buffer.drop(heap, dat);
+        buffer.drop(heap, zat);
+        buffer.drop(heap, sh);
+        seg = seg + 1;
+    }
+    return zp;
+}
+
+// The archive. zs: heights (m), ds: deflections (m); ncurves * n rows each (curve c at c * n); ncurves 0 is one curve. k: the spring constant (N/m); sens: the sensitivity (m/V).
+pub fn archive[&h, &z, &d](heap: &!h Heap, zs: &z [float], ds: &d [float], n: int, ncurves: int, k: float, sens: float, compress: int, measured: int) -> [heap] buffer.Buffer {
+    var method = 0;
+    if compress == 1 { method = 8; }
+    var total = n;
+    if ncurves > 0 { total = n * ncurves; }
+    var peak = 0.000000001;
+    var i = 0;
+    while i < total {
+        var a = ds[i] / sens;
+        if a < 0.0 { a = 0.0 - a; }
+        if a > peak { peak = a; }
+        i = i + 1;
+    }
+    let dmult = peak / 30000.0;
+    var zip = zip_new(heap);
+    zip = add(heap, zip, "header.properties", "jpk-data-file=jpk-force\nfile-format-version=2.0\n", method);
+    var sh = buffer.empty(heap, 1024);
+    sh = channel_block(heap, sh, "lcd-info.0.", 2, dmult, "distance", sens, k);
+    borrow sh as &sr in { zip = add(heap, zip, "shared-data/header.properties", buffer.bytes(sr), method); }
+    buffer.drop(heap, sh);
+    if ncurves == 0 {
+        zip = curve_entries(heap, zip, "", zs, ds, 0, n, dmult, sens, measured, method);
+    } else {
+        var c = 0;
+        while c < ncurves {
+            var base = buffer.append(heap, buffer.empty(heap, 32), "index/");
+            base = buffer.push_nat(heap, base, 2 * c);
+            base = buffer.append(heap, base, "/");
+            var hp = buffer.append(heap, buffer.empty(heap, 48), "");
+            borrow base as &br in { hp = buffer.append(heap, hp, buffer.bytes(br)); }
+            hp = buffer.append(heap, hp, "header.properties");
+            borrow hp as &q in { zip = add(heap, zip, buffer.bytes(q), "force-scan-map.header.position-index=0\n", method); }
+            buffer.drop(heap, hp);
+            borrow base as &br in { zip = curve_entries(heap, zip, buffer.bytes(br), zs, ds, c * n, n, dmult, sens, measured, method); }
+            buffer.drop(heap, base);
+            c = c + 1;
+        }
+    }
+    return zip_finish(heap, zip);
+}
