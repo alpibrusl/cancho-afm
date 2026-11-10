@@ -496,6 +496,23 @@ The same check as for vesicle movies, applied to force curves, so that real curv
 * **So both must be read.** If the twin's spread rejects every model and the measured one accepts some, the data are more heterogeneous than the library; the sd of the breakthrough force in the fingerprint says it (still 5.7 to 6.1 standard errors for every model but the mixture, 0.8, which is the one that contains heterogeneity). The fingerprint, not the single number, is the result.
 * Not measured: the real spread of a real set, and how the verdict behaves with 400 curves from one real map.
 
+## A force-volume map from files (2026-11-10; NOT TESTED ON ANY REAL MAP)
+
+**Built:** `host/fc_map.cho` (the manifest of curve files in, the maps and a report out), `host/fc_export.cho` gains model 9 (the curve of one pixel of the twin's gel-disk map, so that a map of files with a known truth can be written), `tests/fcmap_flow.sh`.
+
+**Usage** (`./fc_map K R ZUNIT DUNIT NX NY SNAKE MODE MANIFEST`): the manifest is a text file with one curve file per line, in the order the instrument took them; the files are two-column text as in `sim/fcload.cho`. **A pixel's position is not read from the files: it is the line's place in the manifest**, row by row from the first, left to right, or with SNAKE 1 left to right on even rows and right to left on odd ones. The wrong order scrambles the map and nothing can detect it, so the order must be known. MODE 0 prints a report, 1, 2 and 3 write the PNG of the breakthrough force, the Hertz modulus or the film height to the output (the colours run from the 2nd to the 98th percentile of the analysed pixels, a pixel with no result is dark grey), 4 prints one JSON line per pixel. The report: how many pixels were analysed, the refusals by tag (7 a file that cannot be read, 8 no file listed, 9 fewer than 80 approach rows, and `forcecurve`'s own tags), each quantity's median and 2% to 98% range, and a two-class split of the breakthrough force by Otsu's threshold on a 64-bin histogram: the threshold, the share of pixels above it and the mean of each side. Whether the two classes are two phases is not something a map says.
+
+**Checked on a 16 by 16 map of twin files whose truth is known** (`sh tests/fcmap_flow.sh`, 2 s):
+* all 256 pixels analysed; the two-class split finds **79 pixels above 5.72 nN, exactly the 79 gel pixels of the pattern** (means 12.38 and 4.76 nN); the 8 nN threshold of the twin's own map classifies 0 pixels wrongly, and the loader's values agree with `fv_twin`'s analysis of the same curves to 0.01 nN (the file text keeps three decimals);
+* the same map taken in snake order with the manifest reordered is the same report; the three PNGs are valid and show the three gel disks in the breakthrough force, the modulus and the height; a missing file is refused with tag 7 and the other 255 pixels are analysed; a missing manifest and a map over 32 pixels a side are reported.
+* **A bug found while building it, in the open:** the first version took line n of the manifest as line n-1 (`bytes.field` counts from 1), so pixel 0 had no file and every other pixel read its neighbour's curve. The Otsu count was still close to the truth by chance of the pattern, and the exact comparison to `fv_twin`'s values is what showed it.
+
+**Limits:**
+* **32 by 32 pixels at most**, and a curve is thinned to 1,500 rows: the maps live in one 64 KiB region. A bigger map needs the arrays on the heap (`box_slice`), not built.
+* **No topography.** The contact point's height (the "zc" of the twin map, which the twin showed to be biased by stiffness) is not mapped; the film height is the analysis's step height.
+* **No adequacy verdict for the whole map.** For that, run the same files through `fc_load` (with the measured spread, and read both).
+* The map is only as good as the order of the manifest, the curve files' units, and the analysis settings (a 4.5 nm film, a drop of at least 400 pN, 40 baseline points), which were set for the twin's curves and not checked on a real membrane.
+
 ## Using the twin to design experiments
 
 The twin has answered design questions of three kinds so far; each is a number the twin computed, with the caveat that its parameters are stand-ins unless a paper supplies them:

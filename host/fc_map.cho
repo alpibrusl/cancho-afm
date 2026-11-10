@@ -1,0 +1,453 @@
+edition 7;
+
+import std.buffer;
+import std.bytes;
+import std.math;
+import forcecurve;
+import fcload;
+import png;
+
+// A FORCE-VOLUME MAP FROM FILES (docs/dynamics.md): one force curve per pixel, each a two-column text file as sim/fcload.cho reads it, listed in a MANIFEST (a text file, one path per line, in the order the
+// instrument took them), the maps of what the curves say. NOT TESTED ON ANY REAL MAP. The position of a pixel is not read from the files: it is the line's place in the manifest, row by row from the first row,
+// left to right, or (SNAKE 1) left to right on even rows and right to left on odd ones, as scanners that do not retrace often do; give the wrong one and the map is scrambled, and nothing here can tell.
+//   cancho build host/fc_map.cho sim/fcload.cho sim/forcecurve.cho host/png.cho --std -o fc_map        (png needs std.crc: --std covers it)
+//   ./fc_map K R ZUNIT DUNIT NX NY SNAKE MODE MANIFEST
+//     K, R, ZUNIT, DUNIT   as host/fc_load.cho (thousandths of N/m, tenths of nm, 0 nm 1 m 2 um)
+//     NX, NY               the map's width and height in pixels, each at most 32 (the arrays live in one 64 KiB region)
+//     MODE   0 a report; 1, 2, 3 the PNG of the breakthrough force, the Hertz modulus or the film height (to the output: redirect it); 4 one JSON line per pixel
+// A curve of more than 1,500 rows is thinned (every nth row kept). The PNG's colours run from the 2nd to the 98th percentile of the pixels analysed; a pixel with no result is dark grey. The report gives
+// the counts, the refusals by tag, each quantity's range, and a two-class split of the breakthrough force (Otsu's threshold on a 64-bin histogram): the force that best separates two populations, the share
+// of pixels above it and the mean of each side. Whether the two are two phases is not something a map can say.
+fn text[&h, &r](heap: &!h Heap, b: buffer.Buffer, s: &r [byte]) -> [heap] buffer.Buffer { return buffer.append(heap, b, s); }
+
+fn number_of[&t](txt: &t [byte]) -> [] int {
+    var n = 0;
+    var i = 0;
+    while i < len(txt) {
+        let c = int_of(txt[i]);
+        if c < 48 || c > 57 { return 0; }
+        n = n * 10 + (c - 48);
+        i = i + 1;
+    }
+    return n;
+}
+
+fn dec[&h](heap: &!h Heap, o: buffer.Buffer, v: float, places: int) -> [heap] buffer.Buffer {
+    var b = o;
+    var x = v;
+    if x < 0.0 { b = text(heap, b, "-"); x = 0.0 - x; }
+    var scale = 1;
+    var p = 0;
+    while p < places { scale = scale * 10; p = p + 1; }
+    let c = truncate(x * float_of(scale) + 0.5);
+    b = buffer.push_nat(heap, b, c / scale);
+    if places > 0 {
+        b = text(heap, b, ".");
+        var rest = c % scale;
+        var div = scale / 10;
+        while div > 0 {
+            b = buffer.push_nat(heap, b, rest / div);
+            rest = rest % div;
+            div = div / 10;
+        }
+    }
+    return b;
+}
+
+fn unit_scale(u: int) -> [] float {
+    if u == 1 { return 1000000000.0; }
+    if u == 2 { return 1000.0; }
+    return 1.0;
+}
+
+fn read_file[&h, &f, &p](heap: &!h Heap, fs: &f Fs(""), path: &p [byte], text_in: buffer.Buffer) -> [heap, fs_read(""), file_read] (buffer.Buffer, int) {
+    var out = text_in;
+    var total = 0;
+    var trouble = 0;
+    match open_read(fs, path) {
+        Opened::Failed(reason) => {
+            trouble = reason;
+            if trouble == 0 { trouble = 1; }
+        }
+        Opened::Ok(opened) => {
+            var file = opened;
+            var chunk = buffer.empty(heap, 65536);
+            borrow mut file as &!handle in {
+                var going = true;
+                while going {
+                    var got = 0;
+                    borrow mut chunk as &!c in {
+                        match file_read(handle, buffer.room(c)) {
+                            Read::Got(n) => { got = n; buffer.filled(c, n); }
+                            Read::End => { going = false; }
+                            Read::Failed(reason) => { going = false; trouble = reason; if trouble == 0 { trouble = 1; } }
+                        }
+                    }
+                    if got > 0 {
+                        borrow chunk as &c in { out = buffer.append(heap, out, buffer.bytes(c)); }
+                        total = total + got;
+                        borrow mut chunk as &!c in { buffer.clear(c); }
+                    }
+                }
+            }
+            file_close(file);
+            buffer.drop(heap, chunk);
+        }
+    }
+    if trouble != 0 { return (out, 0 - 1); }
+    return (out, total);
+}
+
+// the value below which a share `q` of the first `n` entries of the sorted copy lies
+fn quantile[&a](sorted: &a [float], n: int, q: float) -> [] float {
+    var i = truncate(q * float_of(n - 1) + 0.5);
+    if i < 0 { i = 0; }
+    if i > n - 1 { i = n - 1; }
+    return sorted[i];
+}
+
+fn sort_in_place[&a](x: &!a [float], n: int) -> [] int {
+    var i = 1;
+    while i < n {
+        let v = x[i];
+        var j = i;
+        while j > 0 && x[j - 1] > v { x[j] = x[j - 1]; j = j - 1; }
+        x[j] = v;
+        i = i + 1;
+    }
+    return 0;
+}
+
+// a palette index 1..255 for t in 0..1: dark blue, blue-green, green, yellow
+fn pal_rgb(i: int, which: int) -> [] int {
+    if i == 0 { if which == 0 { return 30; } if which == 1 { return 30; } return 40; }
+    let t = float_of(i - 1) / 254.0;
+    var x = t * 3.0;
+    var seg = truncate(x);
+    if seg > 2 { seg = 2; }
+    let f = x - float_of(seg);
+    var a0 = 20.0; var a1 = 24.0; var a2 = 70.0;
+    var b0 = 40.0; var b1 = 110.0; var b2 = 150.0;
+    if seg == 1 { a0 = 40.0; a1 = 110.0; a2 = 150.0; b0 = 60.0; b1 = 180.0; b2 = 130.0; }
+    if seg == 2 { a0 = 60.0; a1 = 180.0; a2 = 130.0; b0 = 240.0; b1 = 220.0; b2 = 70.0; }
+    if which == 0 { return truncate(a0 + (b0 - a0) * f); }
+    if which == 1 { return truncate(a1 + (b1 - a1) * f); }
+    return truncate(a2 + (b2 - a2) * f);
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(net); release(clock); release(signals); release(exec);
+    var k_milli = 350;
+    var r_tenth = 320;
+    var zu = 0;
+    var du = 0;
+    var nx = 0;
+    var ny = 0;
+    var snake = 0;
+    var mode = 0;
+    var usage = 0;
+    borrow args as &g in {
+        if arg_count(g) < 10 { usage = 1; } else {
+            k_milli = number_of(arg(g, 1));
+            r_tenth = number_of(arg(g, 2));
+            zu = number_of(arg(g, 3));
+            du = number_of(arg(g, 4));
+            nx = number_of(arg(g, 5));
+            ny = number_of(arg(g, 6));
+            snake = number_of(arg(g, 7));
+            mode = number_of(arg(g, 8));
+            if nx < 1 || nx > 32 || ny < 1 || ny > 32 { usage = 1; }
+        }
+    }
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 65536);
+        if usage == 1 {
+            o = text(h, o, "usage: fc_map K R ZUNIT DUNIT NX NY SNAKE MODE MANIFEST   (NX, NY at most 32; MODE 0 report, 1 2 3 PNG of breakthrough, modulus, height, 4 JSON lines)\n");
+        } else {
+            let k = float_of(k_milli) / 1000.0;
+            let rad = float_of(r_tenth) / 10.0;
+            region r {
+                let npx = nx * ny;
+                let z = alloc_slice[r](1500, 0.0);
+                let d = alloc_slice[r](1500, 0.0);
+                let bt = alloc_slice[r](1024, 0.0 - 1.0);
+                let ev = alloc_slice[r](1024, 0.0);
+                let ht = alloc_slice[r](1024, 0.0);
+                let why = alloc_slice[r](1024, 0);
+                var manifest = buffer.empty(h, 65536);
+                var got_m = 0 - 1;
+                borrow args as &g in {
+                    borrow fs as &fsr in {
+                        let (grown, n) = read_file(h, fsr, arg(g, 9), manifest);
+                        manifest = grown;
+                        got_m = n;
+                    }
+                }
+                if got_m < 0 {
+                    o = text(h, o, "the manifest cannot be read\n");
+                } else {
+                    borrow manifest as &mf in {
+                        var p = 0;
+                        while p < npx {
+                            let ix = p % nx;
+                            let iy = p / nx;
+                            var line_no = iy * nx + ix;
+                            if snake == 1 && iy % 2 == 1 { line_no = iy * nx + (nx - 1 - ix); }
+                            let line = bytes.trim(bytes.field(buffer.bytes(mf), 10, line_no + 1));
+                            why[p] = 8;
+                            if len(line) > 0 {
+                                var scratch = buffer.empty(h, 65536);
+                                borrow fs as &fsr in {
+                                    let (grown, n) = read_file(h, fsr, line, scratch);
+                                    scratch = grown;
+                                    if n >= 0 {
+                                        borrow scratch as &s in {
+                                            let rows = fcload.count_rows(buffer.bytes(s));
+                                            var stride = 1;
+                                            if rows > 1500 { stride = (rows + 1499) / 1500; }
+                                            let n_in = fcload.read_rows(buffer.bytes(s), stride, unit_scale(zu), unit_scale(du), z, d, 1500);
+                                            let na = fcload.approach(z, d, n_in);
+                                            let a = fcload.analyse(z, d, na, k, rad);
+                                            why[p] = a.why;
+                                            if a.why == 0 {
+                                                bt[p] = a.breakthrough / 1000.0;
+                                                ev[p] = a.e0;
+                                                ht[p] = a.height;
+                                            }
+                                        }
+                                    } else {
+                                        why[p] = 7;
+                                    }
+                                }
+                                buffer.drop(h, scratch);
+                            }
+                            p = p + 1;
+                        }
+                    }
+                    // the analysed pixels
+                    var ok = 0;
+                    var p = 0;
+                    while p < npx { if why[p] == 0 { ok = ok + 1; } p = p + 1; }
+                    if mode == 4 {
+                        p = 0;
+                        while p < npx {
+                            o = text(h, o, "{\"px\":");
+                            o = buffer.push_nat(h, o, p);
+                            o = text(h, o, ",\"ix\":");
+                            o = buffer.push_nat(h, o, p % nx);
+                            o = text(h, o, ",\"iy\":");
+                            o = buffer.push_nat(h, o, p / nx);
+                            o = text(h, o, ",\"ok\":");
+                            if why[p] == 0 { o = text(h, o, "1"); } else { o = text(h, o, "0"); }
+                            o = text(h, o, ",\"why\":");
+                            o = buffer.push_nat(h, o, why[p]);
+                            if why[p] == 0 {
+                                o = text(h, o, ",\"bt_nn\":");
+                                o = dec(h, o, bt[p], 2);
+                                o = text(h, o, ",\"e\":");
+                                o = dec(h, o, ev[p], 2);
+                                o = text(h, o, ",\"height_nm\":");
+                                o = dec(h, o, ht[p], 2);
+                            }
+                            o = text(h, o, "}\n");
+                            p = p + 1;
+                        }
+                    } else if mode >= 1 && mode <= 3 && ok > 0 {
+                        region r2 {
+                        let srt = alloc_slice[r2](1024, 0.0);
+                        // the map of the chosen quantity: percentiles 2 to 98 of the analysed pixels, scaled to palette 1..255
+                        var m = 0;
+                        p = 0;
+                        while p < npx {
+                            if why[p] == 0 {
+                                var v = bt[p];
+                                if mode == 2 { v = ev[p]; }
+                                if mode == 3 { v = ht[p]; }
+                                srt[m] = v;
+                                m = m + 1;
+                            }
+                            p = p + 1;
+                        }
+                        sort_in_place(srt, m);
+                        let lo = quantile(srt, m, 0.02);
+                        var hi = quantile(srt, m, 0.98);
+                        if hi <= lo { hi = lo + 0.000001; }
+                        var f = 120 / nx;
+                        if 120 / ny < f { f = 120 / ny; }
+                        if f < 1 { f = 1; }
+                        let wpx = nx * f;
+                        let hpx = ny * f;
+                        let pix = alloc_slice[r2](wpx * hpx, byte_of(0));
+                        var yy = 0;
+                        while yy < hpx {
+                            var xx = 0;
+                            while xx < wpx {
+                                let q = (yy / f) * nx + (xx / f);
+                                var idx = 0;
+                                if why[q] == 0 {
+                                    var v = bt[q];
+                                    if mode == 2 { v = ev[q]; }
+                                    if mode == 3 { v = ht[q]; }
+                                    var t = (v - lo) / (hi - lo);
+                                    if t < 0.0 { t = 0.0; }
+                                    if t > 1.0 { t = 1.0; }
+                                    idx = 1 + truncate(t * 254.0);
+                                }
+                                pix[yy * wpx + xx] = byte_of(idx);
+                                xx = xx + 1;
+                            }
+                            yy = yy + 1;
+                        }
+                        let pal = alloc_slice[r2](768, byte_of(0));
+                        var ci = 0;
+                        while ci < 256 {
+                            pal[ci * 3] = byte_of(pal_rgb(ci, 0));
+                            pal[ci * 3 + 1] = byte_of(pal_rgb(ci, 1));
+                            pal[ci * 3 + 2] = byte_of(pal_rgb(ci, 2));
+                            ci = ci + 1;
+                        }
+                        o = png.indexed(h, o, wpx, hpx, pix, pal);
+                        }
+                    } else {
+                        o = text(h, o, "map ");
+                        o = buffer.push_nat(h, o, nx);
+                        o = text(h, o, " x ");
+                        o = buffer.push_nat(h, o, ny);
+                        if snake == 1 { o = text(h, o, ", snake order"); } else { o = text(h, o, ", raster order"); }
+                        o = text(h, o, ": ");
+                        o = buffer.push_nat(h, o, ok);
+                        o = text(h, o, " of ");
+                        o = buffer.push_nat(h, o, npx);
+                        o = text(h, o, " pixels analysed\n");
+                        // refusals by tag
+                        var tag = 1;
+                        while tag <= 9 {
+                            var cnt = 0;
+                            p = 0;
+                            while p < npx { if why[p] == tag { cnt = cnt + 1; } p = p + 1; }
+                            if cnt > 0 {
+                                o = text(h, o, "  refused, tag ");
+                                o = buffer.push_nat(h, o, tag);
+                                if tag == 7 { o = text(h, o, " (file cannot be read)"); }
+                                if tag == 8 { o = text(h, o, " (no file listed)"); }
+                                if tag == 9 { o = text(h, o, " (fewer than 80 approach rows)"); }
+                                o = text(h, o, ": ");
+                                o = buffer.push_nat(h, o, cnt);
+                                o = text(h, o, " pixels\n");
+                            }
+                            tag = tag + 1;
+                        }
+                        if ok > 0 {
+                            region r3 {
+                            let srt = alloc_slice[r3](1024, 0.0);
+                            var q = 0;
+                            while q < 3 {
+                                var m = 0;
+                                p = 0;
+                                while p < npx {
+                                    if why[p] == 0 {
+                                        var v = bt[p];
+                                        if q == 1 { v = ev[p]; }
+                                        if q == 2 { v = ht[p]; }
+                                        srt[m] = v;
+                                        m = m + 1;
+                                    }
+                                    p = p + 1;
+                                }
+                                sort_in_place(srt, m);
+                                if q == 0 { o = text(h, o, "breakthrough force (nN): "); }
+                                if q == 1 { o = text(h, o, "Hertz modulus (MPa):     "); }
+                                if q == 2 { o = text(h, o, "film height (nm):        "); }
+                                o = text(h, o, "median ");
+                                o = dec(h, o, quantile(srt, m, 0.5), 2);
+                                o = text(h, o, ", 2% to 98% ");
+                                o = dec(h, o, quantile(srt, m, 0.02), 2);
+                                o = text(h, o, " to ");
+                                o = dec(h, o, quantile(srt, m, 0.98), 2);
+                                o = text(h, o, "\n");
+                                q = q + 1;
+                            }
+                            // Otsu on the breakthrough force: 64 bins from the smallest to the largest
+                            var lo = bt[0];
+                            var hi = bt[0];
+                            var first = 1;
+                            p = 0;
+                            while p < npx {
+                                if why[p] == 0 {
+                                    if first == 1 { lo = bt[p]; hi = bt[p]; first = 0; }
+                                    if bt[p] < lo { lo = bt[p]; }
+                                    if bt[p] > hi { hi = bt[p]; }
+                                }
+                                p = p + 1;
+                            }
+                            if hi > lo {
+                                let hist = alloc_slice[r3](64, 0);
+                                p = 0;
+                                while p < npx {
+                                    if why[p] == 0 {
+                                        var b = truncate((bt[p] - lo) / (hi - lo) * 64.0);
+                                        if b > 63 { b = 63; }
+                                        hist[b] = hist[b] + 1;
+                                    }
+                                    p = p + 1;
+                                }
+                                var best_var = 0.0 - 1.0;
+                                var best_t = 0;
+                                var t = 1;
+                                while t < 64 {
+                                    var n0 = 0;
+                                    var s0 = 0.0;
+                                    var i = 0;
+                                    while i < t { n0 = n0 + hist[i]; s0 = s0 + float_of(hist[i]) * (float_of(i) + 0.5); i = i + 1; }
+                                    var n1 = 0;
+                                    var s1 = 0.0;
+                                    while i < 64 { n1 = n1 + hist[i]; s1 = s1 + float_of(hist[i]) * (float_of(i) + 0.5); i = i + 1; }
+                                    if n0 > 0 && n1 > 0 {
+                                        let m0 = s0 / float_of(n0);
+                                        let m1 = s1 / float_of(n1);
+                                        let between = float_of(n0) * float_of(n1) * (m0 - m1) * (m0 - m1);
+                                        if between > best_var { best_var = between; best_t = t; }
+                                    }
+                                    t = t + 1;
+                                }
+                                let thr = lo + (hi - lo) * float_of(best_t) / 64.0;
+                                var above = 0;
+                                var sum_hi = 0.0;
+                                var sum_lo = 0.0;
+                                p = 0;
+                                while p < npx {
+                                    if why[p] == 0 {
+                                        if bt[p] >= thr { above = above + 1; sum_hi = sum_hi + bt[p]; } else { sum_lo = sum_lo + bt[p]; }
+                                    }
+                                    p = p + 1;
+                                }
+                                o = text(h, o, "two-class split of the breakthrough force (Otsu): threshold ");
+                                o = dec(h, o, thr, 2);
+                                o = text(h, o, " nN; above it ");
+                                o = buffer.push_nat(h, o, above);
+                                o = text(h, o, " pixels (");
+                                o = dec(h, o, 100.0 * float_of(above) / float_of(ok), 1);
+                                o = text(h, o, "%), mean ");
+                                if above > 0 { o = dec(h, o, sum_hi / float_of(above), 2); } else { o = text(h, o, "-"); }
+                                o = text(h, o, " nN; below it mean ");
+                                if ok > above { o = dec(h, o, sum_lo / float_of(ok - above), 2); } else { o = text(h, o, "-"); }
+                                o = text(h, o, " nN\n");
+                            }
+                            }
+                        }
+                    }
+                }
+                buffer.drop(h, manifest);
+            }
+        }
+        var code = 0;
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(args);
+    release(fs);
+    release(heap);
+    release(io);
+    return 0;
+}
