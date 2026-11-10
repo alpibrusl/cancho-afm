@@ -312,7 +312,7 @@ pub fn slb_curve[&a, &b](z: &a [float], defl: &b [float], n: int, k: float, r: f
 // slb_curve with the baseline window given: the first `nb` points are the baseline (median and noise of the deflection). nanoindent takes 30% of the curve, which is wrong when contact begins before
 // that: the window then holds the start of the indentation, the noise estimate and with it the contact threshold grow, the contact point comes late and the modulus is over-read (found with the twin's
 // bilayer curves, whose approach is 25% of the curve: a 10 MPa gel read 150 MPa). Give nb at the last point you trust to be before contact.
-pub fn slb_curve_nb[&a, &b](z: &a [float], defl: &b [float], n: int, nb: int, k: float, r: float, nu: float, contact_sigma: float, min_drop: float, film_thickness: float, fit_max_delta: float) -> [] Slb {
+pub fn slb_curve_win[&a, &b](z: &a [float], defl: &b [float], n: int, nb: int, k: float, r: float, nu: float, contact_sigma: float, min_drop: float, film_thickness: float, fit_max_delta: float, window_nm: float) -> [] Slb {
     if n < 20 { return slb_refused(1); }
     if nb < 5 || nb > n - 4 { return slb_refused(3); }
     // far to near: z non-increasing for all but at most 5% of the steps
@@ -336,28 +336,45 @@ pub fn slb_curve_nb[&a, &b](z: &a [float], defl: &b [float], n: int, nb: int, k:
     }
     if ci < 0 || ci >= n - 4 { return slb_refused(3); }
     let zc = z[ci];
-    // the largest force drop after contact
+    // the largest force drop after contact. SINGLE STEP (window_nm <= 0, nanoindent's rule): between two consecutive rows. WINDOWED (window_nm > 0): between a row i and any later row j whose piezo
+    // travel from i is at most window_nm, so that a rupture a detector has spread over several rows is found at any row spacing; bi is the row at the top of the drop and aj the row at its bottom
+    // (the row after bi for the single step). The windowed search costs the rows times the rows in a window.
     var bi = ci;
+    var aj = ci + 1;
     var worst = 0.0;
-    i = ci;
-    while i < n - 1 {
-        let step = k * (defl[i + 1] - defl[i]) * 1000.0;
-        if step < worst { worst = step; bi = i; }
-        i = i + 1;
+    if window_nm <= 0.0 {
+        i = ci;
+        while i < n - 1 {
+            let step = k * (defl[i + 1] - defl[i]) * 1000.0;
+            if step < worst { worst = step; bi = i; }
+            i = i + 1;
+        }
+        aj = bi + 1;
+    } else {
+        i = ci;
+        while i < n - 1 {
+            var j = i + 1;
+            while j < n && z[i] - z[j] <= window_nm {
+                let step = k * (defl[j] - defl[i]) * 1000.0;
+                if step < worst { worst = step; bi = i; aj = j; }
+                j = j + 1;
+            }
+            i = i + 1;
+        }
     }
     let drop = 0.0 - worst;
     if drop < min_drop { return slb_refused(4); }
     let fb = k * (defl[bi] - d0) * 1000.0;
     // (B) the jump in indentation across the snap-through
-    var height = ((zc - z[bi + 1]) - (defl[bi + 1] - d0)) - ((zc - z[bi]) - (defl[bi] - d0));
-    if height <= 0.3 || height >= 15.0 { height = (defl[bi] - d0) - (defl[bi + 1] - d0); }
+    var height = ((zc - z[aj]) - (defl[aj] - d0)) - ((zc - z[bi]) - (defl[bi] - d0));
+    if height <= 0.3 || height >= 15.0 { height = (defl[bi] - d0) - (defl[aj] - d0); }
     // (A) contact point to substrate: a straight line fit of force against z over the points after the breakthrough, extrapolated to zero force
     var height_a = 0.0;
-    let npost = n - (bi + 1);
+    let npost = n - aj;
     if npost >= 4 {
-        var zlo = z[bi + 1];
-        var zhi = z[bi + 1];
-        i = bi + 1;
+        var zlo = z[aj];
+        var zhi = z[aj];
+        i = aj;
         while i < n {
             if z[i] < zlo { zlo = z[i]; }
             if z[i] > zhi { zhi = z[i]; }
@@ -366,7 +383,7 @@ pub fn slb_curve_nb[&a, &b](z: &a [float], defl: &b [float], n: int, nb: int, k:
         if zhi - zlo > 0.000001 {
             var sz = 0.0;
             var sf = 0.0;
-            i = bi + 1;
+            i = aj;
             while i < n {
                 sz = sz + z[i];
                 sf = sf + k * (defl[i] - d0) * 1000.0;
@@ -376,7 +393,7 @@ pub fn slb_curve_nb[&a, &b](z: &a [float], defl: &b [float], n: int, nb: int, k:
             let fm = sf / float_of(npost);
             var sxx = 0.0;
             var sxy = 0.0;
-            i = bi + 1;
+            i = aj;
             while i < n {
                 sxx = sxx + (z[i] - zm) * (z[i] - zm);
                 sxy = sxy + (z[i] - zm) * (k * (defl[i] - d0) * 1000.0 - fm);
@@ -462,4 +479,9 @@ pub fn slb_curve_nb[&a, &b](z: &a [float], defl: &b [float], n: int, nb: int, k:
         if kk > 0.0 { kappa = kk; }
     }
     return Slb { why: 0, breakthrough: fb, height: height, height_a: height_a, contact_z: zc, e0: e0, e1: e1, e2: e2, e3: e3, kappa_a: kappa, n_elastic: ne };
+}
+
+// slb_curve_win with the single-step rule: nanoindent's, as ported
+pub fn slb_curve_nb[&a, &b](z: &a [float], defl: &b [float], n: int, nb: int, k: float, r: float, nu: float, contact_sigma: float, min_drop: float, film_thickness: float, fit_max_delta: float) -> [] Slb {
+    return slb_curve_win(z, defl, n, nb, k, r, nu, contact_sigma, min_drop, film_thickness, fit_max_delta, 0.0);
 }
