@@ -32,3 +32,60 @@ fn test_a_2_by_2_image_is_a_well_formed_png[&h](heap: &!h Heap) -> [heap] int {
     }
     return 0;
 }
+
+// indexed_big writes an image that fits one block byte for byte as indexed does
+fn test_the_big_encoder_matches_the_small_one_on_a_small_image[&h](heap: &!h Heap) -> [heap] int {
+    region r {
+        let pix = alloc_slice[r](4, byte_of(0));
+        pix[1] = byte_of(1); pix[2] = byte_of(2); pix[3] = byte_of(1);
+        let pal = alloc_slice[r](9, byte_of(0));
+        pal[3] = byte_of(255); pal[7] = byte_of(255);
+        var a = buffer.empty(heap, 256);
+        a = png.indexed(heap, a, 2, 2, pix, pal);
+        var c = buffer.empty(heap, 256);
+        c = png.indexed_big(heap, c, 2, 2, pix, pal);
+        borrow a as &x in {
+            borrow c as &y in {
+                test.assert_eq(buffer.size(x), buffer.size(y));
+                let bx = buffer.bytes(x);
+                let by = buffer.bytes(y);
+                var i = 0;
+                while i < buffer.size(x) { test.assert_eq(int_of(bx[i]), int_of(by[i])); i = i + 1; }
+            }
+        }
+        buffer.drop(heap, a);
+        buffer.drop(heap, c);
+    }
+    return 0;
+}
+
+// a 200 x 200 image needs two blocks: the file has the length the format gives (8 signature + IHDR 25 + PLTE 12 + palette + IDAT 12 + 2 + 2 x 5 + 40,200 + 4 + IEND 12), and ends with IEND's CRC
+fn test_the_big_encoder_writes_a_multi_block_image_of_the_right_size[&h](heap: &!h Heap) -> [heap] int {
+    let w = 200;
+    let hh = 200;
+    let pix = box_slice(heap, w * hh, byte_of(0));
+    var size = 0;
+    var last = 0;
+    borrow mut pix as &!pw in {
+        let p = contents(pw);
+        var i = 0;
+        while i < w * hh { p[i] = byte_of((i / w + i % w) % 3); i = i + 1; }
+        region r {
+            let pal = alloc_slice[r](9, byte_of(0));
+            pal[3] = byte_of(255); pal[7] = byte_of(255);
+            var c = buffer.empty(heap, 256);
+            c = png.indexed_big(heap, c, w, hh, p, pal);
+            borrow c as &y in {
+                size = buffer.size(y);
+                let by = buffer.bytes(y);
+                last = int_of(by[size - 1]);
+            }
+            buffer.drop(heap, c);
+        }
+    }
+    unbox_slice(heap, pix);
+    test.assert_eq(size, 8 + 25 + (12 + 9) + (12 + 2 + 10 + 40200 + 4) + 12);
+    // IEND's CRC ends 82 (130)
+    test.assert_eq(last, 130);
+    return 0;
+}

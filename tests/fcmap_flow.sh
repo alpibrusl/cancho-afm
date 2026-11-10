@@ -45,5 +45,26 @@ done
 sed '5s#.*#/nonexistent.csv#' "$W/raster.txt" > "$W/bad.txt"
 "$W/map" 350 320 0 0 $N $N 0 0 "$W/bad.txt" | grep -q "refused, tag 7 (file cannot be read): 1 pixels" || { echo "FAILED: a missing file was not reported as tag 7"; exit 1; }
 "$W/map" 350 320 0 0 $N $N 0 0 "$W/none.txt" | grep -q "manifest cannot be read" || { echo "FAILED: a missing manifest was not reported"; exit 1; }
-"$W/map" 350 320 0 0 40 40 0 0 "$W/raster.txt" | grep -q "usage" || { echo "FAILED: a 40 x 40 map was not refused"; exit 1; }
+"$W/map" 350 320 0 0 600 600 0 0 "$W/raster.txt" | grep -q "usage" || { echo "FAILED: a 600 x 600 map was not refused"; exit 1; }
+# a map far past the old 32 x 32 limit: 128 x 128 pixels from two files in a checkerboard of 16-pixel blocks; half the pixels are above the Otsu threshold, and the PNG is 512 x 512 (4 times the map)
+"$W/exp" 0 5 1 > "$W/fluid.csv"; "$W/exp" 1 5 1 > "$W/gel.csv"
+: > "$W/big.txt"
+iy=0
+while [ $iy -lt 128 ]; do
+    ix=0
+    while [ $ix -lt 128 ]; do
+        if [ $(( (ix/16 + iy/16) % 2 )) -eq 1 ]; then echo "$W/gel.csv" >> "$W/big.txt"; else echo "$W/fluid.csv" >> "$W/big.txt"; fi
+        ix=$((ix+1))
+    done
+    iy=$((iy+1))
+done
+big=$("$W/map" 350 320 0 0 128 128 0 0 "$W/big.txt")
+echo "$big" | head -1
+echo "$big" | grep -q "16384 of 16384 pixels analysed" || { echo "FAILED: the 128 x 128 map was not analysed"; exit 1; }
+echo "$big" | grep -q "above it 8192 pixels (50.0%)" || { echo "FAILED: the checkerboard was not split in half"; exit 1; }
+"$W/map" 350 320 0 0 128 128 0 1 "$W/big.txt" > "$W/big.png"
+head -c 4 "$W/big.png" | tail -c 3 | grep -q PNG || { echo "FAILED: the big map is not a PNG"; exit 1; }
+# the PNG is 512 x 512: the width and height are bytes 16 to 23 of the file
+dims=$(od -An -tu1 -j16 -N8 "$W/big.png" | tr -s ' ')
+[ "$dims" = " 0 0 2 0 0 0 2 0" ] || { echo "FAILED: the big map PNG is not 512 x 512 ($dims)"; exit 1; }
 echo ok
