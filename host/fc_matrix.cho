@@ -1,0 +1,142 @@
+edition 7;
+
+import std.buffer;
+import std.math;
+import nucleation;
+import vesicles;
+import adequacy;
+import forcecurve;
+import dfs;
+import bilayer;
+import fcmodels;
+
+// The discrepancy matrix and fingerprints for FORCE CURVES (docs/dynamics.md): data made under model i (rows: experiments of 16 curves, 24 of them, seeds 1 to 24) against what model j predicts (columns: 24
+// experiments, seeds 1001 to 1024). A prediction of this software; the models are stand-ins (sim/fcmodels.cho). The comparison is sim/adequacy.compare2.
+//   cancho run host/fc_matrix.cho sim/fcmodels.cho sim/adequacy.cho sim/vesicles.cho sim/nucleation.cho sim/bilayer.cho sim/forcecurve.cho sim/dfs.cho --std
+fn text[&h, &r](heap: &!h Heap, b: buffer.Buffer, s: &r [byte]) -> [heap] buffer.Buffer { return buffer.append(heap, b, s); }
+
+fn dec[&h](heap: &!h Heap, o: buffer.Buffer, v: float, places: int) -> [heap] buffer.Buffer {
+    var b = o;
+    var x = v;
+    if x < 0.0 { b = text(heap, b, "-"); x = 0.0 - x; }
+    var scale = 1;
+    var p = 0;
+    while p < places { scale = scale * 10; p = p + 1; }
+    let c = truncate(x * float_of(scale) + 0.5);
+    b = buffer.push_nat(heap, b, c / scale);
+    if places > 0 {
+        b = text(heap, b, ".");
+        var rest = c % scale;
+        var div = scale / 10;
+        while div > 0 {
+            b = buffer.push_nat(heap, b, rest / div);
+            rest = rest % div;
+            div = div / 10;
+        }
+    }
+    return b;
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(net); release(clock); release(signals); release(exec); release(args);
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 32768);
+        region r {
+            let nm = fcmodels.n_models();
+            let k = 24;
+            let gm = alloc_slice[r](nm * 8, 0.0);
+            let gv = alloc_slice[r](nm * 8, 0.0);
+            let pm = alloc_slice[r](nm * 8, 0.0);
+            let pv = alloc_slice[r](nm * 8, 0.0);
+            let am = alloc_slice[r](8, 0.0);
+            let av = alloc_slice[r](8, 0.0);
+            let bm = alloc_slice[r](8, 0.0);
+            let bv = alloc_slice[r](8, 0.0);
+            let z = alloc_slice[r](8, 0.0);
+            let dm = alloc_slice[r](nm * nm, 0.0);
+            let zz = alloc_slice[r](nm * nm * 8, 0.0);
+            var i = 0;
+            while i < nm {
+                fcmodels.ensemble(i, 16, k, 1, am, av);
+                fcmodels.ensemble(i, 16, k, 1001, bm, bv);
+                var j = 0;
+                while j < 8 { gm[i * 8 + j] = am[j]; gv[i * 8 + j] = av[j]; pm[i * 8 + j] = bm[j]; pv[i * 8 + j] = bv[j]; j = j + 1; }
+                i = i + 1;
+            }
+            // the means, for the reader
+            o = text(h, o, "ensemble means (24 experiments of 16 curves): [breakthrough nN, Hertz E MPa, model-1 E MPa, height nm, kappa_A mN/m, sd of breakthrough nN, share with a breakthrough]\n");
+            i = 0;
+            while i < nm {
+                o = text(h, o, "m");
+                o = buffer.push_nat(h, o, i);
+                o = text(h, o, ":");
+                var t = 0;
+                while t < 7 { o = text(h, o, " "); o = dec(h, o, pm[i * 8 + t], 2); t = t + 1; }
+                o = text(h, o, "\n");
+                i = i + 1;
+            }
+            i = 0;
+            while i < nm {
+                var j = 0;
+                while j < nm {
+                    var t = 0;
+                    while t < 8 { am[t] = gm[i * 8 + t]; av[t] = gv[i * 8 + t]; bm[t] = pm[j * 8 + t]; bv[t] = pv[j * 8 + t]; t = t + 1; }
+                    dm[i * nm + j] = adequacy.compare2(am, av, k, bm, bv, k, z);
+                    t = 0;
+                    while t < 8 { zz[(i * nm + j) * 8 + t] = z[t]; t = t + 1; }
+                    j = j + 1;
+                }
+                i = i + 1;
+            }
+            o = text(h, o, "\ndiscrepancy (about 1 = same model). rows: data made under; columns: model predicting\n");
+            o = text(h, o, "models: 0 fluid | 1 gel | 2 melted | 3 fluid, film law | 4 fluid at 10x speed | 5 mixture 70% fluid + 30% gel\n");
+            o = text(h, o, "         m0     m1     m2     m3     m4     m5   best\n");
+            i = 0;
+            while i < nm {
+                o = text(h, o, "data m");
+                o = buffer.push_nat(h, o, i);
+                o = text(h, o, " ");
+                var best = 0;
+                var j = 0;
+                while j < nm {
+                    o = text(h, o, " ");
+                    let v = dm[i * nm + j];
+                    if v < 100.0 { o = dec(h, o, v, 1); if v < 10.0 { o = text(h, o, " "); } } else { o = dec(h, o, v, 0); }
+                    o = text(h, o, " ");
+                    if v < dm[i * nm + best] { best = j; }
+                    j = j + 1;
+                }
+                o = text(h, o, "  m");
+                o = buffer.push_nat(h, o, best);
+                o = text(h, o, "\n");
+                i = i + 1;
+            }
+            o = text(h, o, "\nfingerprints, z of [breakthrough, Hertz E, model-1 E, height, kappa_A, sd of breakthrough, share found] (row model's data against the column model)\n");
+            i = 0;
+            while i < nm {
+                var j = 0;
+                while j < nm {
+                    if i < j {
+                        o = text(h, o, "m");
+                        o = buffer.push_nat(h, o, i);
+                        o = text(h, o, " vs m");
+                        o = buffer.push_nat(h, o, j);
+                        o = text(h, o, ":");
+                        var t = 0;
+                        while t < 7 { o = text(h, o, " "); o = dec(h, o, zz[(i * nm + j) * 8 + t], 0); t = t + 1; }
+                        o = text(h, o, "\n");
+                    }
+                    j = j + 1;
+                }
+                i = i + 1;
+            }
+        }
+        var code = 0;
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(heap);
+    release(io);
+    return 0;
+}

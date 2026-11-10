@@ -1,0 +1,127 @@
+edition 5;
+
+module fcmodels;
+
+// `fcmodels` -- the force-curve counterpart of sim/adequacy.cho (docs/dynamics.md): a library of models of a supported bilayer under the AFM tip, the summaries an experiment of n curves gives, and the
+// ensembles to compare with sim/adequacy.compare2. A PREDICTION OF THIS SOFTWARE: the models are the twin's stand-ins (sim/bilayer.cho: the rupture kinetics are free, the moduli are apparent values) and no
+// real curve has been through it.
+//
+// A MODEL is a bilayer phase, a contact law and a piezo speed. An EXPERIMENT is `n_curves` curves of one model (seeds from the experiment's own), each analysed as sim/forcecurve.slb_curve_nb analyses a
+// measured one (baseline of the first 40 points, contact at 8 noise levels, breakthrough = a force drop of at least 400 pN). Its SUMMARIES, seven numbers read from the curves alone:
+//   0 mean breakthrough force (nN)      1 mean Hertz modulus (MPa)       2 mean modulus of model 1 of forcecurve (the next of its four)   3 mean film height (nm)
+//   4 mean area compressibility kappa_a (mN/m)     5 spread (sd) of the breakthrough force across the curves (nN)     6 the share of curves in which a breakthrough was found
+// An ENSEMBLE is the mean and sample variance of each summary over k experiments, as in sim/adequacy.cho.
+
+import std.math;
+import forcecurve;
+import bilayer;
+
+pub fn n_models() -> [] int { return 6; }
+pub fn n_curves() -> [] int { return 16; }   // the default size of an experiment; `summary` and `ensemble` take it as a parameter
+
+// the models: 0 fluid, half-space law, 200 nm/s; 1 gel; 2 melted (above the transition); 3 fluid, film bonded to the substrate (Dimitriadis law); 4 fluid at 2,000 nm/s (ten times the loading rate);
+// 5 a mixture of fluid (70%) and gel (30%) domains, a curve taken on one or the other
+pub fn phase_of(id: int, curve: int, seed: int) -> [] int {
+    if id == 1 { return 1; }
+    if id == 2 { return 2; }
+    if id == 5 {
+        let u = bilayer.unit(curve, seed);
+        if u > 0.4 { return 0; }
+        return 1;
+    }
+    return 0;
+}
+
+pub fn law_of(id: int) -> [] int {
+    if id == 3 { return 1; }
+    return 0;
+}
+
+pub fn speed_of(id: int) -> [] float {
+    if id == 4 { return 2000.0; }
+    return 200.0;
+}
+
+// one curve of model `id` (seed s) analysed; returns the analysis
+fn one_curve[&a, &b, &c](id: int, curve: int, seed: int, z: &!a [float], d: &!b [float], gs: &!c [float]) -> [] forcecurve.Slb {
+    let ph = phase_of(id, curve, seed);
+    let s = bilayer.sample_of(ph, law_of(id));
+    let base = bilayer.lever_khadka();
+    let v = speed_of(id);
+    let l = bilayer.Lever { k: base.k, r: base.r, v: v, dt: 0.2 / v, sigma: 0.02, f_cap: base.f_cap, z0: base.z0, zc: base.zc };
+    let n = bilayer.generate(s, l, seed * 1000 + curve, z, d, gs, 720);
+    return forcecurve.slb_curve_nb(z, d, n, 40, l.k, l.r, s.nu, 8.0, 400.0, 4.5, 0.0);
+}
+
+// the seven summaries of one experiment of n_curves curves into out (8 floats)
+pub fn summary[&a](id: int, n: int, seed: int, out: &!a [float]) -> [] int {
+    region r {
+        let z = alloc_slice[r](720, 0.0);
+        let d = alloc_slice[r](720, 0.0);
+        let gs = alloc_slice[r](8, 0.0);
+        var sb = 0.0;
+        var sb2 = 0.0;
+        var se0 = 0.0;
+        var se1 = 0.0;
+        var sh = 0.0;
+        var sk = 0.0;
+        var ok = 0;
+        var c = 0;
+        while c < n {
+            let a = one_curve(id, c, seed, z, d, gs);
+            if a.why == 0 {
+                let b = a.breakthrough / 1000.0;
+                sb = sb + b;
+                sb2 = sb2 + b * b;
+                se0 = se0 + a.e0;
+                se1 = se1 + a.e1;
+                sh = sh + a.height;
+                sk = sk + a.kappa_a;
+                ok = ok + 1;
+            }
+            c = c + 1;
+        }
+        var j = 0;
+        while j < 8 { out[j] = 0.0; j = j + 1; }
+        if ok > 0 {
+            let f = float_of(ok);
+            out[0] = sb / f;
+            out[1] = se0 / f;
+            out[2] = se1 / f;
+            out[3] = sh / f;
+            out[4] = sk / f;
+            var v = sb2 / f - (sb / f) * (sb / f);
+            if v < 0.0 { v = 0.0; }
+            out[5] = math.sqrt(v);
+        }
+        out[6] = float_of(ok) / float_of(n);
+    }
+    return 0;
+}
+
+// the ensemble of model `id` over k experiments of n curves each from seed0: mean and variance of each summary (7 floats each)
+pub fn ensemble[&a, &b](id: int, n: int, k: int, seed0: int, mean: &!a [float], var_: &!b [float]) -> [] int {
+    region r {
+        let one = alloc_slice[r](8, 0.0);
+        var j = 0;
+        while j < 7 { mean[j] = 0.0; var_[j] = 0.0; j = j + 1; }
+        var i = 0;
+        while i < k {
+            summary(id, n, seed0 + i, one);
+            j = 0;
+            while j < 7 { mean[j] = mean[j] + one[j]; var_[j] = var_[j] + one[j] * one[j]; j = j + 1; }
+            i = i + 1;
+        }
+        j = 0;
+        while j < 7 {
+            let mu = mean[j] / float_of(k);
+            var v = 0.0;
+            if k > 1 { v = (var_[j] - float_of(k) * mu * mu) / float_of(k - 1); }
+            if v < 0.0 { v = 0.0; }
+            mean[j] = mu;
+            var_[j] = v;
+            j = j + 1;
+        }
+    }
+    return 0;
+}
