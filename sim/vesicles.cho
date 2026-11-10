@@ -142,7 +142,7 @@ pub fn analyse[&a, &b, &c, &d, &e, &f, &g, &h, &i2, &j2, &k2, &l2](m: Model, nv:
                                                                  np: int, px: &e [float], py: &f [float], pb: &g [float], seed: int,
                                                                  frame: &!h [float], prev: &!i2 [float], nm: &!j2 [float],
                                                                  dome: &!k2 [float], ev: &!l2 [float], min_area: int, near: float, cap_ev: int, max_cov: float) -> [] int {
-    // ev: 3 * cap_ev floats: time, near, chance of each event; dome: 2 * (frames + 1): the dome count then the patch area of each frame
+    // ev: 5 * cap_ev floats: time, near, chance, centroid y, centroid x of each event; dome: 2 * (frames + 1): the dome count then the patch area of each frame
     let npx = m.size * m.size;
     var nev = 0;
     var fno = 0;
@@ -232,6 +232,8 @@ pub fn analyse[&a, &b, &c, &d, &e, &f, &g, &h, &i2, &j2, &k2, &l2](m: Model, nv:
                     ev[nev] = t;
                     ev[cap_ev + nev] = float_of(hit);
                     ev[2 * cap_ev + nev] = chance;
+                    ev[3 * cap_ev + nev] = cy[k];
+                    ev[4 * cap_ev + nev] = cx[k];
                     nev = nev + 1;
                     k = k + 1;
                 }
@@ -273,7 +275,7 @@ pub fn study(m: Model, seed: int, min_area: int, near: float, max_cov: float) ->
         let prev = alloc_slice[r](npx, 0.0);
         let nm = alloc_slice[r](npx, 0.0);
         let dome = alloc_slice[r](2 * (m.frames + 1), 0.0);
-        let ev = alloc_slice[r](3 * 100, 0.0);
+        let ev = alloc_slice[r](5 * 100, 0.0);
         history(m, seed, float_of(m.frames) * m.tf, vx, vy, va, vg, px, py, pb, st);
         let ne = analyse(m, st[0], vx, vy, va, vg, st[1], px, py, pb, seed, frame, prev, nm, dome, ev, min_area, near, 100, max_cov);
         o_events = ne;
