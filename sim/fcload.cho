@@ -179,3 +179,74 @@ pub fn analyse[&a, &b](z: &a [float], d: &b [float], n: int, k: float, r: float)
     }
     return forcecurve.slb_curve_nb(z, d, n, 40, k, r, 0.5, 8.0, 400.0, 4.5, 0.0);
 }
+
+// ---- the spread of an experiment's summaries, measured from the experiment itself ----
+// A real set of curves is heterogeneous in a way the twin's is not, and the twin's narrow spread then rejects every model. The measured spread is the BOOTSTRAP of the curves: resample the n curves with
+// replacement `boots` times, recompute the seven summaries of each resample, and take their variance. It is the sampling variance of the experiment's summaries given its own heterogeneity (it says nothing
+// about drift between sessions or a tip that changed, which a single set cannot show).
+// per: n rows of 6 floats, one per curve: [analysed (1/0), breakthrough nN, Hertz E, model-1 E, height nm, kappa_A]. out: 8 floats, the variance of each of the seven summaries (the order of
+// sim/fcmodels.cho: mean breakthrough, mean E, mean model-1 E, mean height, mean kappa_A, sd of breakthrough, the share analysed). A resample with no analysed curve is skipped.
+pub fn bootstrap[&a, &b](per: &a [float], n: int, boots: int, seed: int, out: &!b [float]) -> [] int {
+    var j = 0;
+    while j < 8 { out[j] = 0.0; j = j + 1; }
+    if n < 2 { return 0; }
+    var used = 0;
+    region r {
+        let s1 = alloc_slice[r](8, 0.0);
+        let s2 = alloc_slice[r](8, 0.0);
+        var bi = 0;
+        while bi < boots {
+            var ok = 0;
+            var sb = 0.0;
+            var sb2 = 0.0;
+            var se0 = 0.0;
+            var se1 = 0.0;
+            var sh = 0.0;
+            var sk = 0.0;
+            var c = 0;
+            while c < n {
+                // a fixed hash of (resample, draw, seed) picks the curve
+                var u = math.sin(12.9898 * float_of(bi * 7919 + c) + 78.233 * float_of(seed) + 4.1414) * 43758.5453;
+                if u < 0.0 { u = 0.0 - u; }
+                u = u - math.floor(u);
+                var pick = truncate(u * float_of(n));
+                if pick > n - 1 { pick = n - 1; }
+                if per[pick * 6] > 0.5 {
+                    let b = per[pick * 6 + 1];
+                    sb = sb + b;
+                    sb2 = sb2 + b * b;
+                    se0 = se0 + per[pick * 6 + 2];
+                    se1 = se1 + per[pick * 6 + 3];
+                    sh = sh + per[pick * 6 + 4];
+                    sk = sk + per[pick * 6 + 5];
+                    ok = ok + 1;
+                }
+                c = c + 1;
+            }
+            if ok > 0 {
+                let f = float_of(ok);
+                var v5 = sb2 / f - (sb / f) * (sb / f);
+                if v5 < 0.0 { v5 = 0.0; }
+                s1[0] = sb / f; s1[1] = se0 / f; s1[2] = se1 / f; s1[3] = sh / f; s1[4] = sk / f; s1[5] = math.sqrt(v5); s1[6] = f / float_of(n);
+                j = 0;
+                while j < 7 { s2[j] = s2[j] + s1[j]; out[j] = out[j] + s1[j] * s1[j]; j = j + 1; }
+                used = used + 1;
+            }
+            bi = bi + 1;
+        }
+        if used > 1 {
+            j = 0;
+            while j < 7 {
+                let mu = s2[j] / float_of(used);
+                var v = (out[j] - float_of(used) * mu * mu) / float_of(used - 1);
+                if v < 0.0 { v = 0.0; }
+                out[j] = v;
+                j = j + 1;
+            }
+        } else {
+            j = 0;
+            while j < 8 { out[j] = 0.0; j = j + 1; }
+        }
+    }
+    return used;
+}

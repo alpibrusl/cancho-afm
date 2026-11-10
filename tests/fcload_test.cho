@@ -150,3 +150,44 @@ fn test_a_short_file_is_refused_with_a_tag() -> [] int {
     }
     return 0;
 }
+
+// the bootstrap of the summaries against the closed forms: the variance of a mean of n values is their sample variance over n, and the variance of a share p over n curves is p (1 - p) / n; 100 curves, 400
+// resamples, each within 25%
+fn test_the_bootstrap_spread_matches_the_closed_forms() -> [] int {
+    region r {
+        let per = alloc_slice[r](600, 0.0);
+        let out = alloc_slice[r](8, 0.0);
+        var sum = 0.0;
+        var sum2 = 0.0;
+        var ok = 0;
+        var i = 0;
+        while i < 100 {
+            var u = math.sin(12.9898 * float_of(i) + 4.1414) * 43758.5453;
+            if u < 0.0 { u = 0.0 - u; }
+            u = u - math.floor(u);
+            // one curve in five is not analysed
+            var good = 1.0;
+            if i % 5 == 0 { good = 0.0; }
+            per[i * 6] = good;
+            per[i * 6 + 1] = 10.0 * u;
+            per[i * 6 + 2] = 5.0;
+            per[i * 6 + 3] = 5.0;
+            per[i * 6 + 4] = 5.0;
+            per[i * 6 + 5] = 5.0;
+            if good > 0.5 { sum = sum + 10.0 * u; sum2 = sum2 + 100.0 * u * u; ok = ok + 1; }
+            i = i + 1;
+        }
+        let used = fcload.bootstrap(per, 100, 400, 7, out);
+        test.assert(used > 390);
+        let f = float_of(ok);
+        let mean = sum / f;
+        let sample_var = (sum2 / f - mean * mean) * f / (f - 1.0);
+        // the mean of the analysed curves of a resample is over a random number of them (about 80): close to the sample variance over 80
+        test.assert(near(out[0], sample_var / 80.0, 0.25 * sample_var / 80.0) == 1);
+        // a column that does not vary has no spread
+        test.assert(out[1] < 0.0000001);
+        // the share: p (1 - p) / n with p = 0.8, n = 100
+        test.assert(near(out[6], 0.8 * 0.2 / 100.0, 0.25 * 0.0016) == 1);
+    }
+    return 0;
+}

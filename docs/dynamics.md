@@ -478,7 +478,23 @@ The same check as for vesicle movies, applied to force curves, so that real curv
 * **A map.** One file is one curve; a force-volume map exported as one file per pixel works, but the pixel positions are not read, so no image is made.
 * **The lever.** The library is built for one lever (0.35 N/m, 32 nm). For another, `sim/bilayer.cho` has the second (`lever_et_thakafy`) and the library would have to be rebuilt for it; it was not.
 * **Authority** (`cancho authority host/fc_load.cho ...`): it performs `args`, `file_read`, `fs_read("")`, `heap` and `io_write`, and never touches the network, signals, other programs or foreign code. It reads the files it is given and writes only to its output.
-* **The real spread.** The verdict uses the twin's spread of each summary, which is much smaller than a real membrane's (the twin has no heterogeneity or drift); on real data a model will be rejected for the twin's narrowness unless the spread is replaced by the measured one. This is the first thing to check on the first real set.
+* **The real spread.** The verdict uses the twin's spread of each summary, which is much smaller than a real membrane's (the twin has no heterogeneity or drift); on real data a model will be rejected for the twin's narrowness unless the spread is replaced by the measured one. This is the first thing to check on the first real set. **The measured-spread option below does that, and has a cost.**
+
+### A measured spread (SPREAD = 1), and what it costs (2026-11-10; twin files only)
+
+`fc_load K R ZUNIT DUNIT SPREAD file...`: SPREAD 0 is the twin's own spread; **SPREAD 1 takes the spread of each summary from the experiment itself**: `fcload.bootstrap` resamples the curves with replacement (400 resamples, a fixed hash), recomputes the seven summaries of each, and the variance of those is added to the library's. It is the sampling variance of the summaries given the set's own heterogeneity. It needs at least 8 analysed curves (up to 200 files) and says so, falling back to the twin's spread, when it has fewer. It says nothing about drift between sessions or a tip that changed, which one set cannot show. `adequacy.compare_var` takes the variance directly. `tests/fcload_test.cho` checks the bootstrap against the closed forms (the variance of a mean of 100 values is their sample variance over the number analysed; of a share, p (1 - p) / n), each within 25%.
+
+**Found** (16 curves each; `fcfiles` made with `host/fc_export.cho`; the verdict lines, discrepancy of the closest and of the others):
+
+| set of files | twin's spread | measured spread |
+|---|---|---|
+| 16 curves made under the melted model | named m2, 0.9; others 10.9 to 45.0 | named m2, 1.0; others 29.0 to 181.4 |
+| 16 curves, a third each of fluid, gel and melted (**not in the library**) | **no model reproduces it** (closest m5, 4.8); sd of breakthrough z = 44 against m0 | **m4 "reproduces" it (2.3), also m0 (2.5), m5 (2.8)**; m1 4.9 and m2 4.0 are rejected, m3 59.9 |
+
+* **On a set made under one model the measured spread agrees with the twin's** (the same model is named, discrepancy 1.0 against 0.9) and the wrong models are rejected harder, because the bootstrap spread of a homogeneous set is small.
+* **On a heterogeneous set the measured spread does what it was added to do, and a second thing.** The twin's spread rejects every model, as it should for data no model describes; the measured spread, inflated by the set's own scatter (a third of the curves are gel, so the breakthrough force has a spread of about 4 nN), **accepts three models that are wrong, the fluid at both speeds among them.** The check has become permissive: its power to reject is spent on the heterogeneity. A discrepancy under 3 with a measured spread means "this set cannot rule the model out", not "the model describes it".
+* **So both must be read.** If the twin's spread rejects every model and the measured one accepts some, the data are more heterogeneous than the library; the sd of the breakthrough force in the fingerprint says it (still 5.7 to 6.1 standard errors for every model but the mixture, 0.8, which is the one that contains heterogeneity). The fingerprint, not the single number, is the result.
+* Not measured: the real spread of a real set, and how the verdict behaves with 400 curves from one real map.
 
 ## Using the twin to design experiments
 
