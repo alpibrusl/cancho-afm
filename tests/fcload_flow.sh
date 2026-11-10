@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 LIB="sim/fcmodels.cho sim/adequacy.cho sim/vesicles.cho sim/nucleation.cho sim/bilayer.cho sim/forcecurve.cho sim/dfs.cho"
-"$CANCHO" build host/fc_export.cho sim/fcmodels.cho sim/bilayer.cho sim/forcecurve.cho sim/dfs.cho --std -o "$W/exp" > /dev/null
+"$CANCHO" build host/fc_export.cho sim/domains.cho sim/fcmodels.cho sim/bilayer.cho sim/forcecurve.cho sim/dfs.cho --std -o "$W/exp" > /dev/null
 "$CANCHO" build host/fc_load.cho sim/fcload.cho $LIB --std -o "$W/load" > /dev/null
 for m in 1 2; do
     mkdir "$W/m$m"
