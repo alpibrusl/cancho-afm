@@ -422,14 +422,59 @@ fn test_window_zero_is_the_single_step_rule() -> [] int {
         let l = bilayer.lever_khadka();
         let n = bilayer.generate(s, l, 3, z, d, gs, 720);
         let a = forcecurve.slb_curve_nb(z, d, n, 40, l.k, l.r, 0.5, 8.0, 400.0, 4.5, 0.0);
-        let b = forcecurve.slb_curve_win(z, d, n, 40, l.k, l.r, 0.5, 8.0, 400.0, 4.5, 0.0, 0.0);
+        let dq = alloc_slice[r](720, 0);
+        let b = forcecurve.slb_curve_win(z, d, n, 40, l.k, l.r, 0.5, 8.0, 400.0, 4.5, 0.0, 0.0, dq);
         test.assert_eq(a.why, 0);
         test.assert(near(a.breakthrough, b.breakthrough, 0.0) == 1);
         test.assert(near(a.e0, b.e0, 0.0) == 1);
         test.assert(near(a.height, b.height, 0.0) == 1);
         // and with a window of 1 nm on this curve: the same breakthrough force
-        let c = forcecurve.slb_curve_win(z, d, n, 40, l.k, l.r, 0.5, 8.0, 400.0, 4.5, 0.0, 1.0);
+        let c = forcecurve.slb_curve_win(z, d, n, 40, l.k, l.r, 0.5, 8.0, 400.0, 4.5, 0.0, 1.0, dq);
         test.assert(near(c.breakthrough, a.breakthrough, 0.005 * a.breakthrough) == 1);
+    }
+    return 0;
+}
+
+// THE LINEAR SEARCH AGREES WITH THE QUADRATIC ONE EXACTLY: the same row pair, so the same breakthrough force, film height, modulus and compressibility, on twin curves of several seeds, for windows of 0.3, 1 and 3 nm,
+// and on the smoothed dense curve; and a z that rises falls back to the quadratic search without a trap
+fn test_the_linear_search_gives_the_quadratic_searchs_answer() -> [] int {
+    region r {
+        let z = alloc_slice[r](720, 0.0);
+        let d = alloc_slice[r](720, 0.0);
+        let gs = alloc_slice[r](8, 0.0);
+        let big = alloc_slice[r](720, 0);
+        let one = alloc_slice[r](1, 0);
+        let l = bilayer.lever_khadka();
+        var seed = 1;
+        while seed <= 6 {
+            let ph = seed % 3;
+            let s = bilayer.sample_of(ph, 0);
+            let n = bilayer.generate(s, l, seed, z, d, gs, 720);
+            var wi = 0;
+            while wi < 3 {
+                var w = 0.3;
+                if wi == 1 { w = 1.0; }
+                if wi == 2 { w = 3.0; }
+                let a = forcecurve.slb_curve_win(z, d, n, 40, l.k, l.r, 0.5, 8.0, 400.0, 4.5, 0.0, w, big);
+                let b = forcecurve.slb_curve_win(z, d, n, 40, l.k, l.r, 0.5, 8.0, 400.0, 4.5, 0.0, w, one);
+                test.assert_eq(a.why, b.why);
+                test.assert(near(a.breakthrough, b.breakthrough, 0.0) == 1);
+                test.assert(near(a.height, b.height, 0.0) == 1);
+                test.assert(near(a.height_a, b.height_a, 0.0) == 1);
+                test.assert(near(a.e0, b.e0, 0.0) == 1);
+                test.assert(near(a.kappa_a, b.kappa_a, 0.0) == 1);
+                wi = wi + 1;
+            }
+            seed = seed + 1;
+        }
+        // a z that rises after the contact: the linear search is not used, and nothing traps
+        let s = bilayer.sample_of(0, 0);
+        let n = bilayer.generate(s, l, 2, z, d, gs, 720);
+        z[n - 10] = z[n - 10] + 0.5;
+        let c = forcecurve.slb_curve_win(z, d, n, 40, l.k, l.r, 0.5, 8.0, 400.0, 4.5, 0.0, 1.0, big);
+        let e = forcecurve.slb_curve_win(z, d, n, 40, l.k, l.r, 0.5, 8.0, 400.0, 4.5, 0.0, 1.0, one);
+        test.assert_eq(c.why, e.why);
+        test.assert(near(c.breakthrough, e.breakthrough, 0.0) == 1);
     }
     return 0;
 }

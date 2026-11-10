@@ -540,10 +540,18 @@ The 32 by 32 limit came from two things, both removed: the per-pixel results liv
 **How the window was chosen, and how much it matters (one curve; not a study):** on that curve the breakthrough read is **the same, 5.360 nN, for windows of 0.3, 1, 3 and 10 nm, and a window of 0.1 nm still finds it**; the rupture is spread over 0.2 nm of travel here, and the film height read is 5.23 nm.
 
 **What it costs and risks:**
-* **Time:** the windowed search costs the rows times the rows in a window. A dense curve of 100,000 rows with 10,000 rows to a nanometre is 10^9 comparisons (seconds); a typical 2,000 to 50,000 rows is negligible. A smarter search (a sliding minimum) is possible and was not needed.
+* **Time:** the windowed search first cost the rows times the rows in a window (CORRECTED the same day: a sliding minimum was then built, next section, and the search is now linear in the rows; the quadratic one is kept as the reference and for a z that rises).
 * **A larger window can only find larger drops:** it can catch a drop that is not a rupture (a slow relaxation, a tip-sample jump), and 400 pN over a window of nanometres is easier to reach than 400 pN in one row, so the number of curves refused as "no breakthrough" will fall and the number of false breakthroughs may rise. **How many on a real set is not known**, and this is the thing to compare on the first real data: read the same curves with WINDOW 0 and with WINDOW 10, and look at the curves where they disagree.
 * **A window of piezo travel is not a window of time.** At a different approach speed the same travel is a different time, and a rupture's smear is set by the detector's bandwidth, which is time; if the speed varies across a set, so does the right window. The twin has one speed in the curve library (two in the 10x model) and does not test this.
 * The rule is mine, not nanoindent's: **its number is not the oracle's** where the two differ; the oracle's remains available (window 0).
+
+### The windowed rule in linear time, a sliding minimum (2026-11-10)
+
+**Built:** in `forcecurve.slb_curve_win` the windowed search keeps a queue of row numbers whose deflections increase, so the front is the minimum deflection over the rows within `window_nm` after row i; every row enters and leaves the queue once, and the search is **linear in the rows**. Equal deflections keep the earlier row, as the quadratic search does, so **both give the same row pair**. The scratch is `dq`, one int a row, supplied by the caller (`fcload.load_and_analyse` allocates it on the heap only when a window is used); a `dq` shorter than the rows, or a z that rises anywhere after the contact (the window's end would no longer move forward), uses the quadratic search, which is kept as the reference. `slb_curve_win` gained the parameter `dq`; `slb_curve_nb` (window 0) does not use it.
+
+**Checked** (`tests/fcload_test.cho`, 10 tests): the linear and the quadratic search give **exactly the same breakthrough force, film height, height A, modulus and compressibility** (differences of 0.0) on twin curves of six seeds and three phases for windows of 0.3, 1 and 3 nm; a curve with a z that rises falls back without a trap; the 11 golden tests of `tests/forcecurve_test.cho` and the earlier loader tests pass unchanged.
+
+**Measured** (a twin curve at 0.0002 nm a row, 251,653 rows, a window of 1 nm = 5,000 rows, one run each, not a benchmark): **the analysis took about 0.86 s quadratic and under 0.01 s linear** (1.00 s and 0.146 s in all, of which 0.14 s is making the curve), and both read the same breakthrough, 5.391 nN. At the library's own density (300 rows) the difference does not matter; it matters for the dense curves a fast detector gives.
 
 ## Using the twin to design experiments
 

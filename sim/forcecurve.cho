@@ -312,7 +312,7 @@ pub fn slb_curve[&a, &b](z: &a [float], defl: &b [float], n: int, k: float, r: f
 // slb_curve with the baseline window given: the first `nb` points are the baseline (median and noise of the deflection). nanoindent takes 30% of the curve, which is wrong when contact begins before
 // that: the window then holds the start of the indentation, the noise estimate and with it the contact threshold grow, the contact point comes late and the modulus is over-read (found with the twin's
 // bilayer curves, whose approach is 25% of the curve: a 10 MPa gel read 150 MPa). Give nb at the last point you trust to be before contact.
-pub fn slb_curve_win[&a, &b](z: &a [float], defl: &b [float], n: int, nb: int, k: float, r: float, nu: float, contact_sigma: float, min_drop: float, film_thickness: float, fit_max_delta: float, window_nm: float) -> [] Slb {
+pub fn slb_curve_win[&a, &b, &c](z: &a [float], defl: &b [float], n: int, nb: int, k: float, r: float, nu: float, contact_sigma: float, min_drop: float, film_thickness: float, fit_max_delta: float, window_nm: float, dq: &!c [int]) -> [] Slb {
     if n < 20 { return slb_refused(1); }
     if nb < 5 || nb > n - 4 { return slb_refused(3); }
     // far to near: z non-increasing for all but at most 5% of the steps
@@ -351,15 +351,44 @@ pub fn slb_curve_win[&a, &b](z: &a [float], defl: &b [float], n: int, nb: int, k
         }
         aj = bi + 1;
     } else {
-        i = ci;
-        while i < n - 1 {
-            var j = i + 1;
-            while j < n && z[i] - z[j] <= window_nm {
-                let step = k * (defl[j] - defl[i]) * 1000.0;
-                if step < worst { worst = step; bi = i; aj = j; }
-                j = j + 1;
+        // z must not rise anywhere from the contact on for the linear search (a rise would make the window's end non-monotone); and `dq` (n ints, the caller's scratch) must be there
+        var mono = 1;
+        var q = ci;
+        while q < n - 1 { if z[q + 1] > z[q] { mono = 0; } q = q + 1; }
+        if mono == 1 && len(dq) >= n {
+            // LINEAR: a sliding minimum of the deflection over the rows within window_nm after row i, kept as a queue of row numbers whose deflections increase (the front is the minimum; equal values keep the
+            // earlier row, as the quadratic search does, so the two give the same row pair). Every row enters and leaves the queue once.
+            var head = 0;
+            var tail = 0;
+            var nxt = ci + 1;
+            i = ci;
+            while i < n - 1 {
+                while head < tail && dq[head] <= i { head = head + 1; }
+                if nxt <= i { nxt = i + 1; }
+                while nxt < n && z[i] - z[nxt] <= window_nm {
+                    while head < tail && defl[dq[tail - 1]] > defl[nxt] { tail = tail - 1; }
+                    dq[tail] = nxt;
+                    tail = tail + 1;
+                    nxt = nxt + 1;
+                }
+                if head < tail {
+                    let step = k * (defl[dq[head]] - defl[i]) * 1000.0;
+                    if step < worst { worst = step; bi = i; aj = dq[head]; }
+                }
+                i = i + 1;
             }
-            i = i + 1;
+        } else {
+            // QUADRATIC (also the reference the linear search is tested against): every row against every row of its window
+            i = ci;
+            while i < n - 1 {
+                var j = i + 1;
+                while j < n && z[i] - z[j] <= window_nm {
+                    let step = k * (defl[j] - defl[i]) * 1000.0;
+                    if step < worst { worst = step; bi = i; aj = j; }
+                    j = j + 1;
+                }
+                i = i + 1;
+            }
         }
     }
     let drop = 0.0 - worst;
@@ -481,7 +510,12 @@ pub fn slb_curve_win[&a, &b](z: &a [float], defl: &b [float], n: int, nb: int, k
     return Slb { why: 0, breakthrough: fb, height: height, height_a: height_a, contact_z: zc, e0: e0, e1: e1, e2: e2, e3: e3, kappa_a: kappa, n_elastic: ne };
 }
 
-// slb_curve_win with the single-step rule: nanoindent's, as ported
+// slb_curve_win with the single-step rule: nanoindent's, as ported (the window is 0, so the scratch is not used)
 pub fn slb_curve_nb[&a, &b](z: &a [float], defl: &b [float], n: int, nb: int, k: float, r: float, nu: float, contact_sigma: float, min_drop: float, film_thickness: float, fit_max_delta: float) -> [] Slb {
-    return slb_curve_win(z, defl, n, nb, k, r, nu, contact_sigma, min_drop, film_thickness, fit_max_delta, 0.0);
+    var res_slb = slb_refused(1);
+    region r_dq {
+        let dq = alloc_slice[r_dq](1, 0);
+        res_slb = slb_curve_win(z, defl, n, nb, k, r, nu, contact_sigma, min_drop, film_thickness, fit_max_delta, 0.0, dq);
+    }
+    return res_slb;
 }
