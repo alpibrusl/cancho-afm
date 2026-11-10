@@ -62,7 +62,7 @@ fn frac(x: float) -> [] float {
 }
 
 // a uniform in (-1, 1) from an index and a seed (a fixed hash)
-fn unit(i: int, seed: int) -> [] float {
+pub fn unit(i: int, seed: int) -> [] float {
     return 2.0 * frac(math.sin(12.9898 * float_of(i * 7 + seed * 131) + 78.233) * 43758.5453) - 1.0;
 }
 

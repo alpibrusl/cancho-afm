@@ -428,6 +428,40 @@ Nine PDFs were read after the search-snippet and blocked-fetch rounds above. **N
 * **The observed-spread column has an artefact at k = 2:** the true model is "kept" in 31 of 36 (5 false rejections) and the mean discrepancy to the true model is 1.8, not 1, because a spread estimated from two movies is itself very noisy. Using the twin's spread (the model's own variance) removes it (36 of 36 kept at every k). **So for small experiments the spread should come from the model and be checked separately, not estimated from the few movies.**
 * The numbers are for these six stand-in models and seven summaries; thirty-six experiments per size means a percentage is good to about 5 to 15 points; the reference ensemble of 24 has its own noise; nothing real has been through it.
 
+## Model adequacy for force curves (2026-11-10; predictions of this software, stand-in models)
+
+The same check as for vesicle movies, applied to force curves, so that real curves (Lorena Redondo-Morata's, or the nanoindent 400-curve gel map when it is found) can be the first real test. **Built:** `sim/fcmodels.cho` (six models, the summaries of an experiment of n curves read from the curves alone, ensembles), `host/fc_matrix.cho`, `host/fc_blur.cho`, `tests/fcmodels_test.cho`. The comparison is `adequacy.compare2`. Models: 0 fluid bilayer, half-space law, 200 nm/s; 1 gel; 2 melted; 3 fluid with the bonded-film law; 4 fluid at 2,000 nm/s (ten times the loading rate); 5 a mixture of 70% fluid and 30% gel domains (a curve is taken on one or the other). Summaries of an experiment: the mean breakthrough force, the mean Hertz modulus, the mean modulus of the next model of `forcecurve`, the mean film height, the mean area compressibility kappa_A, the spread of the breakthrough force, and the share of curves in which a breakthrough was found. Every curve is analysed as `forcecurve.slb_curve_nb` analyses a measured one.
+
+**Found** (`cancho run host/fc_matrix.cho ...`, 1 s; 24 experiments of 16 curves per model, data from seeds 1 to 24, predictions from seeds 1001 to 1024):
+
+| model | breakthrough nN | Hertz E MPa | height nm | kappa_A mN/m | sd of breakthrough nN |
+|---|---|---|---|---|---|
+| 0 fluid | 4.84 | 11.6 | 5.05 | 4.8 | 0.50 |
+| 1 gel | 12.39 | 17.0 | 7.30 | 7.3 | 1.27 |
+| 2 melted | 3.59 | 8.8 | 4.67 | 3.2 | 0.38 |
+| 3 fluid, film law | 5.07 | 61.3 | 5.12 | 65.5 | 0.52 |
+| 4 fluid, 10x speed | 5.96 | 11.6 | 5.38 | 4.5 | 0.63 |
+| 5 mixture | 10.05 | 15.3 | 6.61 | 6.5 | 3.52 |
+
+* **The diagonal of the discrepancy matrix is 0.7 to 1.1 and every off-diagonal is at least 15** (up to 198): the models are far apart in this twin. The pairs closest to each other are the fluid at the two speeds (15 and 17), the gel against the mixture (15 and 17), and the mixture against fluid or gel (26 to 27).
+* **The fingerprints separate three causes cleanly.** A tenfold loading rate (m0 against m4) moves the breakthrough force (z = -28) and **not the Hertz modulus (0)**, the signature of a rate effect on the rupture only (the direction dynamic force spectroscopy predicts). A mixture (m0 against m5) is the only one that moves the spread of the breakthrough force by tens of standard errors. Phase (fluid against gel against melted) moves everything together in the order breakthrough, modulus, height, kappa_A.
+* **The seven summaries are not independent:** the breakthrough, height and kappa_A move together with the phase, so the discrepancy (a root mean square over the seven) counts one cause several times and is larger than a count of independent differences would be.
+* **The bonded-film model reads a Hertz modulus five times the half-space's (61 against 12 MPa) and a kappa_A 14 times larger.** That is not the same membrane read differently: its film moduli (0.858 MPa and the others) were set so that a Hertz fit of a 20 nm tip reads 6 MPa, and here the tip is the 32 nm of Khadka et al. A model with the wrong tip for its stand-in moduli is a different model; a real comparison must fix the tip first.
+
+**How few curves tell the models apart** (`cancho run host/fc_blur.cho ...`, 1.5 s; one experiment of n curves against a reference of 24 experiments of n curves; six experiments per model, 36 per size):
+
+| curves per experiment | named correctly | true model kept (d < 3) | wrong models rejected (of 180) |
+|---|---|---|---|
+| 1 | 24 of 36 (67%) | 36 | 139 |
+| 2 | 28 (78%) | 36 | 137 |
+| 4 | 36 (100%) | 36 | 160 |
+| 8 | 36 | 36 | 170 |
+| 16 | 36 | 36 | 180 |
+
+* One curve names the model in two cases of three; the mistakes are a gel curve taken for the mixture (the mixture contains gel curves), a fluid curve for the mixture or for the faster fluid, and so on. Four curves name it every time; sixteen reject every wrong model.
+* **These numbers are far too optimistic for real curves, and the reason is specific:** the twin's curves differ from each other only by the thermal rupture (a hash-driven hazard) and the 0.02 nm deflection noise. A real membrane has heterogeneity, a tip that changes, drift, and the curve-to-curve scatter of the modulus that nanoindent's own 400-curve map shows; the real spread is probably many times larger, and with it the number of curves needed. The twin's spread is the least trustworthy thing in this table, and the first real data should be used to replace it (the spread of each summary across real experiments, not the twin's).
+* Not measured: models closer together than these (a gel at 25 against 20 C, a fluid at two tip radii), the effect of a wrong tip radius or stiffness on the verdict, and any real curve.
+
 ## Using the twin to design experiments
 
 The twin has answered design questions of three kinds so far; each is a number the twin computed, with the caveat that its parameters are stand-ins unless a paper supplies them:
