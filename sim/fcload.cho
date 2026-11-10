@@ -176,16 +176,21 @@ pub fn approach[&a, &b](z: &!a [float], d: &!b [float], n: int) -> [] int {
 // the analysis of an oriented approach (n points): forcecurve.slb_curve_nb with the settings sim/fcmodels.cho uses, so that a real curve and a library curve are read the same way: 40 baseline points,
 // contact at 8 noise levels, a breakthrough of at least 400 pN, a film of 4.5 nm; refused (tag 9) when there are fewer than min_points
 pub fn analyse[&a, &b](z: &a [float], d: &b [float], n: int, k: float, r: float) -> [] forcecurve.Slb {
-    return analyse_w(z, d, n, k, r, 0.0);
+    var out = forcecurve.Slb { why: 9, breakthrough: 0.0, height: 0.0, height_a: 0.0, contact_z: 0.0, e0: 0.0, e1: 0.0, e2: 0.0, e3: 0.0, kappa_a: 0.0, n_elastic: 0 };
+    region r_dq {
+        let dq = alloc_slice[r_dq](1, 0);
+        out = analyse_w(z, d, n, k, r, 0.0, dq);
+    }
+    return out;
 }
 
 // analyse with the breakthrough rule chosen: window_nm 0 is nanoindent's single-step drop between consecutive rows; window_nm > 0 the largest drop within that much piezo travel (forcecurve.slb_curve_win),
-// which does not depend on the row spacing
-pub fn analyse_w[&a, &b](z: &a [float], d: &b [float], n: int, k: float, r: float, window_nm: float) -> [] forcecurve.Slb {
+// which does not depend on the row spacing (`dq`: n ints of scratch for the linear search; a shorter slice makes it the quadratic one)
+pub fn analyse_w[&a, &b, &c](z: &a [float], d: &b [float], n: int, k: float, r: float, window_nm: float, dq: &!c [int]) -> [] forcecurve.Slb {
     if n < min_points() {
         return forcecurve.Slb { why: 9, breakthrough: 0.0, height: 0.0, height_a: 0.0, contact_z: 0.0, e0: 0.0, e1: 0.0, e2: 0.0, e3: 0.0, kappa_a: 0.0, n_elastic: 0 };
     }
-    return forcecurve.slb_curve_win(z, d, n, 40, k, r, 0.5, 8.0, 400.0, 4.5, 0.0, window_nm);
+    return forcecurve.slb_curve_win(z, d, n, 40, k, r, 0.5, 8.0, 400.0, 4.5, 0.0, window_nm, dq);
 }
 
 // ---- the spread of an experiment's summaries, measured from the experiment itself ----
@@ -273,17 +278,25 @@ pub fn load_and_analyse[&hp, &t](heap: &!hp Heap, text: &t [byte], thin: int, zs
     let cap = (rows + stride - 1) / stride + 1;
     let zb = box_slice(heap, cap, 0.0);
     let db = box_slice(heap, cap, 0.0);
+    // scratch for the windowed search (one int a row), only when the window is used
+    var dq_n = 1;
+    if window_nm > 0.0 { dq_n = cap; }
+    let qb = box_slice(heap, dq_n, 0);
     var out = Loaded { a: forcecurve.Slb { why: 9, breakthrough: 0.0, height: 0.0, height_a: 0.0, contact_z: 0.0, e0: 0.0, e1: 0.0, e2: 0.0, e3: 0.0, kappa_a: 0.0, n_elastic: 0 }, rows: rows, kept: 0, approach: 0, stride: stride };
     borrow mut zb as &!zw in {
         borrow mut db as &!dw in {
-            let z = contents(zw);
-            let d = contents(dw);
-            let n_in = read_rows(text, stride, zscale, dscale, z, d, cap);
-            let na = approach(z, d, n_in);
-            let a = analyse_w(z, d, na, k, r, window_nm);
-            out = Loaded { a: a, rows: rows, kept: n_in, approach: na, stride: stride };
+            borrow mut qb as &!qw in {
+                let z = contents(zw);
+                let d = contents(dw);
+                let dq = contents(qw);
+                let n_in = read_rows(text, stride, zscale, dscale, z, d, cap);
+                let na = approach(z, d, n_in);
+                let a = analyse_w(z, d, na, k, r, window_nm, dq);
+                out = Loaded { a: a, rows: rows, kept: n_in, approach: na, stride: stride };
+            }
         }
     }
+    unbox_slice(heap, qb);
     unbox_slice(heap, db);
     unbox_slice(heap, zb);
     return out;
