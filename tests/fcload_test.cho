@@ -191,3 +191,134 @@ fn test_the_bootstrap_spread_matches_the_closed_forms() -> [] int {
     }
     return 0;
 }
+
+// ---- dense curves: nothing thinned ----
+
+fn dense_lever() -> [] bilayer.Lever {
+    let base = bilayer.lever_khadka();
+    // 20 times the rows: 0.01 nm a row instead of 0.2
+    return bilayer.Lever { k: base.k, r: base.r, v: 200.0, dt: 0.01 / 200.0, sigma: 0.02, f_cap: base.f_cap, z0: base.z0, zc: base.zc };
+}
+
+// a dense twin curve (20 times the usual rows) is read whole, and gives the breakthrough the generator recorded and a modulus within 5% of the same curve read at the usual spacing
+fn test_a_dense_curve_is_read_whole_and_agrees_with_the_coarse_one[&h](heap: &!h Heap) -> [heap] int {
+    let cap = 20000;
+    let zb = box_slice(heap, cap, 0.0);
+    let db = box_slice(heap, cap, 0.0);
+    let gsb = box_slice(heap, 8, 0.0);
+    let tb = box_slice(heap, cap * 24, byte_of(0));
+    var rows = 0;
+    var truth = 0.0;
+    var kept = 0;
+    var why = 9;
+    var bt = 0.0;
+    var e_dense = 0.0;
+    var e_thin = 0.0;
+    var thin_kept = 0;
+    borrow mut zb as &!zw in { borrow mut db as &!dw in { borrow mut gsb as &!gw in { borrow mut tb as &!tw in {
+        let z = contents(zw);
+        let d = contents(dw);
+        let gs = contents(gw);
+        let text = contents(tw);
+        let s = bilayer.sample_of(0, 0);
+        let l = dense_lever();
+        rows = bilayer.generate(s, l, 3, z, d, gs, cap);
+        truth = gs[6];
+        var p = put_text(text, 0, "Z (nm),Deflection (nm)\n");
+        var i = 0;
+        while i < rows {
+            p = put_float(text, p, 200.0 - z[i]);
+            text[p] = byte_of(44);
+            p = p + 1;
+            p = put_float(text, p, d[i]);
+            text[p] = byte_of(10);
+            p = p + 1;
+            i = i + 1;
+        }
+        let whole = text[0..p];
+        let ld = fcload.load_and_analyse(heap, whole, 1, 1.0, 1.0, l.k, l.r);
+        kept = ld.kept;
+        why = ld.a.why;
+        bt = ld.a.breakthrough;
+        e_dense = ld.a.e0;
+        let lt = fcload.load_and_analyse(heap, whole, 20, 1.0, 1.0, l.k, l.r);
+        thin_kept = lt.kept;
+        e_thin = lt.a.e0;
+    } } } }
+    unbox_slice(heap, tb);
+    unbox_slice(heap, gsb);
+    unbox_slice(heap, db);
+    unbox_slice(heap, zb);
+    test.assert(rows > 4000);
+    test.assert_eq(kept, rows);
+    test.assert_eq(why, 0);
+    test.assert(near(bt, truth, 0.002 * truth) == 1);
+    test.assert(thin_kept < rows / 19);
+    // the modulus of the dense curve against the thinned one: within 5%
+    test.assert(near(e_dense, e_thin, 0.05 * e_thin) == 1);
+    return 0;
+}
+
+// THE CATCH OF NOT THINNING. The breakthrough is the largest SINGLE-STEP force drop of at least 400 pN (nanoindent's rule). A real detector has a finite bandwidth, so a rupture is spread over several rows,
+// and at a dense spacing no one row drops by 400 pN. The twin's rupture is instantaneous at any spacing, so to show it the deflection is smoothed here by a 20-row boxcar (a detector bandwidth of 20 rows):
+// read whole, the curve is refused with tag 4 (no breakthrough); thinned to every 20th row it is analysed and gives the breakthrough within 20% of the generator's.
+fn test_a_bandwidth_limited_dense_curve_needs_thinning_for_the_single_step_rule[&h](heap: &!h Heap) -> [heap] int {
+    let cap = 20000;
+    let zb = box_slice(heap, cap, 0.0);
+    let db = box_slice(heap, cap, 0.0);
+    let sb = box_slice(heap, cap, 0.0);
+    let gsb = box_slice(heap, 8, 0.0);
+    let tb = box_slice(heap, cap * 24, byte_of(0));
+    var rows = 0;
+    var truth = 0.0;
+    var why_whole = 0;
+    var why_thin = 9;
+    var bt_thin = 0.0;
+    borrow mut zb as &!zw in { borrow mut db as &!dw in { borrow mut sb as &!sw in { borrow mut gsb as &!gw in { borrow mut tb as &!tw in {
+        let z = contents(zw);
+        let d = contents(dw);
+        let sm = contents(sw);
+        let gs = contents(gw);
+        let text = contents(tw);
+        let s = bilayer.sample_of(0, 0);
+        let l = dense_lever();
+        rows = bilayer.generate(s, l, 3, z, d, gs, cap);
+        truth = gs[6];
+        // causal boxcar of 20 rows
+        var i = 0;
+        while i < rows {
+            var sum = 0.0;
+            var c = 0;
+            var j = i;
+            while j >= 0 && c < 20 { sum = sum + d[j]; c = c + 1; j = j - 1; }
+            sm[i] = sum / float_of(c);
+            i = i + 1;
+        }
+        var p = put_text(text, 0, "Z (nm),Deflection (nm)\n");
+        i = 0;
+        while i < rows {
+            p = put_float(text, p, 200.0 - z[i]);
+            text[p] = byte_of(44);
+            p = p + 1;
+            p = put_float(text, p, sm[i]);
+            text[p] = byte_of(10);
+            p = p + 1;
+            i = i + 1;
+        }
+        let whole = text[0..p];
+        let a = fcload.load_and_analyse(heap, whole, 1, 1.0, 1.0, l.k, l.r);
+        why_whole = a.a.why;
+        let b = fcload.load_and_analyse(heap, whole, 20, 1.0, 1.0, l.k, l.r);
+        why_thin = b.a.why;
+        bt_thin = b.a.breakthrough;
+    } } } } }
+    unbox_slice(heap, tb);
+    unbox_slice(heap, gsb);
+    unbox_slice(heap, sb);
+    unbox_slice(heap, db);
+    unbox_slice(heap, zb);
+    test.assert_eq(why_whole, 4);
+    test.assert_eq(why_thin, 0);
+    test.assert(near(bt_thin, truth, 0.2 * truth) == 1);
+    return 0;
+}

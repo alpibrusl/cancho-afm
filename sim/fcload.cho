@@ -10,16 +10,18 @@ module fcload;
 //   1. every line is split on commas, tabs, semicolons and spaces; the first two fields are read as numbers (sign, digits, a point, digits, an exponent); a line where either is not a number (a header, a
 //      blank line, a unit line) is skipped;
 //   2. z and deflection are multiplied to nanometres (`zscale`, `dscale`: 1 for nm, 1e9 for m, 1e3 for um);
-//   3. if there are more rows than `cap`, every stride-th row is kept (stride = ceil(rows / cap)): a thinned curve has less detail, so the stride is returned and the host reports it;
+//   3. NO THINNING by default (`thin` 1): every row is kept, on the heap, whatever the length, up to `max_rows()` (4,000,000: a longer file is refused, tag 10). `thin` n > 1 keeps every nth row (see below for why
+//      you may want that: the breakthrough rule is a SINGLE-STEP force drop, so the rows' spacing matters);
 //   4. ORIENTATION as nanoindent's `to_force_indentation`: if z and the deflection are negatively correlated, z is flipped, so that pushing is z increasing and the deflection rising;
 //   5. the APPROACH is the rows up to the largest oriented z, assuming the file starts with the approach (a retract before it would be read as the approach): the rest (the retract) is dropped;
 //   6. z is then written as -(oriented z), because forcecurve.slb_curve_nb takes z decreasing toward the sample.
-// A file with fewer than `min_points` approach rows is refused, tag 9 (forcecurve's own tags are 1 to 6).
+// A file with fewer than `min_points` approach rows is refused, tag 9, one with more than `max_rows()` rows tag 10 (forcecurve's own tags are 1 to 6).
 
 import std.math;
 import forcecurve;
 
 pub fn min_points() -> [] int { return 80; }
+pub fn max_rows() -> [] int { return 4000000; }
 
 pub struct Tok { ok: int, v: float, end: int }
 
@@ -249,4 +251,34 @@ pub fn bootstrap[&a, &b](per: &a [float], n: int, boots: int, seed: int, out: &!
         }
     }
     return used;
+}
+
+// ---- a whole file, any length ----
+pub struct Loaded { a: forcecurve.Slb, rows: int, kept: int, approach: int, stride: int }
+
+// Everything a host does with one curve's text: count the rows, keep every `thin`-th (1 = all) on the heap, orient and cut at the turn-around, analyse. The heap arrays are freed before it returns.
+pub fn load_and_analyse[&hp, &t](heap: &!hp Heap, text: &t [byte], thin: int, zscale: float, dscale: float, k: float, r: float) -> [heap] Loaded {
+    let rows = count_rows(text);
+    var stride = thin;
+    if stride < 1 { stride = 1; }
+    if rows > max_rows() {
+        return Loaded { a: forcecurve.Slb { why: 10, breakthrough: 0.0, height: 0.0, height_a: 0.0, contact_z: 0.0, e0: 0.0, e1: 0.0, e2: 0.0, e3: 0.0, kappa_a: 0.0, n_elastic: 0 }, rows: rows, kept: 0, approach: 0, stride: stride };
+    }
+    let cap = (rows + stride - 1) / stride + 1;
+    let zb = box_slice(heap, cap, 0.0);
+    let db = box_slice(heap, cap, 0.0);
+    var out = Loaded { a: forcecurve.Slb { why: 9, breakthrough: 0.0, height: 0.0, height_a: 0.0, contact_z: 0.0, e0: 0.0, e1: 0.0, e2: 0.0, e3: 0.0, kappa_a: 0.0, n_elastic: 0 }, rows: rows, kept: 0, approach: 0, stride: stride };
+    borrow mut zb as &!zw in {
+        borrow mut db as &!dw in {
+            let z = contents(zw);
+            let d = contents(dw);
+            let n_in = read_rows(text, stride, zscale, dscale, z, d, cap);
+            let na = approach(z, d, n_in);
+            let a = analyse(z, d, na, k, r);
+            out = Loaded { a: a, rows: rows, kept: n_in, approach: na, stride: stride };
+        }
+    }
+    unbox_slice(heap, db);
+    unbox_slice(heap, zb);
+    return out;
 }

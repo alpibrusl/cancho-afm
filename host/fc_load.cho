@@ -15,9 +15,10 @@ import fcload;
 // are, summarised as one experiment of n curves, and compared with each model of the library (sim/fcmodels.cho) the way sim/adequacy does it. NOT TESTED ON ANY REAL FILE. The library's lever is the
 // 0.35 N/m, 32 nm tip of Khadka et al. 2021 and its sample a supported bilayer; give the lever you used and read the warning it prints when it differs.
 //   cancho build host/fc_load.cho sim/fcload.cho sim/fcmodels.cho sim/adequacy.cho sim/vesicles.cho sim/nucleation.cho sim/bilayer.cho sim/forcecurve.cho sim/dfs.cho --std -o fc_load
-//   ./fc_load K R ZUNIT DUNIT SPREAD file1 file2 ...
+//   ./fc_load K R ZUNIT DUNIT SPREAD THIN file1 file2 ...
 //     K      the spring constant in thousandths of N/m (350 = 0.35 N/m)        R   the tip radius in tenths of nm (320 = 32 nm)
 //     ZUNIT, DUNIT   the units of the two columns: 0 nm, 1 m, 2 um
+//     THIN   keep every THIN-th row of each curve (0 or 1: every row, no thinning). See sim/fcload.cho for why you may want to thin: the breakthrough is a single-step force drop
 //     SPREAD  0: the spread of each summary is the twin's own (narrow: it has no heterogeneity or drift); 1: MEASURED, a bootstrap of this experiment's curves (sim/fcload.bootstrap), plus the library's,
 //             which is what to use on real data (needs 8 analysed curves, else it falls back to 0 and says so)
 // Prints one line per file (the tag of a refusal, or the breakthrough force, modulus, height), the experiment's summaries, and the discrepancy to each model of the library (about 1 = it reproduces the
@@ -111,22 +112,24 @@ fn main(world: World) -> [] int {
     var du = 0;
     var nfiles = 0;
     var spread = 0;
+    var thin = 1;
     var usage = 0;
     borrow args as &g in {
-        if arg_count(g) < 7 { usage = 1; } else {
+        if arg_count(g) < 8 { usage = 1; } else {
             k_milli = number_of(arg(g, 1));
             r_tenth = number_of(arg(g, 2));
             zu = number_of(arg(g, 3));
             du = number_of(arg(g, 4));
             spread = number_of(arg(g, 5));
-            nfiles = arg_count(g) - 6;
+            thin = number_of(arg(g, 6));
+            nfiles = arg_count(g) - 7;
         }
     }
     var out_text = 0;
     borrow mut heap as &!h in {
         var o = buffer.empty(h, 65536);
         if usage == 1 {
-            o = text(h, o, "usage: fc_load K R ZUNIT DUNIT SPREAD file...   (K in thousandths N/m, R in tenths of nm, units 0 nm 1 m 2 um, SPREAD 0 twin 1 measured)\n");
+            o = text(h, o, "usage: fc_load K R ZUNIT DUNIT SPREAD THIN file...   (K in thousandths N/m, R in tenths of nm, units 0 nm 1 m 2 um, SPREAD 0 twin 1 measured)\n");
         } else {
             let k = float_of(k_milli) / 1000.0;
             let rad = float_of(r_tenth) / 10.0;
@@ -134,8 +137,6 @@ fn main(world: World) -> [] int {
                 o = text(h, o, "WARNING: the library's lever is 0.35 N/m with a 32 nm tip; yours differs, so moduli and heights are not comparable with it, and the verdict below is not meaningful until the library is rebuilt for your lever.\n");
             }
             region r {
-                let z = alloc_slice[r](2600, 0.0);
-                let d = alloc_slice[r](2600, 0.0);
                 let sm = alloc_slice[r](8, 0.0);
                 let per = alloc_slice[r](1200, 0.0);
                 let vb = alloc_slice[r](8, 0.0);
@@ -156,17 +157,16 @@ fn main(world: World) -> [] int {
                     var got = 0 - 1;
                     borrow args as &g in {
                         borrow fs as &fsr in {
-                            let (grown, n) = read_file(h, fsr, arg(g, 6 + f), scratch);
+                            let (grown, n) = read_file(h, fsr, arg(g, 7 + f), scratch);
                             scratch = grown;
                             got = n;
                             if n >= 0 {
                                 borrow scratch as &s in {
-                                    let rows = fcload.count_rows(buffer.bytes(s));
-                                    var stride = 1;
-                                    if rows > 2600 { stride = (rows + 2599) / 2600; }
-                                    let n_in = fcload.read_rows(buffer.bytes(s), stride, unit_scale(zu), unit_scale(du), z, d, 2600);
-                                    let na = fcload.approach(z, d, n_in);
-                                    let a = fcload.analyse(z, d, na, k, rad);
+                                    let ld = fcload.load_and_analyse(h, buffer.bytes(s), thin, unit_scale(zu), unit_scale(du), k, rad);
+                                    let n_in = ld.kept;
+                                    let na = ld.approach;
+                                    let stride = ld.stride;
+                                    let a = ld.a;
                                     o = text(h, o, "file ");
                                     o = buffer.push_nat(h, o, f + 1);
                                     o = text(h, o, ": ");
