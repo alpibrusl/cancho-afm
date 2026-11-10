@@ -236,12 +236,12 @@ fn test_a_dense_curve_is_read_whole_and_agrees_with_the_coarse_one[&h](heap: &!h
             i = i + 1;
         }
         let whole = text[0..p];
-        let ld = fcload.load_and_analyse(heap, whole, 1, 1.0, 1.0, l.k, l.r);
+        let ld = fcload.load_and_analyse(heap, whole, 1, 1.0, 1.0, l.k, l.r, 0.0);
         kept = ld.kept;
         why = ld.a.why;
         bt = ld.a.breakthrough;
         e_dense = ld.a.e0;
-        let lt = fcload.load_and_analyse(heap, whole, 20, 1.0, 1.0, l.k, l.r);
+        let lt = fcload.load_and_analyse(heap, whole, 20, 1.0, 1.0, l.k, l.r, 0.0);
         thin_kept = lt.kept;
         e_thin = lt.a.e0;
     } } } }
@@ -306,9 +306,9 @@ fn test_a_bandwidth_limited_dense_curve_needs_thinning_for_the_single_step_rule[
             i = i + 1;
         }
         let whole = text[0..p];
-        let a = fcload.load_and_analyse(heap, whole, 1, 1.0, 1.0, l.k, l.r);
+        let a = fcload.load_and_analyse(heap, whole, 1, 1.0, 1.0, l.k, l.r, 0.0);
         why_whole = a.a.why;
-        let b = fcload.load_and_analyse(heap, whole, 20, 1.0, 1.0, l.k, l.r);
+        let b = fcload.load_and_analyse(heap, whole, 20, 1.0, 1.0, l.k, l.r, 0.0);
         why_thin = b.a.why;
         bt_thin = b.a.breakthrough;
     } } } } }
@@ -320,5 +320,116 @@ fn test_a_bandwidth_limited_dense_curve_needs_thinning_for_the_single_step_rule[
     test.assert_eq(why_whole, 4);
     test.assert_eq(why_thin, 0);
     test.assert(near(bt_thin, truth, 0.2 * truth) == 1);
+    return 0;
+}
+
+// THE SPACING-INDEPENDENT RULE (a window of piezo travel, forcecurve.slb_curve_win): on the same bandwidth-limited dense curve (a 20-row boxcar), WINDOW 1 nm reads the breakthrough within 3% of the generator's
+// at every row spacing (all rows, every 5th, every 20th), where the single-step rule is refused at the first; and on the instantaneous rupture of an ordinary curve it agrees with the single step.
+fn test_the_windowed_rule_does_not_depend_on_the_row_spacing[&h](heap: &!h Heap) -> [heap] int {
+    let cap = 20000;
+    let zb = box_slice(heap, cap, 0.0);
+    let db = box_slice(heap, cap, 0.0);
+    let sb = box_slice(heap, cap, 0.0);
+    let gsb = box_slice(heap, 8, 0.0);
+    let tb = box_slice(heap, cap * 24, byte_of(0));
+    var truth = 0.0;
+    var w1 = 0.0;
+    var w5 = 0.0;
+    var w20 = 0.0;
+    var s1_why = 0;
+    var s5_why = 0;
+    var s20_why = 9;
+    var plain_single = 0.0;
+    var plain_window = 0.0;
+    borrow mut zb as &!zw in { borrow mut db as &!dw in { borrow mut sb as &!sw in { borrow mut gsb as &!gw in { borrow mut tb as &!tw in {
+        let z = contents(zw);
+        let d = contents(dw);
+        let sm = contents(sw);
+        let gs = contents(gw);
+        let text = contents(tw);
+        let s = bilayer.sample_of(0, 0);
+        let l = dense_lever();
+        let rows = bilayer.generate(s, l, 3, z, d, gs, cap);
+        truth = gs[6];
+        var i = 0;
+        while i < rows {
+            var sum = 0.0;
+            var c = 0;
+            var j = i;
+            while j >= 0 && c < 20 { sum = sum + d[j]; c = c + 1; j = j - 1; }
+            sm[i] = sum / float_of(c);
+            i = i + 1;
+        }
+        var p = put_text(text, 0, "Z (nm),Deflection (nm)\n");
+        i = 0;
+        while i < rows {
+            p = put_float(text, p, 200.0 - z[i]);
+            text[p] = byte_of(44);
+            p = p + 1;
+            p = put_float(text, p, sm[i]);
+            text[p] = byte_of(10);
+            p = p + 1;
+            i = i + 1;
+        }
+        let whole = text[0..p];
+        w1 = fcload.load_and_analyse(heap, whole, 1, 1.0, 1.0, l.k, l.r, 1.0).a.breakthrough;
+        w5 = fcload.load_and_analyse(heap, whole, 5, 1.0, 1.0, l.k, l.r, 1.0).a.breakthrough;
+        w20 = fcload.load_and_analyse(heap, whole, 20, 1.0, 1.0, l.k, l.r, 1.0).a.breakthrough;
+        s1_why = fcload.load_and_analyse(heap, whole, 1, 1.0, 1.0, l.k, l.r, 0.0).a.why;
+        s5_why = fcload.load_and_analyse(heap, whole, 5, 1.0, 1.0, l.k, l.r, 0.0).a.why;
+        s20_why = fcload.load_and_analyse(heap, whole, 20, 1.0, 1.0, l.k, l.r, 0.0).a.why;
+        // an ordinary (instantaneous) rupture, the same dense curve unsmoothed: both rules, all rows
+        p = put_text(text, 0, "Z (nm),Deflection (nm)\n");
+        i = 0;
+        while i < rows {
+            p = put_float(text, p, 200.0 - z[i]);
+            text[p] = byte_of(44);
+            p = p + 1;
+            p = put_float(text, p, d[i]);
+            text[p] = byte_of(10);
+            p = p + 1;
+            i = i + 1;
+        }
+        let raw = text[0..p];
+        plain_single = fcload.load_and_analyse(heap, raw, 1, 1.0, 1.0, l.k, l.r, 0.0).a.breakthrough;
+        plain_window = fcload.load_and_analyse(heap, raw, 1, 1.0, 1.0, l.k, l.r, 1.0).a.breakthrough;
+    } } } } }
+    unbox_slice(heap, tb);
+    unbox_slice(heap, gsb);
+    unbox_slice(heap, sb);
+    unbox_slice(heap, db);
+    unbox_slice(heap, zb);
+    test.assert(near(w1, truth, 0.03 * truth) == 1);
+    test.assert(near(w5, truth, 0.03 * truth) == 1);
+    test.assert(near(w20, truth, 0.03 * truth) == 1);
+    // the single step is refused at the densest spacing and works once the rows are thinned (measured: it already works at every 5th row, where a rupture spread over 20 rows still drops about a quarter of its
+    // force per kept row)
+    test.assert_eq(s1_why, 4);
+    test.assert_eq(s5_why, 0);
+    test.assert_eq(s20_why, 0);
+    // on an instantaneous rupture the two rules agree
+    test.assert(near(plain_window, plain_single, 0.005 * plain_single) == 1);
+    return 0;
+}
+
+// window 0 is nanoindent's rule exactly: the same answer as slb_curve_nb on a curve of the twin
+fn test_window_zero_is_the_single_step_rule() -> [] int {
+    region r {
+        let z = alloc_slice[r](720, 0.0);
+        let d = alloc_slice[r](720, 0.0);
+        let gs = alloc_slice[r](8, 0.0);
+        let s = bilayer.sample_of(0, 0);
+        let l = bilayer.lever_khadka();
+        let n = bilayer.generate(s, l, 3, z, d, gs, 720);
+        let a = forcecurve.slb_curve_nb(z, d, n, 40, l.k, l.r, 0.5, 8.0, 400.0, 4.5, 0.0);
+        let b = forcecurve.slb_curve_win(z, d, n, 40, l.k, l.r, 0.5, 8.0, 400.0, 4.5, 0.0, 0.0);
+        test.assert_eq(a.why, 0);
+        test.assert(near(a.breakthrough, b.breakthrough, 0.0) == 1);
+        test.assert(near(a.e0, b.e0, 0.0) == 1);
+        test.assert(near(a.height, b.height, 0.0) == 1);
+        // and with a window of 1 nm on this curve: the same breakthrough force
+        let c = forcecurve.slb_curve_win(z, d, n, 40, l.k, l.r, 0.5, 8.0, 400.0, 4.5, 0.0, 1.0);
+        test.assert(near(c.breakthrough, a.breakthrough, 0.005 * a.breakthrough) == 1);
+    }
     return 0;
 }
