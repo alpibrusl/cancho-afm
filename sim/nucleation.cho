@@ -1,0 +1,205 @@
+edition 5;
+
+module nucleation;
+
+// `nucleation` -- D7, slice 1 (docs/dynamics.md): objects that APPEAR over time and grow, imaged frame by frame, and the analysis that counts them. A PREDICTION OF THIS SOFTWARE: no parameter is taken from
+// an experiment; units are pixels and seconds (a pixel is whatever the caller says it is).
+//
+// The sample: nuclei are born as a Poisson process, rate `j` per pixel^2 per s over a `size` by `size` field, uniform in space; each grows as a disc, r(t) = r0 + v (t - t_birth), to the height `h`. Births
+// come from a fixed hash of the seed (a movie is reproducible): the waiting times are exponential, -ln(U) / (j size^2).
+// The imaging: frame f is taken at t = f tf; a pixel reads h inside a disc (its centre inside), 0 outside, plus noise of sigma (a hash). No tip force, no overlap physics: discs that touch simply merge.
+// The analysis: threshold at h/2; 4-connected components of at least `min_size` pixels; a component is a NEW object when no component of the previous frame has its centroid within `link` pixels.
+// An object is therefore first seen at the first frame where its disc covers `min_size` pixels, and that frame's time is the event time.
+
+import std.math;
+
+pub struct Movie { size: int, j: float, v: float, r0: float, h: float, sigma: float, tf: float, frames: int, min_size: int, link: float }
+
+pub fn cap_births() -> [] int { return 160; }
+pub fn cap_objects() -> [] int { return 160; }
+
+fn frac(x: float) -> [] float {
+    var a = x;
+    if a < 0.0 { a = 0.0 - a; }
+    return a - math.floor(a);
+}
+
+// a uniform in (0, 1) from an index and a salt
+fn hash01(i: int, salt: int) -> [] float {
+    var u = frac(math.sin(12.9898 * float_of(i) + 78.233 * float_of(salt) + 4.1414) * 43758.5453);
+    if u < 0.000000001 { u = 0.000000001; }
+    if u > 0.999999999 { u = 0.999999999; }
+    return u;
+}
+
+// The births up to `t_end`: times (sorted by construction), x and y in pixels. Returns how many (at most cap_births).
+pub fn births[&a, &b, &c](m: Movie, seed: int, t_end: float, bt: &!a [float], bx: &!b [float], by: &!c [float]) -> [] int {
+    let area = float_of(m.size * m.size);
+    let mut_rate = m.j * area;
+    var n = 0;
+    var t = 0.0;
+    var go = 1;
+    while go == 1 && n < cap_births() {
+        t = t - math.log(hash01(n, seed * 3)) / mut_rate;
+        if t > t_end { go = 0; }
+        if go == 1 {
+            bt[n] = t;
+            bx[n] = hash01(n, seed * 3 + 1) * float_of(m.size);
+            by[n] = hash01(n, seed * 3 + 2) * float_of(m.size);
+            n = n + 1;
+        }
+    }
+    return n;
+}
+
+// Frame at time t into `frame` (size * size, row-major).
+pub fn render[&a, &b, &c, &d](m: Movie, t: float, nb: int, bt: &a [float], bx: &b [float], by: &c [float], seed: int, fno: int, frame: &!d [float]) -> [] int {
+    let npx = m.size * m.size;
+    var i = 0;
+    while i < npx {
+        let y = float_of(i / m.size) + 0.5;
+        let x = float_of(i % m.size) + 0.5;
+        var inside = 0;
+        var k = 0;
+        while k < nb && inside == 0 {
+            if bt[k] <= t {
+                let r = m.r0 + m.v * (t - bt[k]);
+                let dx = x - bx[k];
+                let dy = y - by[k];
+                if dx * dx + dy * dy <= r * r { inside = 1; }
+            }
+            k = k + 1;
+        }
+        let noise = m.sigma * 1.7320508 * (2.0 * hash01(i + 100000 * fno, seed * 7 + 5) - 1.0);
+        frame[i] = m.h * float_of(inside) + noise;
+        i = i + 1;
+    }
+    return 0;
+}
+
+// The components of the pixels above `threshold` that have at least `min_size` pixels: centroids (y, x) in pixels into cy, cx (capacity `cap`); returns how many (the surplus is dropped and the caller
+// must know: it is at most `cap`).
+pub fn components[&a, &b, &c](frame: &a [float], size: int, threshold: float, min_size: int, cy: &!b [float], cx: &!c [float], cap: int) -> [] int {
+    var count = 0;
+    let npx = size * size;
+    region r {
+        let lab = alloc_slice[r](npx, 0);
+        var i = 0;
+        while i < npx {
+            if frame[i] > threshold { lab[i] = i + 1; }
+            i = i + 1;
+        }
+        var changed = 1;
+        while changed == 1 {
+            changed = 0;
+            i = 0;
+            while i < npx {
+                if lab[i] > 0 {
+                    var mn = lab[i];
+                    let y = i / size;
+                    let x = i % size;
+                    if y > 0 && lab[i - size] > 0 && lab[i - size] < mn { mn = lab[i - size]; }
+                    if y < size - 1 && lab[i + size] > 0 && lab[i + size] < mn { mn = lab[i + size]; }
+                    if x > 0 && lab[i - 1] > 0 && lab[i - 1] < mn { mn = lab[i - 1]; }
+                    if x < size - 1 && lab[i + 1] > 0 && lab[i + 1] < mn { mn = lab[i + 1]; }
+                    if mn < lab[i] { lab[i] = mn; changed = 1; }
+                }
+                i = i + 1;
+            }
+        }
+        i = 0;
+        while i < npx {
+            if lab[i] == i + 1 {
+                var cnt = 0;
+                var sy = 0.0;
+                var sx = 0.0;
+                var j = 0;
+                while j < npx {
+                    if lab[j] == i + 1 {
+                        sy = sy + float_of(j / size) + 0.5;
+                        sx = sx + float_of(j % size) + 0.5;
+                        cnt = cnt + 1;
+                    }
+                    j = j + 1;
+                }
+                if cnt >= min_size && count < cap {
+                    cy[count] = sy / float_of(cnt);
+                    cx[count] = sx / float_of(cnt);
+                    count = count + 1;
+                }
+            }
+            i = i + 1;
+        }
+    }
+    return count;
+}
+
+// The fraction of the frame above the threshold (the covered fraction, seen)
+pub fn covered[&a](frame: &a [float], npx: int, threshold: float) -> [] float {
+    var c = 0;
+    var i = 0;
+    while i < npx { if frame[i] > threshold { c = c + 1; } i = i + 1; }
+    return float_of(c) / float_of(npx);
+}
+
+// The analysis of the whole movie. ev_t, ev_x, ev_y (capacity cap_objects) get the time and place of each new object. Scratch: py, px (cap_objects floats each, the previous frame's centroids), cy, cx (the
+// current's), frame (size * size). Returns the number of events.
+pub fn analyse[&a, &b, &c, &d, &e, &f, &g, &h, &i2, &j2, &k2](m: Movie, nb: int, bt: &a [float], bx: &b [float], by: &c [float], seed: int,
+                                                       frame: &!d [float], cy: &!e [float], cx: &!f [float], py: &!g [float], px: &!h [float],
+                                                       ev_t: &!i2 [float], ev_x: &!j2 [float], ev_y: &!k2 [float]) -> [] int {
+    var events = 0;
+    var np = 0;
+    var fno = 1;
+    while fno <= m.frames {
+        let t = float_of(fno) * m.tf;
+        render(m, t, nb, bt, bx, by, seed, fno, frame);
+        let nc = components(frame, m.size, 0.5 * m.h, m.min_size, cy, cx, cap_objects());
+        var k = 0;
+        while k < nc {
+            var old = 0;
+            var q = 0;
+            while q < np && old == 0 {
+                let dy = cy[k] - py[q];
+                let dx = cx[k] - px[q];
+                if dy * dy + dx * dx <= m.link * m.link { old = 1; }
+                q = q + 1;
+            }
+            if old == 0 && events < cap_objects() {
+                ev_t[events] = t;
+                ev_x[events] = cx[k];
+                ev_y[events] = cy[k];
+                events = events + 1;
+            }
+            k = k + 1;
+        }
+        k = 0;
+        while k < nc { py[k] = cy[k]; px[k] = cx[k]; k = k + 1; }
+        np = nc;
+        fno = fno + 1;
+    }
+    return events;
+}
+
+// ---- what the design says to expect (docs/dynamics.md, D7) ----
+
+// the radius at which a disc covers `min_size` pixels, taking the pixel count as the disc's area
+pub fn r_visible(m: Movie) -> [] float { return math.sqrt(float_of(m.min_size) / 3.14159265358979); }
+
+// the delay between a birth and the frame that first shows it: the time to grow to r_visible, plus half a frame on average
+pub fn lag_pred(m: Movie) -> [] float {
+    var g = (r_visible(m) - m.r0) / m.v;
+    if g < 0.0 { g = 0.0; }
+    return g + 0.5 * m.tf;
+}
+
+// births per pixel^2 per s read from `n` events seen in a movie of `frames` frames: an event is seen `lag` after its birth, so only births in (0, T - lag) can have been seen
+pub fn rate_from_events(m: Movie, n: int) -> [] float {
+    let t = float_of(m.frames) * m.tf - lag_pred(m);
+    if t <= 0.0 { return 0.0; }
+    return float_of(n) / (float_of(m.size * m.size) * t);
+}
+
+// the covered fraction expected at time t for constant rate and growth speed, r0 = 0 (Kolmogorov, Johnson, Mehl, Avrami in two dimensions)
+pub fn avrami(j: float, v: float, t: float) -> [] float {
+    return 1.0 - math.exp(0.0 - 3.14159265358979 * j * v * v * t * t * t / 3.0);
+}
