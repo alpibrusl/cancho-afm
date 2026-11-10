@@ -65,7 +65,8 @@ pub fn ensemble[&a, &b](id: int, k: int, seed0: int, mean: &!a [float], var_: &!
         j = 0;
         while j < 7 {
             let mu = mean[j] / float_of(k);
-            var v = (var_[j] - float_of(k) * mu * mu) / float_of(k - 1);
+            var v = 0.0;
+            if k > 1 { v = (var_[j] - float_of(k) * mu * mu) / float_of(k - 1); }
             if v < 0.0 { v = 0.0; }
             mean[j] = mu;
             var_[j] = v;
@@ -82,6 +83,26 @@ pub fn compare[&a, &b, &c, &d, &e](mi: &a [float], vi: &b [float], mj: &c [float
     var j = 0;
     while j < 7 {
         var se = math.sqrt((vi[j] + vj[j]) / float_of(k));
+        var big = math.fabs(mi[j]);
+        if math.fabs(mj[j]) > big { big = math.fabs(mj[j]); }
+        let floor = 0.000001 * big + 0.000000001;
+        if se < floor { se = floor; }
+        z[j] = (mi[j] - mj[j]) / se;
+        acc = acc + z[j] * z[j];
+        j = j + 1;
+    }
+    return math.sqrt(acc / 7.0);
+}
+
+// compare with the two ensembles of different sizes: ki movies behind (mi, vi) and kj behind (mj, vj). The standard error of a difference of means is sqrt(vi / ki + vj / kj).
+pub fn compare2[&a, &b, &c, &d, &e](mi: &a [float], vi: &b [float], ki: int, mj: &c [float], vj: &d [float], kj: int, z: &!e [float]) -> [] float {
+    var acc = 0.0;
+    var j = 0;
+    while j < 7 {
+        // one movie has no spread of its own: take the model's
+        var vii = vi[j];
+        if ki < 2 { vii = vj[j]; }
+        var se = math.sqrt(vii / float_of(ki) + vj[j] / float_of(kj));
         var big = math.fabs(mi[j]);
         if math.fabs(mj[j]) > big { big = math.fabs(mj[j]); }
         let floor = 0.000001 * big + 0.000000001;

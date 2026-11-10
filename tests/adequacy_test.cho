@@ -62,3 +62,21 @@ fn test_the_fingerprint_names_the_difference() -> [] int {
     }
     return 0;
 }
+
+// one movie has no spread of its own: the ensemble's variance is 0, not a division by zero, and the comparison stays finite (it takes the model's spread)
+fn test_one_movie_does_not_divide_by_zero() -> [] int {
+    region r {
+        let am = alloc_slice[r](8, 0.0);
+        let av = alloc_slice[r](8, 0.0);
+        let bm = alloc_slice[r](8, 0.0);
+        let bv = alloc_slice[r](8, 0.0);
+        let z = alloc_slice[r](8, 0.0);
+        adequacy.ensemble(0, 1, 1, am, av);
+        adequacy.ensemble(1, 8, 1001, bm, bv);
+        test.assert(av[0] < 0.0000001);
+        let d = adequacy.compare2(am, av, 1, bm, bv, 8, z);
+        test.assert(d >= 0.0);
+        test.assert(d < 1000.0);
+    }
+    return 0;
+}
