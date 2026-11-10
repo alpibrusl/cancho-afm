@@ -1,0 +1,124 @@
+edition 7;
+
+import std.buffer;
+import std.math;
+import nucleation;
+import vesicles;
+
+// D7 slice 2, the data for a video (docs/videos): one movie made and analysed, printed as one line per frame ("F t image", the image as 0 bare, 1 patch, 2 dome per pixel, row-major) and one per rupture event the
+// analysis read ("E t near chance y x"). A prediction of this software; every parameter is a stand-in.
+//   cancho run host/d7_frames.cho sim/vesicles.cho sim/nucleation.cho --std -- SEED GAMMA KE_TENTHS LAM_THOUSANDTHS
+fn text[&h, &r](heap: &!h Heap, b: buffer.Buffer, s: &r [byte]) -> [heap] buffer.Buffer { return buffer.append(heap, b, s); }
+
+fn number_of[&t](text: &t [byte]) -> [] int {
+    var n = 0;
+    var i = 0;
+    while i < len(text) {
+        let c = int_of(text[i]);
+        if c < 48 || c > 57 { return 0; }
+        n = n * 10 + (c - 48);
+        i = i + 1;
+    }
+    return n;
+}
+
+fn dec[&h](heap: &!h Heap, o: buffer.Buffer, v: float, places: int) -> [heap] buffer.Buffer {
+    var b = o;
+    var x = v;
+    if x < 0.0 { b = text(heap, b, "-"); x = 0.0 - x; }
+    var scale = 1;
+    var p = 0;
+    while p < places { scale = scale * 10; p = p + 1; }
+    let c = truncate(x * float_of(scale) + 0.5);
+    b = buffer.push_nat(heap, b, c / scale);
+    if places > 0 {
+        b = text(heap, b, ".");
+        var rest = c % scale;
+        var div = scale / 10;
+        while div > 0 {
+            b = buffer.push_nat(heap, b, rest / div);
+            rest = rest % div;
+            div = div / 10;
+        }
+    }
+    return b;
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(net); release(clock); release(signals); release(exec);
+    var seed = 1;
+    var gamma = 3;
+    var ke = 0;
+    var lam = 3;
+    borrow args as &g in {
+        if arg_count(g) > 1 { seed = number_of(arg(g, 1)); }
+        if arg_count(g) > 2 { gamma = number_of(arg(g, 2)); }
+        if arg_count(g) > 3 { ke = number_of(arg(g, 3)); }
+        if arg_count(g) > 4 { lam = number_of(arg(g, 4)); }
+    }
+    release(args);
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 65536);
+        var code = 0;
+        region r {
+            let m = vesicles.Model { size: 40, r: 2.0, lam: float_of(lam) / 1000.0, gamma: gamma, k_e: float_of(ke) / 10.0, hp: 1.0, hv: 2.0, sigma: 0.1, tf: 0.5, frames: 120, dt: 0.25 };
+            let npx = 1600;
+            let vx = alloc_slice[r](160, 0.0);
+            let vy = alloc_slice[r](160, 0.0);
+            let va = alloc_slice[r](160, 0.0);
+            let vg = alloc_slice[r](160, 0.0);
+            let px = alloc_slice[r](64, 0.0);
+            let py = alloc_slice[r](64, 0.0);
+            let pb = alloc_slice[r](64, 0.0);
+            let st = alloc_slice[r](8, 0);
+            let frame = alloc_slice[r](npx, 0.0);
+            let prev = alloc_slice[r](npx, 0.0);
+            let nm = alloc_slice[r](npx, 0.0);
+            let dome = alloc_slice[r](2 * 121, 0.0);
+            let ev = alloc_slice[r](500, 0.0);
+            vesicles.history(m, seed, 60.0, vx, vy, va, vg, px, py, pb, st);
+            let ne = vesicles.analyse(m, st[0], vx, vy, va, vg, st[1], px, py, pb, seed, frame, prev, nm, dome, ev, 20, 4.0, 100, 0.25);
+            var e = 0;
+            while e < ne {
+                o = text(h, o, "E ");
+                o = dec(h, o, ev[e], 1);
+                o = text(h, o, " ");
+                o = dec(h, o, ev[100 + e], 0);
+                o = text(h, o, " ");
+                o = dec(h, o, ev[200 + e], 2);
+                o = text(h, o, " ");
+                o = dec(h, o, ev[300 + e], 1);
+                o = text(h, o, " ");
+                o = dec(h, o, ev[400 + e], 1);
+                o = text(h, o, "\n");
+                e = e + 1;
+            }
+            var f = 0;
+            while f <= 120 {
+                let t = float_of(f) * 0.5;
+                vesicles.render(m, t, st[0], vx, vy, va, vg, st[1], px, py, pb, seed, f, frame);
+                o = text(h, o, "F ");
+                o = dec(h, o, t, 1);
+                o = text(h, o, " ");
+                o = dec(h, o, dome[121 + f] / 1600.0, 3);
+                o = text(h, o, " ");
+                var i = 0;
+                while i < npx {
+                    if frame[i] > 1.5 { o = text(h, o, "2"); } else if frame[i] > 0.5 { o = text(h, o, "1"); } else { o = text(h, o, "0"); }
+                    i = i + 1;
+                }
+                o = text(h, o, "\n");
+                // flush each frame: the buffer is a fixed size
+                borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+                buffer.drop(h, o);
+                o = buffer.empty(h, 65536);
+                f = f + 1;
+            }
+        }
+        buffer.drop(h, o);
+    }
+    release(heap);
+    release(io);
+    return 0;
+}
