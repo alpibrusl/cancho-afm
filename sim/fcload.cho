@@ -1,0 +1,181 @@
+edition 5;
+
+module fcload;
+
+// `fcload` -- real force curves in, the analysis of sim/forcecurve.cho out (docs/dynamics.md). Reads the generic two-column text a force curve is usually exported as (the format of nanoindent's `read_csv`: z
+// and deflection, comma, tab, semicolon or space separated, header lines skipped), puts it in nanometres, orients it the way nanoindent does and cuts it at the turn-around, so that what reaches
+// `forcecurve.slb_curve_nb` is a curve it can analyse. NOT TESTED ON ANY REAL FILE: the tests use text written in the tests.
+//
+// What it does to a file, in order:
+//   1. every line is split on commas, tabs, semicolons and spaces; the first two fields are read as numbers (sign, digits, a point, digits, an exponent); a line where either is not a number (a header, a
+//      blank line, a unit line) is skipped;
+//   2. z and deflection are multiplied to nanometres (`zscale`, `dscale`: 1 for nm, 1e9 for m, 1e3 for um);
+//   3. if there are more rows than `cap`, every stride-th row is kept (stride = ceil(rows / cap)): a thinned curve has less detail, so the stride is returned and the host reports it;
+//   4. ORIENTATION as nanoindent's `to_force_indentation`: if z and the deflection are negatively correlated, z is flipped, so that pushing is z increasing and the deflection rising;
+//   5. the APPROACH is the rows up to the largest oriented z, assuming the file starts with the approach (a retract before it would be read as the approach): the rest (the retract) is dropped;
+//   6. z is then written as -(oriented z), because forcecurve.slb_curve_nb takes z decreasing toward the sample.
+// A file with fewer than `min_points` approach rows is refused, tag 9 (forcecurve's own tags are 1 to 6).
+
+import std.math;
+import forcecurve;
+
+pub fn min_points() -> [] int { return 80; }
+
+pub struct Tok { ok: int, v: float, end: int }
+
+fn is_digit(c: int) -> [] int {
+    if c >= 48 && c <= 57 { return 1; }
+    return 0;
+}
+
+fn is_sep(c: int) -> [] int {
+    // space, tab, comma, semicolon, carriage return
+    if c == 32 || c == 9 || c == 44 || c == 59 || c == 13 { return 1; }
+    return 0;
+}
+
+// the number that starts at `from` and ends at a separator, a newline or the end of the text; ok 0 when it is not entirely a number
+pub fn parse_number[&a](text: &a [byte], from: int, to: int) -> [] Tok {
+    var i = from;
+    var neg = 0;
+    if i < to && (int_of(text[i]) == 45 || int_of(text[i]) == 43) {
+        if int_of(text[i]) == 45 { neg = 1; }
+        i = i + 1;
+    }
+    var mant = 0.0;
+    var digits = 0;
+    while i < to && is_digit(int_of(text[i])) == 1 {
+        mant = mant * 10.0 + float_of(int_of(text[i]) - 48);
+        digits = digits + 1;
+        i = i + 1;
+    }
+    if i < to && int_of(text[i]) == 46 {
+        i = i + 1;
+        var scale = 0.1;
+        while i < to && is_digit(int_of(text[i])) == 1 {
+            mant = mant + scale * float_of(int_of(text[i]) - 48);
+            scale = scale * 0.1;
+            digits = digits + 1;
+            i = i + 1;
+        }
+    }
+    if digits == 0 { return Tok { ok: 0, v: 0.0, end: i }; }
+    var ex = 0;
+    if i < to && (int_of(text[i]) == 101 || int_of(text[i]) == 69) {
+        i = i + 1;
+        var eneg = 0;
+        if i < to && (int_of(text[i]) == 45 || int_of(text[i]) == 43) {
+            if int_of(text[i]) == 45 { eneg = 1; }
+            i = i + 1;
+        }
+        var ed = 0;
+        while i < to && is_digit(int_of(text[i])) == 1 {
+            ex = ex * 10 + (int_of(text[i]) - 48);
+            ed = ed + 1;
+            i = i + 1;
+        }
+        if ed == 0 { return Tok { ok: 0, v: 0.0, end: i }; }
+        if eneg == 1 { ex = 0 - ex; }
+    }
+    // the token must end here
+    if i < to && is_sep(int_of(text[i])) == 0 { return Tok { ok: 0, v: 0.0, end: i }; }
+    var v = mant;
+    if ex != 0 { v = mant * math.pow(10.0, float_of(ex)); }
+    if neg == 1 { v = 0.0 - v; }
+    return Tok { ok: 1, v: v, end: i };
+}
+
+// the first two numeric fields of the line text[from..to): (z, d) in out[0], out[1]; returns 1 when both were found
+fn parse_line[&a, &b](text: &a [byte], from: int, to: int, out: &!b [float]) -> [] int {
+    var i = from;
+    var got = 0;
+    while i < to && got < 2 {
+        while i < to && is_sep(int_of(text[i])) == 1 { i = i + 1; }
+        if i >= to { return 0; }
+        let t = parse_number(text, i, to);
+        if t.ok == 0 { return 0; }
+        out[got] = t.v;
+        got = got + 1;
+        i = t.end;
+    }
+    return 1;
+}
+
+// how many lines of the text hold a (z, d) pair
+pub fn count_rows[&a](text: &a [byte]) -> [] int {
+    var n = 0;
+    var i = 0;
+    var start = 0;
+    region r {
+        let two = alloc_slice[r](2, 0.0);
+        while i <= len(text) {
+            if i == len(text) || int_of(text[i]) == 10 {
+                if i > start { n = n + parse_line(text, start, i, two); }
+                start = i + 1;
+            }
+            i = i + 1;
+        }
+    }
+    return n;
+}
+
+// Read the rows (every `stride`-th) into z and d (capacity `cap`), in nm; returns how many were stored.
+pub fn read_rows[&a, &b, &c](text: &a [byte], stride: int, zscale: float, dscale: float, z: &!b [float], d: &!c [float], cap: int) -> [] int {
+    var n = 0;
+    var seen = 0;
+    var i = 0;
+    var start = 0;
+    region r {
+        let two = alloc_slice[r](2, 0.0);
+        while i <= len(text) {
+            if i == len(text) || int_of(text[i]) == 10 {
+                if i > start && parse_line(text, start, i, two) == 1 {
+                    if seen % stride == 0 && n < cap {
+                        z[n] = two[0] * zscale;
+                        d[n] = two[1] * dscale;
+                        n = n + 1;
+                    }
+                    seen = seen + 1;
+                }
+                start = i + 1;
+            }
+            i = i + 1;
+        }
+    }
+    return n;
+}
+
+// Orient and cut: returns the number of approach points, with z rewritten as -(oriented z) (decreasing toward the sample). 0 means a curve with no variation to orient.
+pub fn approach[&a, &b](z: &!a [float], d: &!b [float], n: int) -> [] int {
+    if n < 3 { return n; }
+    var mz = 0.0;
+    var md = 0.0;
+    var i = 0;
+    while i < n { mz = mz + z[i]; md = md + d[i]; i = i + 1; }
+    mz = mz / float_of(n);
+    md = md / float_of(n);
+    var sxy = 0.0;
+    i = 0;
+    while i < n { sxy = sxy + (z[i] - mz) * (d[i] - md); i = i + 1; }
+    var s = 1.0;
+    if sxy < 0.0 { s = 0.0 - 1.0; }
+    // the turn-around: the largest oriented z
+    var top = 0;
+    i = 1;
+    while i < n {
+        if s * z[i] > s * z[top] { top = i; }
+        i = i + 1;
+    }
+    i = 0;
+    while i <= top { z[i] = 0.0 - s * z[i]; i = i + 1; }
+    return top + 1;
+}
+
+// the analysis of an oriented approach (n points): forcecurve.slb_curve_nb with the settings sim/fcmodels.cho uses, so that a real curve and a library curve are read the same way: 40 baseline points,
+// contact at 8 noise levels, a breakthrough of at least 400 pN, a film of 4.5 nm; refused (tag 9) when there are fewer than min_points
+pub fn analyse[&a, &b](z: &a [float], d: &b [float], n: int, k: float, r: float) -> [] forcecurve.Slb {
+    if n < min_points() {
+        return forcecurve.Slb { why: 9, breakthrough: 0.0, height: 0.0, height_a: 0.0, contact_z: 0.0, e0: 0.0, e1: 0.0, e2: 0.0, e3: 0.0, kappa_a: 0.0, n_elastic: 0 };
+    }
+    return forcecurve.slb_curve_nb(z, d, n, 40, k, r, 0.5, 8.0, 400.0, 4.5, 0.0);
+}
