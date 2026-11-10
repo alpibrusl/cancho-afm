@@ -1,0 +1,255 @@
+edition 7;
+
+import std.buffer;
+import std.math;
+import nucleation;
+import vesicles;
+import adequacy;
+import forcecurve;
+import dfs;
+import bilayer;
+import fcmodels;
+import fcload;
+
+// REAL FORCE CURVES IN (docs/dynamics.md): each file is one force curve, two columns (z, deflection) as nanoindent's `read_csv` reads. The curves are loaded (sim/fcload.cho), analysed as the library's curves
+// are, summarised as one experiment of n curves, and compared with each model of the library (sim/fcmodels.cho) the way sim/adequacy does it. NOT TESTED ON ANY REAL FILE. The library's lever is the
+// 0.35 N/m, 32 nm tip of Khadka et al. 2021 and its sample a supported bilayer; give the lever you used and read the warning it prints when it differs.
+//   cancho build host/fc_load.cho sim/fcload.cho sim/fcmodels.cho sim/adequacy.cho sim/vesicles.cho sim/nucleation.cho sim/bilayer.cho sim/forcecurve.cho sim/dfs.cho --std -o fc_load
+//   ./fc_load K R ZUNIT DUNIT file1 file2 ...
+//     K      the spring constant in thousandths of N/m (350 = 0.35 N/m)        R   the tip radius in tenths of nm (320 = 32 nm)
+//     ZUNIT, DUNIT   the units of the two columns: 0 nm, 1 m, 2 um
+// Prints one line per file (the tag of a refusal, or the breakthrough force, modulus, height), the experiment's summaries, and the discrepancy to each model of the library (about 1 = it reproduces the
+// summaries; above 3 = it does not; neither says the model is right). The library is built for n curves with the twin's own spread, so it takes a moment for many files (400 curves: about a minute).
+fn text[&h, &r](heap: &!h Heap, b: buffer.Buffer, s: &r [byte]) -> [heap] buffer.Buffer { return buffer.append(heap, b, s); }
+
+fn number_of[&t](txt: &t [byte]) -> [] int {
+    var n = 0;
+    var i = 0;
+    while i < len(txt) {
+        let c = int_of(txt[i]);
+        if c < 48 || c > 57 { return 0; }
+        n = n * 10 + (c - 48);
+        i = i + 1;
+    }
+    return n;
+}
+
+fn dec[&h](heap: &!h Heap, o: buffer.Buffer, v: float, places: int) -> [heap] buffer.Buffer {
+    var b = o;
+    var x = v;
+    if x < 0.0 { b = text(heap, b, "-"); x = 0.0 - x; }
+    var scale = 1;
+    var p = 0;
+    while p < places { scale = scale * 10; p = p + 1; }
+    let c = truncate(x * float_of(scale) + 0.5);
+    b = buffer.push_nat(heap, b, c / scale);
+    if places > 0 {
+        b = text(heap, b, ".");
+        var rest = c % scale;
+        var div = scale / 10;
+        while div > 0 {
+            b = buffer.push_nat(heap, b, rest / div);
+            rest = rest % div;
+            div = div / 10;
+        }
+    }
+    return b;
+}
+
+fn unit_scale(u: int) -> [] float {
+    if u == 1 { return 1000000000.0; }
+    if u == 2 { return 1000.0; }
+    return 1.0;
+}
+
+fn read_file[&h, &f, &p](heap: &!h Heap, fs: &f Fs(""), path: &p [byte], text_in: buffer.Buffer) -> [heap, fs_read(""), file_read] (buffer.Buffer, int) {
+    var out = text_in;
+    var total = 0;
+    var trouble = 0;
+    match open_read(fs, path) {
+        Opened::Failed(reason) => {
+            trouble = reason;
+            if trouble == 0 { trouble = 1; }
+        }
+        Opened::Ok(opened) => {
+            var file = opened;
+            var chunk = buffer.empty(heap, 65536);
+            borrow mut file as &!handle in {
+                var going = true;
+                while going {
+                    var got = 0;
+                    borrow mut chunk as &!c in {
+                        match file_read(handle, buffer.room(c)) {
+                            Read::Got(n) => { got = n; buffer.filled(c, n); }
+                            Read::End => { going = false; }
+                            Read::Failed(reason) => { going = false; trouble = reason; if trouble == 0 { trouble = 1; } }
+                        }
+                    }
+                    if got > 0 {
+                        borrow chunk as &c in { out = buffer.append(heap, out, buffer.bytes(c)); }
+                        total = total + got;
+                        borrow mut chunk as &!c in { buffer.clear(c); }
+                    }
+                }
+            }
+            file_close(file);
+            buffer.drop(heap, chunk);
+        }
+    }
+    if trouble != 0 { return (out, 0 - 1); }
+    return (out, total);
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(net); release(clock); release(signals); release(exec);
+    var k_milli = 350;
+    var r_tenth = 320;
+    var zu = 0;
+    var du = 0;
+    var nfiles = 0;
+    var usage = 0;
+    borrow args as &g in {
+        if arg_count(g) < 6 { usage = 1; } else {
+            k_milli = number_of(arg(g, 1));
+            r_tenth = number_of(arg(g, 2));
+            zu = number_of(arg(g, 3));
+            du = number_of(arg(g, 4));
+            nfiles = arg_count(g) - 5;
+        }
+    }
+    var out_text = 0;
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 65536);
+        if usage == 1 {
+            o = text(h, o, "usage: fc_load K R ZUNIT DUNIT file...   (K in thousandths N/m, R in tenths of nm, units 0 nm 1 m 2 um)\n");
+        } else {
+            let k = float_of(k_milli) / 1000.0;
+            let rad = float_of(r_tenth) / 10.0;
+            if k_milli != 350 || r_tenth != 320 {
+                o = text(h, o, "WARNING: the library's lever is 0.35 N/m with a 32 nm tip; yours differs, so moduli and heights are not comparable with it, and the verdict below is not meaningful until the library is rebuilt for your lever.\n");
+            }
+            region r {
+                let z = alloc_slice[r](2600, 0.0);
+                let d = alloc_slice[r](2600, 0.0);
+                let sm = alloc_slice[r](8, 0.0);
+                let av = alloc_slice[r](8, 0.0);
+                var sb = 0.0;
+                var sb2 = 0.0;
+                var se0 = 0.0;
+                var se1 = 0.0;
+                var sh = 0.0;
+                var sk = 0.0;
+                var ok = 0;
+                var read_n = 0;
+                var f = 0;
+                while f < nfiles {
+                    var scratch = buffer.empty(h, 65536);
+                    var fine = 0;
+                    var got = 0 - 1;
+                    borrow args as &g in {
+                        borrow fs as &fsr in {
+                            let (grown, n) = read_file(h, fsr, arg(g, 5 + f), scratch);
+                            scratch = grown;
+                            got = n;
+                            if n >= 0 {
+                                borrow scratch as &s in {
+                                    let rows = fcload.count_rows(buffer.bytes(s));
+                                    var stride = 1;
+                                    if rows > 2600 { stride = (rows + 2599) / 2600; }
+                                    let n_in = fcload.read_rows(buffer.bytes(s), stride, unit_scale(zu), unit_scale(du), z, d, 2600);
+                                    let na = fcload.approach(z, d, n_in);
+                                    let a = fcload.analyse(z, d, na, k, rad);
+                                    o = text(h, o, "file ");
+                                    o = buffer.push_nat(h, o, f + 1);
+                                    o = text(h, o, ": ");
+                                    o = buffer.push_nat(h, o, n_in);
+                                    o = text(h, o, " rows");
+                                    if stride > 1 { o = text(h, o, " (every "); o = buffer.push_nat(h, o, stride); o = text(h, o, "th kept)"); }
+                                    o = text(h, o, ", approach ");
+                                    o = buffer.push_nat(h, o, na);
+                                    if a.why != 0 {
+                                        o = text(h, o, ", REFUSED, tag ");
+                                        o = buffer.push_nat(h, o, a.why);
+                                    } else {
+                                        o = text(h, o, ", breakthrough ");
+                                        o = dec(h, o, a.breakthrough / 1000.0, 2);
+                                        o = text(h, o, " nN, E ");
+                                        o = dec(h, o, a.e0, 1);
+                                        o = text(h, o, " MPa, height ");
+                                        o = dec(h, o, a.height, 2);
+                                        o = text(h, o, " nm");
+                                        let b = a.breakthrough / 1000.0;
+                                        sb = sb + b; sb2 = sb2 + b * b; se0 = se0 + a.e0; se1 = se1 + a.e1; sh = sh + a.height; sk = sk + a.kappa_a;
+                                        ok = ok + 1;
+                                    }
+                                    o = text(h, o, "\n");
+                                    read_n = read_n + 1;
+                                }
+                            }
+                        }
+                    }
+                    if got < 0 {
+                        o = text(h, o, "file ");
+                        o = buffer.push_nat(h, o, f + 1);
+                        o = text(h, o, ": cannot be read\n");
+                    }
+                    buffer.drop(h, scratch);
+                    f = f + 1;
+                }
+                if ok == 0 {
+                    o = text(h, o, "no curve was analysed: nothing to compare\n");
+                } else {
+                    let fo = float_of(ok);
+                    var v5 = sb2 / fo - (sb / fo) * (sb / fo);
+                    if v5 < 0.0 { v5 = 0.0; }
+                    sm[0] = sb / fo; sm[1] = se0 / fo; sm[2] = se1 / fo; sm[3] = sh / fo; sm[4] = sk / fo; sm[5] = math.sqrt(v5); sm[6] = fo / float_of(nfiles);
+                    o = text(h, o, "\nexperiment of ");
+                    o = buffer.push_nat(h, o, nfiles);
+                    o = text(h, o, " curves (");
+                    o = buffer.push_nat(h, o, ok);
+                    o = text(h, o, " analysed): [breakthrough nN, Hertz E MPa, model-1 E MPa, height nm, kappa_A mN/m, sd of breakthrough nN, share analysed]\n  ");
+                    var t = 0;
+                    while t < 7 { o = dec(h, o, sm[t], 2); o = text(h, o, " "); t = t + 1; }
+                    o = text(h, o, "\n");
+                    // the library, built for experiments of the same number of curves, twin's own spread
+                    var nref = nfiles;
+                    if nref > 200 { nref = 200; o = text(h, o, "(the library is built for 200 curves at most)\n"); }
+                    let bm = alloc_slice[r](8, 0.0);
+                    let bv = alloc_slice[r](8, 0.0);
+                    let zz = alloc_slice[r](8, 0.0);
+                    o = text(h, o, "model: discrepancy | z of [breakthrough, Hertz E, model-1 E, height, kappa_A, sd, share]\n");
+                    var best = 0;
+                    var bestd = 1000000.0;
+                    var i = 0;
+                    while i < fcmodels.n_models() {
+                        fcmodels.ensemble(i, nref, 24, 1001, bm, bv);
+                        let dd = adequacy.compare2(sm, bv, 1, bm, bv, 24, zz);
+                        o = text(h, o, "m");
+                        o = buffer.push_nat(h, o, i);
+                        o = text(h, o, ": ");
+                        o = dec(h, o, dd, 1);
+                        o = text(h, o, " |");
+                        t = 0;
+                        while t < 7 { o = text(h, o, " "); o = dec(h, o, zz[t], 1); t = t + 1; }
+                        o = text(h, o, "\n");
+                        if dd < bestd { bestd = dd; best = i; }
+                        i = i + 1;
+                    }
+                    o = text(h, o, "models: 0 fluid | 1 gel | 2 melted | 3 fluid, film law | 4 fluid at 10x speed | 5 mixture 70% fluid + 30% gel\n");
+                    o = text(h, o, "closest: m");
+                    o = buffer.push_nat(h, o, best);
+                    if bestd > 3.0 { o = text(h, o, " (but it does NOT reproduce the summaries: no model of the library does)\n"); } else { o = text(h, o, " (reproduces the summaries; that does not show it is right)\n"); }
+                }
+            }
+        }
+        var code = 0;
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(args);
+    release(fs);
+    release(heap);
+    release(io);
+    return 0;
+}

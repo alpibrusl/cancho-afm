@@ -1,0 +1,96 @@
+edition 7;
+
+import std.buffer;
+import std.math;
+import forcecurve;
+import dfs;
+import bilayer;
+import fcmodels;
+
+// One twin curve as two-column text, the way an instrument exports one (z rising as the tip pushes, the deflection, a header line, and a retract after the approach): for trying sim/fcload.cho and
+// host/fc_load.cho on files whose maker is known. A prediction of this software, not a measurement.
+//   fc_export MODEL SEED_OF_EXPERIMENT CURVE_INDEX      (MODEL as in sim/fcmodels.cho, 0 to 5)
+fn text[&h, &r](heap: &!h Heap, b: buffer.Buffer, s: &r [byte]) -> [heap] buffer.Buffer { return buffer.append(heap, b, s); }
+
+fn number_of[&t](txt: &t [byte]) -> [] int {
+    var n = 0;
+    var i = 0;
+    while i < len(txt) {
+        let c = int_of(txt[i]);
+        if c < 48 || c > 57 { return 0; }
+        n = n * 10 + (c - 48);
+        i = i + 1;
+    }
+    return n;
+}
+
+fn dec[&h](heap: &!h Heap, o: buffer.Buffer, v: float, places: int) -> [heap] buffer.Buffer {
+    var b = o;
+    var x = v;
+    if x < 0.0 { b = text(heap, b, "-"); x = 0.0 - x; }
+    var scale = 1;
+    var p = 0;
+    while p < places { scale = scale * 10; p = p + 1; }
+    let c = truncate(x * float_of(scale) + 0.5);
+    b = buffer.push_nat(heap, b, c / scale);
+    b = text(heap, b, ".");
+    var rest = c % scale;
+    var div = scale / 10;
+    while div > 0 {
+        b = buffer.push_nat(heap, b, rest / div);
+        rest = rest % div;
+        div = div / 10;
+    }
+    return b;
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec } = split(world);
+    release(ffi); release(fs); release(net); release(clock); release(signals); release(exec);
+    var id = 0;
+    var seed = 1;
+    var curve = 0;
+    borrow args as &g in {
+        if arg_count(g) > 1 { id = number_of(arg(g, 1)); }
+        if arg_count(g) > 2 { seed = number_of(arg(g, 2)); }
+        if arg_count(g) > 3 { curve = number_of(arg(g, 3)); }
+    }
+    release(args);
+    borrow mut heap as &!h in {
+        var o = buffer.empty(h, 32768);
+        region r {
+            let z = alloc_slice[r](720, 0.0);
+            let d = alloc_slice[r](720, 0.0);
+            let gs = alloc_slice[r](8, 0.0);
+            let ph = fcmodels.phase_of(id, curve, seed);
+            let s = bilayer.sample_of(ph, fcmodels.law_of(id));
+            let base = bilayer.lever_khadka();
+            let v = fcmodels.speed_of(id);
+            let l = bilayer.Lever { k: base.k, r: base.r, v: v, dt: 0.2 / v, sigma: 0.02, f_cap: base.f_cap, z0: base.z0, zc: base.zc };
+            let n = bilayer.generate(s, l, seed * 1000 + curve, z, d, gs, 720);
+            o = text(h, o, "Z (nm),Deflection (nm)\n");
+            var i = 0;
+            while i < n {
+                o = dec(h, o, 200.0 - z[i], 3);
+                o = text(h, o, ",");
+                o = dec(h, o, d[i], 3);
+                o = text(h, o, "\n");
+                i = i + 1;
+            }
+            i = 0;
+            while i < 40 && i < n {
+                o = dec(h, o, 200.0 - z[n - 1 - i], 3);
+                o = text(h, o, ",");
+                o = dec(h, o, d[n - 1 - i], 3);
+                o = text(h, o, "\n");
+                i = i + 1;
+            }
+        }
+        var code = 0;
+        borrow mut io as &!w in { borrow o as &b in { code = buffer.write(w, b); } }
+        buffer.drop(h, o);
+    }
+    release(heap);
+    release(io);
+    return 0;
+}

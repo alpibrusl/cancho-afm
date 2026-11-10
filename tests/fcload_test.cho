@@ -1,0 +1,152 @@
+import std.test;
+import std.math;
+import forcecurve;
+import dfs;
+import bilayer;
+import fcload;
+
+// docs/dynamics.md: the loader of two-column force-curve text. Not a test on any real file: the text is written here, from twin curves.
+
+fn near(got: float, want: float, tol: float) -> [] int {
+    var d = got - want;
+    if d < 0.0 { d = 0.0 - d; }
+    if d <= tol { return 1; }
+    return 0;
+}
+
+// write v with 4 decimals into out at `at`; returns the new position
+fn put_float[&a](out: &!a [byte], at: int, v: float) -> [] int {
+    var p = at;
+    var x = v;
+    if x < 0.0 { out[p] = byte_of(45); p = p + 1; x = 0.0 - x; }
+    let c = truncate(x * 10000.0 + 0.5);
+    let whole = c / 10000;
+    var rest = c % 10000;
+    // whole part
+    var digits = 1;
+    var t = whole;
+    while t >= 10 { t = t / 10; digits = digits + 1; }
+    var k = digits - 1;
+    var w = whole;
+    while k >= 0 {
+        var pw = 1;
+        var q = 0;
+        while q < k { pw = pw * 10; q = q + 1; }
+        out[p] = byte_of(48 + (w / pw) % 10);
+        p = p + 1;
+        k = k - 1;
+    }
+    out[p] = byte_of(46);
+    p = p + 1;
+    var div = 1000;
+    while div > 0 {
+        out[p] = byte_of(48 + (rest / div) % 10);
+        p = p + 1;
+        rest = rest % div;
+        div = div / 10;
+    }
+    return p;
+}
+
+fn put_text[&a, &b](out: &!a [byte], at: int, s: &b [byte]) -> [] int {
+    var p = at;
+    var i = 0;
+    while i < len(s) { out[p] = s[i]; p = p + 1; i = i + 1; }
+    return p;
+}
+
+fn test_numbers_are_read_whole_or_refused() -> [] int {
+    let a = fcload.parse_number("12.5e-3,", 0, 8);
+    test.assert_eq(a.ok, 1);
+    test.assert(near(a.v, 0.0125, 0.0000001) == 1);
+    let b = fcload.parse_number("-3.25", 0, 5);
+    test.assert_eq(b.ok, 1);
+    test.assert(near(b.v, 0.0 - 3.25, 0.0000001) == 1);
+    let c = fcload.parse_number("z_nm", 0, 4);
+    test.assert_eq(c.ok, 0);
+    let d = fcload.parse_number("1.5x", 0, 4);
+    test.assert_eq(d.ok, 0);
+    let e = fcload.parse_number("2e", 0, 2);
+    test.assert_eq(e.ok, 0);
+    return 0;
+}
+
+fn test_headers_blank_lines_and_every_delimiter_are_handled() -> [] int {
+    let text = "Z (nm); Deflection (nm)\nnm;nm\n\n1.0;2.0\n3,4\n5\t6\n7 8 9\nbad,line\n";
+    test.assert_eq(fcload.count_rows(text), 4);
+    region r {
+        let z = alloc_slice[r](8, 0.0);
+        let d = alloc_slice[r](8, 0.0);
+        let n = fcload.read_rows(text, 1, 1.0, 1.0, z, d, 8);
+        test.assert_eq(n, 4);
+        test.assert(near(z[2], 5.0, 0.0000001) == 1);
+        test.assert(near(d[3], 8.0, 0.0000001) == 1);
+        // metres to nm, and every second row
+        let m = fcload.read_rows(text, 2, 1000000000.0, 1000000000.0, z, d, 8);
+        test.assert_eq(m, 2);
+        test.assert(near(z[1], 5000000000.0, 1.0) == 1);
+    }
+    return 0;
+}
+
+// a twin curve written as text (z rising as it pushes, a retract after it, a header line), read back and analysed, gives the breakthrough the generator recorded
+fn test_a_written_curve_round_trips_through_the_loader() -> [] int {
+    region r {
+        let z = alloc_slice[r](720, 0.0);
+        let d = alloc_slice[r](720, 0.0);
+        let gs = alloc_slice[r](8, 0.0);
+        let s = bilayer.sample_of(0, 0);
+        let l = bilayer.lever_khadka();
+        let n = bilayer.generate(s, l, 3, z, d, gs, 720);
+        test.assert(gs[2] > 0.5);
+        let out = alloc_slice[r](26000, byte_of(0));
+        var p = put_text(out, 0, "Z (nm),Deflection (nm)\n");
+        var i = 0;
+        while i < n {
+            // z rising as it pushes: 200 - z, in nm
+            p = put_float(out, p, 200.0 - z[i]);
+            out[p] = byte_of(44);
+            p = p + 1;
+            p = put_float(out, p, d[i]);
+            out[p] = byte_of(10);
+            p = p + 1;
+            i = i + 1;
+        }
+        // a retract: the last 40 points backwards
+        i = 0;
+        while i < 40 {
+            p = put_float(out, p, 200.0 - z[n - 1 - i]);
+            out[p] = byte_of(44);
+            p = p + 1;
+            p = put_float(out, p, d[n - 1 - i]);
+            out[p] = byte_of(10);
+            p = p + 1;
+            i = i + 1;
+        }
+        let text = alloc_slice[r](p, byte_of(0));
+        var q = 0;
+        while q < p { text[q] = out[q]; q = q + 1; }
+        test.assert_eq(fcload.count_rows(text), n + 40);
+        let zz = alloc_slice[r](900, 0.0);
+        let dd = alloc_slice[r](900, 0.0);
+        let rows = fcload.read_rows(text, 1, 1.0, 1.0, zz, dd, 900);
+        test.assert_eq(rows, n + 40);
+        let na = fcload.approach(zz, dd, rows);
+        // the retract is cut: the approach is the n points up to the turn-around (the last pushed point is the largest z)
+        test.assert_eq(na, n);
+        let a = fcload.analyse(zz, dd, na, l.k, l.r);
+        test.assert_eq(a.why, 0);
+        test.assert(near(a.breakthrough, gs[6], 0.001 * gs[6]) == 1);
+    }
+    return 0;
+}
+
+fn test_a_short_file_is_refused_with_a_tag() -> [] int {
+    region r {
+        let z = alloc_slice[r](10, 0.0);
+        let d = alloc_slice[r](10, 0.0);
+        let a = fcload.analyse(z, d, 10, 0.35, 32.0);
+        test.assert_eq(a.why, 9);
+    }
+    return 0;
+}
