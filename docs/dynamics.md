@@ -411,6 +411,23 @@ Nine PDFs were read after the search-snippet and blocked-fetch rounds above. **N
 * The spread of each summary comes from the twin's 24 movies, not from the data; with real data the observed spread is to be checked separately. Seven summaries chosen by me; a different set gives a different matrix. Twenty-four movies is what the twin could afford (12 s); how the matrix sharpens or blurs with fewer movies was not measured.
 * The first use on real data is still to come: nothing real has been through it.
 
+**How the identification blurs as the experiment shrinks** (`cancho run host/d7_blur.cho sim/adequacy.cho sim/vesicles.cho sim/nucleation.cho --std`, 80 s; predictions of this software, stand-in models, one family). Each of the six models is predicted from a reference ensemble of 24 movies; for each experiment size k, six independent experiments of k movies are made under each model (36 per size, seeds not reused) and compared with the six references. "Named" is whether the smallest discrepancy is the right model; "rejected" is a wrong model with discrepancy above 3 (5 per experiment, 180 in all); "kept" is the true model below 3. Two ways of taking the spread of a summary are shown: estimated from the k movies, and the twin's own.
+
+| k movies | named (observed spread) | named (twin's spread) | true kept (twin's) | wrong rejected (twin's) |
+|---|---|---|---|---|
+| 1 | 25 of 36 (69%) | 25 | 36 of 36 | 17 of 180 (9%) |
+| 2 | 29 (81%) | 31 | 36 | 53 (29%) |
+| 3 | 33 (92%) | 35 | 36 | 74 (41%) |
+| 4 | 35 (97%) | 34 | 36 | 104 (58%) |
+| 8 | 36 (100%) | 36 | 36 | 126 (70%) |
+| 12 | 36 (100%) | 36 | 36 | 142 (79%) |
+| 24 | 36 (100%) | 36 | 36 | 174 (97%) |
+
+* **Naming the closest model takes few movies; ruling the others out takes many.** Four movies (about 40 events) name the right model in 34 to 35 of 36 experiments, eight in all 36; but at four movies only 58% of the wrong models are rejected, at eight 70%, at 24 97%. An experiment that merely picks the best of the library needs about 4 to 8 movies here; one that must say the alternatives do not fit needs about 24.
+* At one movie the model is named 69% of the time (the mistakes: m3 taken for m1, m0 for m5, m2 for m3 or m5), and almost nothing is rejected (9%).
+* **The observed-spread column has an artefact at k = 2:** the true model is "kept" in 31 of 36 (5 false rejections) and the mean discrepancy to the true model is 1.8, not 1, because a spread estimated from two movies is itself very noisy. Using the twin's spread (the model's own variance) removes it (36 of 36 kept at every k). **So for small experiments the spread should come from the model and be checked separately, not estimated from the few movies.**
+* The numbers are for these six stand-in models and seven summaries; thirty-six experiments per size means a percentage is good to about 5 to 15 points; the reference ensemble of 24 has its own noise; nothing real has been through it.
+
 ## Using the twin to design experiments
 
 The twin has answered design questions of three kinds so far; each is a number the twin computed, with the caveat that its parameters are stand-ins unless a paper supplies them:
