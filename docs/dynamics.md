@@ -318,13 +318,36 @@ Nine PDFs were read after the search-snippet and blocked-fetch rounds above. **N
 | critical density only, lam 0.006 | 80 | 0.23 | 0.24 | 2.3 s | 0.90 |
 | critical density only, gamma 2 | 74 | 0.23 | 0.24 | 2.8 s | 0.92 |
 
-* **The discriminating statistic works in the twin.** With critical density alone, the share of ruptures next to an existing patch is the chance level (0.22 against 0.24, within three binomial errors); with edge-induced rupture on it is 0.57 against 0.20, more than five binomial errors above it (about 70 events in 8 movies). The analysis therefore names the mechanism correctly on both. It was tested at one k_e and one gamma; how it degrades with fewer events, a smaller k_e or noisier images was not measured.
+* **The discriminating statistic works in the twin.** With critical density alone, the share of ruptures next to an existing patch is the chance level (0.22 against 0.24, within three binomial errors); with edge-induced rupture on it is 0.57 against 0.20, more than five binomial errors above it (about 70 events in 8 movies). The analysis therefore names the mechanism correctly on both. It was tested at one k_e and one gamma at first; how it degrades with fewer events, a smaller k_e or noisier images is measured in the section below.
 * The time to the first rupture goes as 1 / arrival rate under critical density: 4.3 s at lam 0.003 and 2.3 s at 0.006 (ratio 1.87; the test bound is 1.5 to 2.5), the master-curve scaling of the paper reproduced by a model built on its assumption (which does not test the paper).
 * The dome count reads the arrival rate to 0.88 to 0.92 of the rate put in (touching domes are one component).
 * The patch area reads 0.76 to 0.86 of ruptures times 4 pi r^2. Random overlap of discs at the 25% cap predicts (1 - e^-x) / x = 0.87 for x = 0.29; the A-only value fits, the A + B value is lower (edge-induced discs overlap their parent by construction). **That formula was checked after the numbers were seen, and the test band 0.75 to 0.95 was set with it, so this line is a consistency check, not a prediction.**
 * With the critical density off and only the edge process, no patch ever forms (0 events): edge-induced rupture needs a first patch from somewhere, so in this model it cannot be the only mechanism.
 * The events read (about 75 of 8 movies) are far fewer than the true ruptures (298 to 434): the rest happened after the cap. The two are not a like-for-like count and the table does not compare them.
 * Not found, and not claimed: which of the two mechanisms real vesicles follow. The twin shows what the analysis can distinguish if either is true.
+
+**How the edge-share statistic degrades (2026-11-10; `cancho run host/d7_degrade.cho sim/vesicles.cho sim/nucleation.cho --std`, about 30 s).** 48 movies per setting (seeds 1 to 48), pooled g at a time into groups; z = (share - chance) / sqrt(chance (1 - chance) / events); a mechanism is called at z > 3. Edge-induced rupture on is B, critical density alone is A. Predictions of this software with stand-in parameters.
+
+| what varies | setting | events per group | B called (z > 3) | A falsely called | mean z of B |
+|---|---|---|---|---|---|
+| movies pooled | 1 | 9 to 10 | 31% | 0% (0 of 48 groups) | 2.5 |
+| | 2 | 19 to 20 | 75% | 0% (0 of 24) | 3.4 |
+| | 4 | 38 to 40 | 92% | 0% (0 of 12) | 4.9 |
+| | 8 | 76 to 81 | 100% | 0% (0 of 6) | 6.9 |
+| image noise (sigma, 8 movies) | 0.1 | 76 | 100% | 0% | 6.9 |
+| | 0.2 | 75 | 100% | 0% | 4.8 |
+| | 0.3 | 68 | 0% | 0% | 1.8 |
+| | 0.4 | 51 | 0% | 0% | 0.7 |
+| edge rate k_e per s (8 movies) | 0.5 | 76 | 100% | | 6.9 |
+| | 0.2 | 78 | 100% | | 5.0 |
+| | 0.1 | 81 | 83% | | 4.0 |
+| | 0.05 | 80 | 33% | | 2.9 |
+
+* **About 20 events are needed to call the edge-induced mechanism three times in four, about 40 for nine times in ten** (k_e = 0.5, sigma = 0.1), and ten events (one movie) call it in 31% of cases. The critical-density-only movies were never called edge-induced in any group: 0 false alarms in 90 groups in all, which bounds the false-alarm rate at a few percent at most (0 of 6 groups says little by itself).
+* **The statistic weakens as the edge process weakens:** at one tenth of the rate the 76 events still call it 83% of the time, at one tenth of that 33%. Real k_e is unknown, so the size of the effect to be found cannot be assumed.
+* **Noise breaks it by a mechanism that is the analysis's weakness, not the physics:** noise flags isolated bare pixels as patch, so every place is "next to a patch" and the chance level climbs (0.22 at sigma 0.1, 0.40 at 0.2, 0.90 at 0.3); the statistic still works at 0.2, where the chance level is already 0.40, and fails at 0.3, where 0.96 against 0.90 leaves no room. A minimum patch size or a median filter before the class test would be the fix and **was not built**.
+* **A first version of this sweep was wrong and is corrected:** the image noise was uniform and bounded (at most 1.73 sigma), so nothing changed until sigma reached 0.29 and then everything did, a cliff made by the noise model. It was replaced by Gaussian noise (Box-Muller from two hashes), and the sweep above is the corrected one; the sigma = 0.1 rows are identical in both because no pixel crosses a threshold at that level.
+* Not measured: the critical count gamma, the arrival rate, the coverage cap (25%), the frame time, and anything that makes events cluster in time.
 
 *Not in slice 2, stated:* the tip's force on adsorbed vesicles (it can flatten them and may trigger rupture, which would make the imaging itself a cause; this is the largest confound for real HS-AFM and needs its own slice); vesicle-substrate adhesion energies; ionic conditions and calcium (the snippets say they change the behaviour); diffusion of adsorbed vesicles (the paper moves them with the edge); and any comparison with a measured movie.
 
