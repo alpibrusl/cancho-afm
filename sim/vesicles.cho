@@ -201,6 +201,72 @@ fn median3[&a, &b](frame: &!a [float], tmp: &!b [float], size: int) -> [] int {
     return 0;
 }
 
+// The IMPLANT null: the chance that an event is read next to an existing patch if rupture had no preference for edges, found the way the analysis finds events. A synthetic rupture (a disc of radius 2 r) is
+// placed at a random bare place of the previous frame; its newly-patch pixels (those of the disc not already patch) give the centroid the analysis would use, and that centroid is tested for a patch pixel of the
+// previous frame within `near`. This keeps what the analytic chance level (the share of the bare area within `near` of a patch) leaves out: an overlapping disc shows only its crescent, whose centroid is not
+// the disc's centre. Twenty trials, a trial where the crescent has fewer than min_area pixels is not an event and is not counted. Returns -1 when there is no trial.
+fn implant_chance[&a](m: Model, prev: &a [float], near: float, min_area: int, salt: int, seed: int) -> [] float {
+    let low = 0.5 * m.hp;
+    let mid = 0.5 * (m.hp + m.hv);
+    let rr = 2.0 * m.r;
+    var valid = 0;
+    var hits = 0;
+    var trial = 0;
+    var tries = 0;
+    while trial < 20 && tries < 400 {
+        tries = tries + 1;
+        let cy = nucleation.hash01(salt * 997 + tries, seed * 13 + 21) * float_of(m.size);
+        let cx = nucleation.hash01(salt * 997 + tries, seed * 13 + 22) * float_of(m.size);
+        let iy = truncate(cy);
+        let ix = truncate(cx);
+        if prev[iy * m.size + ix] <= low {
+            trial = trial + 1;
+            var cnt = 0;
+            var sy = 0.0;
+            var sx = 0.0;
+            var y = iy - 6;
+            while y <= iy + 6 {
+                var x = ix - 6;
+                while x <= ix + 6 {
+                    if y >= 0 && y < m.size && x >= 0 && x < m.size {
+                        let dy = float_of(y) + 0.5 - cy;
+                        let dx = float_of(x) + 0.5 - cx;
+                        if dy * dy + dx * dx <= rr * rr {
+                            let pv = prev[y * m.size + x];
+                            if !(pv > low && pv <= mid) { cnt = cnt + 1; sy = sy + float_of(y) + 0.5; sx = sx + float_of(x) + 0.5; }
+                        }
+                    }
+                    x = x + 1;
+                }
+                y = y + 1;
+            }
+            if cnt >= min_area {
+                valid = valid + 1;
+                let my = sy / float_of(cnt);
+                let mx = sx / float_of(cnt);
+                var hit = 0;
+                var dy2 = 0 - 4;
+                while dy2 <= 4 {
+                    var dx2 = 0 - 4;
+                    while dx2 <= 4 {
+                        let yy = truncate(my) + dy2;
+                        let xx = truncate(mx) + dx2;
+                        if yy >= 0 && yy < m.size && xx >= 0 && xx < m.size && float_of(dy2 * dy2 + dx2 * dx2) <= near * near {
+                            let pv = prev[yy * m.size + xx];
+                            if pv > low && pv <= mid { hit = 1; }
+                        }
+                        dx2 = dx2 + 1;
+                    }
+                    dy2 = dy2 + 1;
+                }
+                hits = hits + hit;
+            }
+        }
+    }
+    if valid == 0 { return 0.0 - 1.0; }
+    return float_of(hits) / float_of(valid);
+}
+
 // What the analysis reads from the images: per frame the number of domes (components above the mid level of dome and patch) and the patch area (pixels between bare and dome level); and the rupture
 // events: components of NEWLY-patch pixels (patch now, not patch in the previous frame) of at least `min_area` pixels, with the time, and whether a patch pixel of the previous frame lies within `near`
 // pixels of the event's centroid, and the chance level of that: the share of the previous frame's bare area within `near` pixels of a patch pixel.
@@ -209,7 +275,7 @@ pub fn analyse[&a, &b, &c, &d, &e, &f, &g, &h, &i2, &j2, &k2, &l2](m: Model, nv:
                                                                  np: int, px: &e [float], py: &f [float], pb: &g [float], seed: int,
                                                                  frame: &!h [float], prev: &!i2 [float], nm: &!j2 [float],
                                                                  dome: &!k2 [float], ev: &!l2 [float], min_area: int, near: float, cap_ev: int, max_cov: float) -> [] int {
-    // ev: 5 * cap_ev floats: time, near, chance, centroid y, centroid x of each event; dome: 2 * (frames + 1): the dome count then the patch area of each frame
+    // ev: 6 * cap_ev floats: time, near, chance, centroid y, centroid x, and the implant-null chance of each event; dome: 2 * (frames + 1): the dome count then the patch area of each frame
     let npx = m.size * m.size;
     var nev = 0;
     var fno = 0;
@@ -302,6 +368,7 @@ pub fn analyse[&a, &b, &c, &d, &e, &f, &g, &h, &i2, &j2, &k2, &l2](m: Model, nv:
                     ev[2 * cap_ev + nev] = chance;
                     ev[3 * cap_ev + nev] = cy[k];
                     ev[4 * cap_ev + nev] = cx[k];
+                    ev[5 * cap_ev + nev] = implant_chance(m, prev, near, min_area, fno * 1000 + k, seed);
                     nev = nev + 1;
                     k = k + 1;
                 }
@@ -318,7 +385,7 @@ pub fn analyse[&a, &b, &c, &d, &e, &f, &g, &h, &i2, &j2, &k2, &l2](m: Model, nv:
 // events: rupture events the analysis found; near: how many had a patch within `near` px; chance_sum: the sum of the chance levels over the events (so near / events is compared with chance_sum / events);
 // first_t: the time of the first event (-1 none); ra, rb: the true ruptures by (A) and (B); dome_rate: domes per pixel^2 per s over the frames before the first event (or the first 10 s), a read of `lam`;
 // area_ratio: the patch area at the last frame over the number of true ruptures times 4 pi r^2 (1 when none overlap).
-pub struct Study { events: int, near: int, chance_sum: float, first_t: float, ra: int, rb: int, dome_rate: float, area_ratio: float, rc: int, touches: int }
+pub struct Study { events: int, near: int, chance_sum: float, first_t: float, ra: int, rb: int, dome_rate: float, area_ratio: float, rc: int, touches: int, null_sum: float, null_n: int }
 
 pub fn study(m: Model, seed: int, min_area: int, near: float, max_cov: float) -> [] Study {
     var o_events = 0;
@@ -328,6 +395,8 @@ pub fn study(m: Model, seed: int, min_area: int, near: float, max_cov: float) ->
     var o_ra = 0;
     var o_rb = 0;
     var o_rc = 0;
+    var o_null = 0.0;
+    var o_null_n = 0;
     var o_touch = 0;
     var o_rate = 0.0;
     var o_area = 0.0;
@@ -345,7 +414,7 @@ pub fn study(m: Model, seed: int, min_area: int, near: float, max_cov: float) ->
         let prev = alloc_slice[r](npx, 0.0);
         let nm = alloc_slice[r](npx, 0.0);
         let dome = alloc_slice[r](2 * (m.frames + 1), 0.0);
-        let ev = alloc_slice[r](5 * 100, 0.0);
+        let ev = alloc_slice[r](6 * 100, 0.0);
         history(m, seed, float_of(m.frames) * m.tf, vx, vy, va, vg, px, py, pb, st);
         let ne = analyse(m, st[0], vx, vy, va, vg, st[1], px, py, pb, seed, frame, prev, nm, dome, ev, min_area, near, 100, max_cov);
         o_events = ne;
@@ -357,6 +426,7 @@ pub fn study(m: Model, seed: int, min_area: int, near: float, max_cov: float) ->
         while k < ne {
             if ev[100 + k] > 0.5 { o_near = o_near + 1; }
             o_chance = o_chance + ev[200 + k];
+            if ev[500 + k] >= 0.0 { o_null = o_null + ev[500 + k]; o_null_n = o_null_n + 1; }
             k = k + 1;
         }
         if ne > 0 { o_first = ev[0]; }
@@ -386,5 +456,5 @@ pub fn study(m: Model, seed: int, min_area: int, near: float, max_cov: float) ->
         while qq < st[1] { if pb[qq] <= float_of(fl) * m.tf { born = born + 1; } qq = qq + 1; }
         if born > 0 { o_area = dome[m.frames + 1 + fl] / (float_of(born) * 4.0 * 3.14159265358979 * m.r * m.r); }
     }
-    return Study { events: o_events, near: o_near, chance_sum: o_chance, first_t: o_first, ra: o_ra, rb: o_rb, dome_rate: o_rate, area_ratio: o_area, rc: o_rc, touches: o_touch };
+    return Study { events: o_events, near: o_near, chance_sum: o_chance, first_t: o_first, ra: o_ra, rb: o_rb, dome_rate: o_rate, area_ratio: o_area, rc: o_rc, touches: o_touch, null_sum: o_null, null_n: o_null_n };
 }

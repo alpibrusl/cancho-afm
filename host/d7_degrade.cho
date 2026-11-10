@@ -33,7 +33,7 @@ fn dec[&h](heap: &!h Heap, o: buffer.Buffer, v: float, places: int) -> [heap] bu
     return b;
 }
 
-struct Row { events: float, z_mean: float, called: float, called_either: float, share: float, chance: float }
+struct Row { events: float, z_mean: float, called: float, called_either: float, share: float, chance: float, z2_mean: float, called2: float, chance2: float }
 
 // 48 movies of the model, grouped g at a time
 fn run(m: vesicles.Model, g: int) -> [] Row {
@@ -43,18 +43,25 @@ fn run(m: vesicles.Model, g: int) -> [] Row {
     var either = 0;
     var share_sum = 0.0;
     var chance_sum = 0.0;
+    var z2_sum = 0.0;
+    var called2 = 0;
+    var chance2_sum = 0.0;
     var groups = 0;
     var j = 0;
     while j + g <= 48 {
         var ev = 0;
         var nr = 0;
         var ch = 0.0;
+        var ns = 0.0;
+        var nn = 0;
         var k = 0;
         while k < g {
             let s = vesicles.study(m, 1 + j + k, 20, 4.0, 0.25);
             ev = ev + s.events;
             nr = nr + s.near;
             ch = ch + s.chance_sum;
+            ns = ns + s.null_sum;
+            nn = nn + s.null_n;
             k = k + 1;
         }
         if ev > 0 {
@@ -68,13 +75,22 @@ fn run(m: vesicles.Model, g: int) -> [] Row {
             if z > 3.0 || z < 0.0 - 3.0 { either = either + 1; }
             share_sum = share_sum + share;
             chance_sum = chance_sum + chance;
+            if nn > 0 {
+                let c2 = ns / float_of(nn);
+                let se2 = math.sqrt(c2 * (1.0 - c2) / float_of(ev));
+                var z2 = 0.0;
+                if se2 > 0.0 { z2 = (share - c2) / se2; }
+                z2_sum = z2_sum + z2;
+                if z2 > 3.0 { called2 = called2 + 1; }
+                chance2_sum = chance2_sum + c2;
+            }
         }
         ev_tot = ev_tot + float_of(ev);
         groups = groups + 1;
         j = j + g;
     }
     let gf = float_of(groups);
-    return Row { events: ev_tot / gf, z_mean: z_sum / gf, called: float_of(called) / gf, called_either: float_of(either) / gf, share: share_sum / gf, chance: chance_sum / gf };
+    return Row { events: ev_tot / gf, z_mean: z_sum / gf, called: float_of(called) / gf, called_either: float_of(either) / gf, share: share_sum / gf, chance: chance_sum / gf, z2_mean: z2_sum / gf, called2: float_of(called2) / gf, chance2: chance2_sum / gf };
 }
 
 fn line[&h](heap: &!h Heap, o: buffer.Buffer, r: Row) -> [heap] buffer.Buffer {
@@ -88,8 +104,12 @@ fn line[&h](heap: &!h Heap, o: buffer.Buffer, r: Row) -> [heap] buffer.Buffer {
     b = dec(heap, b, r.z_mean, 1);
     b = text(heap, b, " | z>3 in ");
     b = dec(heap, b, r.called * 100.0, 0);
-    b = text(heap, b, "% | |z|>3 in ");
-    b = dec(heap, b, r.called_either * 100.0, 0);
+    b = text(heap, b, "% || implant null ");
+    b = dec(heap, b, r.chance2, 2);
+    b = text(heap, b, " | mean z ");
+    b = dec(heap, b, r.z2_mean, 1);
+    b = text(heap, b, " | z>3 in ");
+    b = dec(heap, b, r.called2 * 100.0, 0);
     return text(heap, b, "%\n");
 }
 
