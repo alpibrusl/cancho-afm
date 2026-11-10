@@ -8,9 +8,10 @@ import zipread;
 import jpk;
 
 // JPK FORCE CURVES IN (docs/dynamics.md, "A JPK reader"): each file is a `.jpk-force` (one curve) or a `.jpk-force-map` (many); every curve's first EXTEND segment is read (sim/jpk.cho), analysed as the
-// text loader's curves are, and printed. NOT TESTED ON ANY REAL JPK FILE. The spring constant is the file's own; give the tip radius.
+// text loader's curves are, and printed. Run on one instrument's real files only (docs/dynamics.md). The spring constant is the file's own; give the tip radius.
 //   cancho build host/jpk_load.cho sim/jpk.cho sim/zipread.cho sim/fcload.cho sim/forcecurve.cho --std -o jpk_load
-//   ./jpk_load R WINDOW file1 file2 ...
+//   ./jpk_load R WINDOW MINDROP file1 file2 ...
+//     MINDROP the smallest force drop (pN) that counts as a breakthrough: 400 is nanoindent's and the library's, set for a 0.35 N/m lever; a softer lever shows a step as k times the step
 //     R       the tip radius in tenths of nm (320 = 32 nm)
 //     WINDOW  the breakthrough rule: 0 nanoindent's single-step drop; n > 0 the largest drop within n tenths of a nm of piezo travel (sim/forcecurve.cho)
 // One line per curve (the tag of a refusal, or the breakthrough force, modulus, height, the height channel used) and, per file, how many curves were analysed. A map is read up to 20,000 curves and 65,534
@@ -94,19 +95,21 @@ fn main(world: World) -> [] int {
     release(ffi); release(net); release(clock); release(signals); release(exec);
     var r_tenth = 320;
     var window = 0;
+    var mindrop = 400;
     var nfiles = 0;
     var usage = 0;
     borrow args as &g in {
-        if arg_count(g) < 4 { usage = 1; } else {
+        if arg_count(g) < 5 { usage = 1; } else {
             r_tenth = number_of(arg(g, 1));
             window = number_of(arg(g, 2));
-            nfiles = arg_count(g) - 3;
+            mindrop = number_of(arg(g, 3));
+            nfiles = arg_count(g) - 4;
         }
     }
     borrow mut heap as &!h in {
         var o = buffer.empty(h, 65536);
         if usage == 1 {
-            o = text(h, o, "usage: jpk_load R WINDOW file...   (R in tenths of nm, WINDOW 0 single step or tenths of nm)\n");
+            o = text(h, o, "usage: jpk_load R WINDOW MINDROP file...   (R in tenths of nm, WINDOW 0 single step or tenths of nm, MINDROP in pN)\n");
         } else {
             let rad = float_of(r_tenth) / 10.0;
             let win = float_of(window) / 10.0;
@@ -116,7 +119,7 @@ fn main(world: World) -> [] int {
                 var got = 0 - 1;
                 borrow args as &g in {
                     borrow fs as &fsr in {
-                        let (grown, n) = read_file(h, fsr, arg(g, 3 + f), scratch);
+                        let (grown, n) = read_file(h, fsr, arg(g, 4 + f), scratch);
                         scratch = grown;
                         got = n;
                     }
@@ -147,7 +150,7 @@ fn main(world: World) -> [] int {
                             }
                             var c = 0;
                             while c < count {
-                                let a = jpk.analyse_curve(h, z, ns[c], rad, win);
+                                let a = jpk.analyse_curve(h, z, ns[c], rad, win, float_of(mindrop));
                                 o = text(h, o, "file ");
                                 o = buffer.push_nat(h, o, f + 1);
                                 if ns[c] >= 0 { o = text(h, o, " curve "); o = buffer.push_nat(h, o, ns[c]); }

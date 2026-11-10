@@ -2,7 +2,7 @@ edition 7;
 
 module jpk;
 
-// `jpk` -- a force curve from a JPK archive (`.jpk-force`, `.jpk-force-map`), into the analysis of sim/forcecurve.cho. docs/dynamics.md, "A JPK reader". NOT TESTED ON ANY REAL JPK FILE: the format is what the
+// `jpk` -- a force curve from a JPK archive (`.jpk-force`, `.jpk-force-map`), into the analysis of sim/forcecurve.cho. docs/dynamics.md, "A JPK reader". Read real files of one instrument only (docs/dynamics.md, "First real files"): the format is what the
 // open-source reader of the AFM-analysis project (`afmformats`) does, read as source, and the tests use files this repository wrote (sim/jpkmake.cho).
 //
 // What it does, for one curve: opens the ZIP (sim/zipread.cho); reads `header.properties`, `shared-data/header.properties`, the curve's header (in a map, `index/N/header.properties`) and the first EXTEND segment's
@@ -219,6 +219,13 @@ fn curve_prefix[&h](heap: &!h Heap, number: int) -> [heap] buffer.Buffer {
 
 pub struct Chan { why: int, a: float, b: float }
 
+// an encoder key of channel `name`: `channel.NAME.data.encoder.TAIL`, or, as the files of a real instrument have it once the shared data is resolved, `channel.NAME.encoder.TAIL`
+fn enc_key[&h, &t, &n, &a](heap: &!h Heap, props: &t [byte], name: &n [byte], tail: &a [byte]) -> [heap] Span {
+    var s = get5(heap, props, "channel.", name, ".data.encoder.", tail, "");
+    if s.from < 0 { s = get5(heap, props, "channel.", name, ".encoder.", tail, ""); }
+    return s;
+}
+
 // one step back from the slot `cur` toward the base: its multiplier and offset into mult[depth], offs[depth]; the slot it is based on in `next`. Answers 0 to go on, 1 when `cur` is the base, 2 when a key is missing
 fn back_step[&h, &t, &n, &c, &m, &o](heap: &!h Heap, props: &t [byte], name: &n [byte], cur: &c [byte], base: Span, mult: &!m [float], offs: &!o [float], depth: int) -> [heap] (int, Span) {
     if bytes.equal(cur, props[base.from..base.to]) { return (1, Span { from: -1, to: -1 }); }
@@ -237,8 +244,8 @@ fn back_step[&h, &t, &n, &c, &m, &o](heap: &!h Heap, props: &t [byte], name: &n 
 // the affine map from the raw integers to the slot `slot` of channel `name`: value = a raw + b, walking the conversions from the slot back to the base (at most six steps)
 fn chain[&h, &t, &n, &s](heap: &!h Heap, props: &t [byte], name: &n [byte], slot: &s [byte]) -> [heap] Chan {
     // raw -> volts (the encoder's scaling)
-    let m0 = get5(heap, props, "channel.", name, ".data.encoder.scaling.multiplier", "", "");
-    let o0 = get5(heap, props, "channel.", name, ".data.encoder.scaling.offset", "", "");
+    let m0 = enc_key(heap, props, name, "scaling.multiplier");
+    let o0 = enc_key(heap, props, name, "scaling.offset");
     if m0.from < 0 || o0.from < 0 { return Chan { why: 16, a: 0.0, b: 0.0 }; }
     let tm = fcload.parse_number(props, m0.from, m0.to);
     let to = fcload.parse_number(props, o0.from, o0.to);
@@ -282,7 +289,7 @@ fn unit_is_metre[&h, &t, &s](heap: &!h Heap, props: &t [byte], name: &s [byte], 
     if base.from < 0 { return false; }
     var u = Span { from: -1, to: -1 };
     if bytes.equal(slot, props[base.from..base.to]) {
-        u = get5(heap, props, "channel.", name, ".data.encoder.scaling.unit.unit", "", "");
+        u = enc_key(heap, props, name, "scaling.unit.unit");
     } else {
         u = get5(heap, props, "channel.", name, ".conversion-set.conversion.", slot, ".scaling.unit.unit");
         if u.from < 0 { u = get5(heap, props, "channel.", name, ".conversion-set.conversion.", slot, ".scaling.unit"); }
@@ -293,7 +300,7 @@ fn unit_is_metre[&h, &t, &s](heap: &!h Heap, props: &t [byte], name: &s [byte], 
 
 // the width of the encoder in bytes and whether it is signed: width 0 when not supported
 fn encoder[&h, &t, &s](heap: &!h Heap, props: &t [byte], name: &s [byte]) -> [heap] (int, bool) {
-    let e = get5(heap, props, "channel.", name, ".data.encoder.type", "", "");
+    let e = enc_key(heap, props, name, "type");
     if e.from < 0 { return (0, false); }
     let v = props[e.from..e.to];
     if bytes.equal(v, "signedshort") { return (2, true); }
@@ -353,7 +360,7 @@ fn first_present[&h, &a, &p](heap: &!h Heap, z: &a [byte], dir: zipread.Zdir, pr
 
 // Read curve `number` (-1 for a single-curve archive) from the archive bytes `z` and analyse its extend segment: `r` the tip radius in nm, `window_nm` the breakthrough rule as in fcload.analyse_w.
 // The spring constant comes from the file.
-pub fn analyse_curve[&h, &a](heap: &!h Heap, z: &a [byte], number: int, r: float, window_nm: float) -> [heap] Jpk {
+pub fn analyse_curve[&h, &a](heap: &!h Heap, z: &a [byte], number: int, r: float, window_nm: float, min_drop: float) -> [heap] Jpk {
     let dir = zipread.open(z);
     if dir.why != 0 { return fail(dir.why); }
     let limit_text = 8000000;
@@ -384,7 +391,7 @@ pub fn analyse_curve[&h, &a](heap: &!h Heap, z: &a [byte], number: int, r: float
             borrow top as &tr in {
                 borrow curve as &cr in {
                     borrow shared as &hr in {
-                        out = analyse_segments(heap, z, dir, buffer.bytes(pr), buffer.bytes(tr), buffer.bytes(cr), buffer.bytes(hr), r, window_nm);
+                        out = analyse_segments(heap, z, dir, buffer.bytes(pr), buffer.bytes(tr), buffer.bytes(cr), buffer.bytes(hr), r, window_nm, min_drop);
                     }
                 }
             }
@@ -398,7 +405,7 @@ pub fn analyse_curve[&h, &a](heap: &!h Heap, z: &a [byte], number: int, r: float
 }
 
 // the first extend segment of the curve, found and analysed
-fn analyse_segments[&h, &a, &p, &t, &c, &d](heap: &!h Heap, z: &a [byte], dir: zipread.Zdir, prefix: &p [byte], top: &t [byte], curve: &c [byte], shared: &d [byte], r: float, window_nm: float) -> [heap] Jpk {
+fn analyse_segments[&h, &a, &p, &t, &c, &d](heap: &!h Heap, z: &a [byte], dir: zipread.Zdir, prefix: &p [byte], top: &t [byte], curve: &c [byte], shared: &d [byte], r: float, window_nm: float, min_drop: float) -> [heap] Jpk {
     var out = fail(17);
     var m = 0;
     var going = true;
@@ -439,7 +446,7 @@ fn analyse_segments[&h, &a, &p, &t, &c, &d](heap: &!h Heap, z: &a [byte], dir: z
                 going = false;
                 borrow merged as &mr in {
                     borrow spath as &sp in {
-                        out = analyse_extend(heap, z, dir, buffer.bytes(sp), buffer.bytes(mr), r, window_nm);
+                        out = analyse_extend(heap, z, dir, buffer.bytes(sp), buffer.bytes(mr), r, window_nm, min_drop);
                     }
                 }
             }
@@ -453,7 +460,7 @@ fn analyse_segments[&h, &a, &p, &t, &c, &d](heap: &!h Heap, z: &a [byte], dir: z
 }
 
 // the two channels of the extend segment whose directory is `seg` (with a trailing slash), analysed
-fn analyse_extend[&h, &a, &s, &p](heap: &!h Heap, z: &a [byte], dir: zipread.Zdir, seg: &s [byte], props: &p [byte], r: float, window_nm: float) -> [heap] Jpk {
+fn analyse_extend[&h, &a, &s, &p](heap: &!h Heap, z: &a [byte], dir: zipread.Zdir, seg: &s [byte], props: &p [byte], r: float, window_nm: float, min_drop: float) -> [heap] Jpk {
     // the spring constant: the multiplier of the `force` slot
     let kp = get5(heap, props, "channel.vDeflection.conversion-set.conversion.force.scaling.multiplier", "", "", "", "");
     if kp.from < 0 { return fail(16); }
@@ -541,7 +548,7 @@ fn analyse_extend[&h, &a, &s, &p](heap: &!h Heap, z: &a [byte], dir: zipread.Zdi
                             borrow zbuf as &q in { decode(buffer.bytes(q), zw, zsigned, zc.a, zc.b, 1000000000.0, zs, n); }
                             borrow dbuf as &q in { decode(buffer.bytes(q), dw, dsigned, dc.a, dc.b, 1000000000.0, ds, n); }
                             let na = fcload.approach(zs, ds, n);
-                            let res_a = fcload.analyse_w(zs, ds, na, k, r, window_nm, dq);
+                            let res_a = fcload.analyse_wd(zs, ds, na, k, r, window_nm, dq, min_drop);
                             out = Jpk { why: res_a.why, k: k, zsrc: zsrc, points: n, approach: na, a: res_a };
                         }
                     }

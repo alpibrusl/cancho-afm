@@ -179,7 +179,7 @@ fn test_a_single_curve_is_read_and_analysed_as_the_text_loader_would[&h](heap: &
             let nums = alloc_slice[r](4, 0);
             test.assert_eq(jpk.curve_numbers(z, nums, 4), 1);
             test.assert_eq(nums[0], 0 - 1);
-            let got = jpk.analyse_curve(heap, z, 0 - 1, 32.0, 0.0);
+            let got = jpk.analyse_curve(heap, z, 0 - 1, 32.0, 0.0, 400.0);
             test.assert_eq(got.why, 0);
             test.assert_eq(got.zsrc, 0);
             test.assert_eq(got.points, 720);
@@ -204,7 +204,7 @@ fn test_deflated_entries_and_the_piezo_height_give_the_same_curve[&h](heap: &!h 
         // piezo height ("height", slot calibrated), every entry DEFLATEd
         let blob = jpkmake.archive(heap, zm, dm, 720, 0, 0.35, 0.00000005, 1, 0);
         borrow blob as &br in {
-            let got = jpk.analyse_curve(heap, buffer.bytes(br), 0 - 1, 32.0, 0.0);
+            let got = jpk.analyse_curve(heap, buffer.bytes(br), 0 - 1, 32.0, 0.0, 400.0);
             test.assert_eq(got.why, 0);
             test.assert_eq(got.zsrc, 1);
             test.assert(agree(got.a, want) == 1);
@@ -225,8 +225,8 @@ fn test_the_windowed_rule_is_available_on_a_jpk_curve[&h](heap: &!h Heap) -> [he
         fill_curve(zm, dm, zn, dn, 0, 3, 0);
         let blob = jpkmake.archive(heap, zm, dm, 720, 0, 0.35, 0.00000005, 0, 1);
         borrow blob as &br in {
-            let a = jpk.analyse_curve(heap, buffer.bytes(br), 0 - 1, 32.0, 0.0);
-            let b = jpk.analyse_curve(heap, buffer.bytes(br), 0 - 1, 32.0, 1.0);
+            let a = jpk.analyse_curve(heap, buffer.bytes(br), 0 - 1, 32.0, 0.0, 400.0);
+            let b = jpk.analyse_curve(heap, buffer.bytes(br), 0 - 1, 32.0, 1.0, 400.0);
             test.assert_eq(a.why, 0);
             test.assert_eq(b.why, 0);
             // at 0.2 nm a row a 1 nm window spans five rows; it finds the same event
@@ -262,13 +262,13 @@ fn test_a_map_is_enumerated_and_each_curve_read[&h](heap: &!h Heap) -> [heap] in
             while c < 3 {
                 fill_curve(zm, dm, zn, dn, c * 720, 11 + c, c);
                 let want = reference(zn, dn, 720);
-                let got = jpk.analyse_curve(heap, z, nums[c], 32.0, 0.0);
+                let got = jpk.analyse_curve(heap, z, nums[c], 32.0, 0.0, 400.0);
                 test.assert_eq(got.why, 0);
                 test.assert(agree(got.a, want) == 1);
                 c = c + 1;
             }
             // a curve that is not in the map
-            test.assert_eq(jpk.analyse_curve(heap, z, 3, 32.0, 0.0).why, 19);
+            test.assert_eq(jpk.analyse_curve(heap, z, 3, 32.0, 0.0, 400.0).why, 19);
         }
         buffer.drop(heap, blob);
     }
@@ -283,21 +283,21 @@ fn test_an_archive_without_the_needed_keys_is_refused_with_a_tag[&h](heap: &!h H
     zip = jpkmake.add(heap, zip, "header.properties", "x=1\n", 0);
     zip = jpkmake.add(heap, zip, "segments/0/segment-header.properties", "force-segment-header.settings.style=extend\n", 0);
     let blob = jpkmake.zip_finish(heap, zip);
-    borrow blob as &br in { test.assert_eq(jpk.analyse_curve(heap, buffer.bytes(br), 0 - 1, 32.0, 0.0).why, 16); }
+    borrow blob as &br in { test.assert_eq(jpk.analyse_curve(heap, buffer.bytes(br), 0 - 1, 32.0, 0.0, 400.0).why, 16); }
     buffer.drop(heap, blob);
     // only a retract segment: tag 17
     var zip2 = jpkmake.zip_new(heap);
     zip2 = jpkmake.add(heap, zip2, "header.properties", "x=1\n", 0);
     zip2 = jpkmake.add(heap, zip2, "segments/0/segment-header.properties", "force-segment-header.settings.style=retract\n", 0);
     let blob2 = jpkmake.zip_finish(heap, zip2);
-    borrow blob2 as &br in { test.assert_eq(jpk.analyse_curve(heap, buffer.bytes(br), 0 - 1, 32.0, 0.0).why, 17); }
+    borrow blob2 as &br in { test.assert_eq(jpk.analyse_curve(heap, buffer.bytes(br), 0 - 1, 32.0, 0.0, 400.0).why, 17); }
     buffer.drop(heap, blob2);
     // no header.properties at all: tag 13; not a zip: tag 11
     var zip3 = jpkmake.zip_new(heap);
     zip3 = jpkmake.add(heap, zip3, "other.txt", "x", 0);
     let blob3 = jpkmake.zip_finish(heap, zip3);
-    borrow blob3 as &br in { test.assert_eq(jpk.analyse_curve(heap, buffer.bytes(br), 0 - 1, 32.0, 0.0).why, 13); }
+    borrow blob3 as &br in { test.assert_eq(jpk.analyse_curve(heap, buffer.bytes(br), 0 - 1, 32.0, 0.0, 400.0).why, 13); }
     buffer.drop(heap, blob3);
-    test.assert_eq(jpk.analyse_curve(heap, "this is not a zip archive at all", 0 - 1, 32.0, 0.0).why, 11);
+    test.assert_eq(jpk.analyse_curve(heap, "this is not a zip archive at all", 0 - 1, 32.0, 0.0, 400.0).why, 11);
     return 0;
 }
